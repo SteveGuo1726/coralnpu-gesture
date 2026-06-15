@@ -1,0 +1,175 @@
+{
+  "model": "static_cnn_regularized_3x3_i96_e70_hagrid6_sample",
+  "scope": "Automated official worktree replay for four verified core 3x3 layers",
+  "worktree_root": "/home/steveguo/coralnpu-gesture/gesture_project/worktrees/coralnpu-3x3-conv",
+  "cases_json": "/home/steveguo/coralnpu-gesture/gesture_project/configs/static_cnn_i96_core_3x3.json",
+  "conv3x3_dispatch_strategy": 8,
+  "results": [
+    {
+      "layer_name": "conv2_3x3_a",
+      "out_h": 48,
+      "out_w": 48,
+      "in_d": 16,
+      "out_d": 32,
+      "filter_hw": 3,
+      "pad": 1,
+      "stride": 1,
+      "expected_current_path": "3x3_oc_vectorized",
+      "source_op_index": 3,
+      "conv3x3_dispatch_strategy": 8,
+      "input_shape": [
+        1,
+        48,
+        48,
+        16
+      ],
+      "filter_shape": [
+        32,
+        3,
+        3,
+        16
+      ],
+      "output_shape": [
+        1,
+        48,
+        48,
+        32
+      ],
+      "estimated_macs": 10616832,
+      "ref_cycles": 138789845,
+      "opt_cycles": 5709391,
+      "correct_vs_ref": true,
+      "mismatch_count": 0,
+      "mismatch_info": null,
+      "speedup": 24.3090453955597,
+      "opt_cycles_per_mac": 0.537767857681086,
+      "ref_cycles_per_mac": 13.07262326464241
+    },
+    {
+      "layer_name": "conv2_3x3_b",
+      "out_h": 48,
+      "out_w": 48,
+      "in_d": 32,
+      "out_d": 32,
+      "filter_hw": 3,
+      "pad": 1,
+      "stride": 1,
+      "expected_current_path": "3x3_oc_vectorized",
+      "source_op_index": 4,
+      "conv3x3_dispatch_strategy": 8,
+      "input_shape": [
+        1,
+        48,
+        48,
+        32
+      ],
+      "filter_shape": [
+        32,
+        3,
+        3,
+        32
+      ],
+      "output_shape": [
+        1,
+        48,
+        48,
+        32
+      ],
+      "estimated_macs": 21233664,
+      "ref_cycles": 240982893,
+      "opt_cycles": 4659159,
+      "correct_vs_ref": true,
+      "mismatch_count": 0,
+      "mismatch_info": null,
+      "speedup": 51.722401617974405,
+      "opt_cycles_per_mac": 0.21942322342484086,
+      "ref_cycles_per_mac": 11.349096086290148
+    },
+    {
+      "layer_name": "conv3_3x3_a",
+      "out_h": 24,
+      "out_w": 24,
+      "in_d": 32,
+      "out_d": 64,
+      "filter_hw": 3,
+      "pad": 1,
+      "stride": 1,
+      "expected_current_path": "3x3_oc_vectorized",
+      "source_op_index": 6,
+      "conv3x3_dispatch_strategy": 8,
+      "input_shape": [
+        1,
+        24,
+        24,
+        32
+      ],
+      "filter_shape": [
+        64,
+        3,
+        3,
+        32
+      ],
+      "output_shape": [
+        1,
+        24,
+        24,
+        64
+      ],
+      "estimated_macs": 10616832,
+      "ref_cycles": 117639959,
+      "opt_cycles": 2482926,
+      "correct_vs_ref": true,
+      "mismatch_count": 0,
+      "mismatch_info": null,
+      "speedup": 47.37956709140747,
+      "opt_cycles_per_mac": 0.23386693883825233,
+      "ref_cycles_per_mac": 11.080514319149064
+    },
+    {
+      "layer_name": "conv3_3x3_b",
+      "out_h": 24,
+      "out_w": 24,
+      "in_d": 64,
+      "out_d": 64,
+      "filter_hw": 3,
+      "pad": 1,
+      "stride": 1,
+      "expected_current_path": "3x3_oc_vectorized",
+      "source_op_index": 7,
+      "conv3x3_dispatch_strategy": 8,
+      "input_shape": [
+        1,
+        24,
+        24,
+        64
+      ],
+      "filter_shape": [
+        64,
+        3,
+        3,
+        64
+      ],
+      "output_shape": [
+        1,
+        24,
+        24,
+        64
+      ],
+      "estimated_macs": 21233664,
+      "ref_cycles": 220382870,
+      "opt_cycles": 4874662,
+      "correct_vs_ref": true,
+      "mismatch_count": 0,
+      "mismatch_info": null,
+      "speedup": 45.20987711558258,
+      "opt_cycles_per_mac": 0.22957234323760609,
+      "ref_cycles_per_mac": 10.378937426908516
+    }
+  ],
+  "totals": {
+    "layer_count": 4,
+    "opt_cycles": 17726138,
+    "ref_cycles": 717795567,
+    "total_mismatch_count": 0
+  }
+}

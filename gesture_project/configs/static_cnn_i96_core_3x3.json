@@ -1,0 +1,54 @@
+{
+  "model": "static_cnn_regularized_3x3_i96_e70_hagrid6_sample",
+  "scope": "Verified 48x48 and 24x24 core 3x3 layers for formal static CNN RTL iteration",
+  "cases": [
+    {
+      "layer_name": "conv2_3x3_a",
+      "out_h": 48,
+      "out_w": 48,
+      "in_d": 16,
+      "out_d": 32,
+      "filter_hw": 3,
+      "pad": 1,
+      "stride": 1,
+      "expected_current_path": "3x3_oc_vectorized",
+      "source_op_index": 3
+    },
+    {
+      "layer_name": "conv2_3x3_b",
+      "out_h": 48,
+      "out_w": 48,
+      "in_d": 32,
+      "out_d": 32,
+      "filter_hw": 3,
+      "pad": 1,
+      "stride": 1,
+      "expected_current_path": "3x3_oc_vectorized",
+      "source_op_index": 4
+    },
+    {
+      "layer_name": "conv3_3x3_a",
+      "out_h": 24,
+      "out_w": 24,
+      "in_d": 32,
+      "out_d": 64,
+      "filter_hw": 3,
+      "pad": 1,
+      "stride": 1,
+      "expected_current_path": "3x3_oc_vectorized",
+      "source_op_index": 6
+    },
+    {
+      "layer_name": "conv3_3x3_b",
+      "out_h": 24,
+      "out_w": 24,
+      "in_d": 64,
+      "out_d": 64,
+      "filter_hw": 3,
+      "pad": 1,
+      "stride": 1,
+      "expected_current_path": "3x3_oc_vectorized",
+      "source_op_index": 7
+    }
+  ]
+}

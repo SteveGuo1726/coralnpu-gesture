@@ -1,0 +1,123 @@
+{
+  "project_stage": "strategy8 rowhandoff mode=1 board trace/counter first closure",
+  "reference_reports": {
+    "trace_counters": "gesture_project/configs/static_cnn_i96_core_3x3.json",
+    "mode1_vs_emptyhooks": "gesture_project/reports/core_3x3_worktree_replay_strategy8_rowhandoff_rowbase_recur_trial_vs_emptyhooks_48x48.md",
+    "backhalf_vs_emptyhooks": "gesture_project/reports/core_3x3_worktree_replay_strategy8_rowhandoff_rowbase_recur_trial_mode1_backhalf_vs_emptyhooks_48x48.md",
+    "conv2_handshake_compare": "gesture_project/reports/conv2_3x3_b_handshake_compare.json",
+    "conv3_handshake_compare": "gesture_project/reports/conv3_3x3_b_handshake_compare.json"
+  },
+  "counter_contract": [
+    {
+      "name": "rowhandoff_hit_count",
+      "width_bits": 16,
+      "type": "counter",
+      "description": "命中连续 next-row base state 的总次数。",
+      "expected_mode1_full": 45,
+      "expected_mode1_backhalf": 21,
+      "why": "板级第一优先计数，直接对应 mode=1 主线的 consume 次数。"
+    },
+    {
+      "name": "rowhandoff_miss_count",
+      "width_bits": 16,
+      "type": "counter",
+      "description": "进入 gate 但没有可复用 handoff state 的次数。",
+      "expected_mode1_full": 1,
+      "expected_mode1_backhalf": 1,
+      "why": "用于确认第一条生效 row 是否按预期先 miss 一次。"
+    },
+    {
+      "name": "rowhandoff_invalidate_count",
+      "width_bits": 16,
+      "type": "counter",
+      "description": "离开生效窗口、离开 interior 或层切换时丢弃 state 的次数。",
+      "expected_mode1_full": 1,
+      "expected_mode1_backhalf": 1,
+      "why": "用于确认 row window 尾部失效是否按预期只发生一次。"
+    },
+    {
+      "name": "rowhandoff_produce_count",
+      "width_bits": 16,
+      "type": "counter",
+      "description": "行尾生成下一条 row base state 的次数。",
+      "expected_mode1_full": 46,
+      "expected_mode1_backhalf": 22,
+      "why": "用于对齐每条生效 row 是否都在 right-edge 之后 produce。"
+    },
+    {
+      "name": "rowhandoff_tail_hit_count",
+      "width_bits": 16,
+      "type": "counter",
+      "description": "后段 row bucket 的命中次数，建议对 out_y>=24 或更后段单独分桶。",
+      "expected_mode1_full": 21,
+      "expected_mode1_backhalf": 21,
+      "why": "trace/counter 量化已经证明后段 row 的单次命中价值更高：mode1_full gain/hit=204.56, backhalf gain/hit=336.52。"
+    },
+    {
+      "name": "interior_row_enter_count",
+      "width_bits": 16,
+      "type": "counter",
+      "description": "进入目标 interior row gate 的次数。",
+      "expected_mode1_full": 46,
+      "expected_mode1_backhalf": 22,
+      "why": "用于与 produce/miss/hit 做简单守恒检查。"
+    },
+    {
+      "name": "right_edge_done_count",
+      "width_bits": 16,
+      "type": "counter",
+      "description": "完成 right-edge 并到达 row terminal 的次数。",
+      "expected_mode1_full": 46,
+      "expected_mode1_backhalf": 22,
+      "why": "这是 produce 条件的板级锚点，应该与 produce_count 对齐。"
+    },
+    {
+      "name": "rowhandoff_row_out_y_last",
+      "width_bits": 6,
+      "type": "snapshot",
+      "description": "最后一次 produce 的 row_out_y 快照。",
+      "expected_mode1_full": 46,
+      "expected_mode1_backhalf": 45,
+      "why": "帮助确认最终有效 row window 是否落在预期末端。"
+    }
+  ],
+  "layers": [
+    {
+      "layer_name": "conv2_3x3_b",
+      "shape": "48x48x32 -> 3x3 -> 48x48x32",
+      "gate_assumption": "output_width==48 && input_depth==32 && output_depth==32 && single_oc_block_mode",
+      "board_run_priority": 1,
+      "expected_mode1_cycle_gain_vs_emptyhooks": 9205,
+      "expected_mode1_gain_per_hit": 204.55555555555554,
+      "handshake_row_resident_cycles": 10639,
+      "handshake_reload_cycles": 11575
+    },
+    {
+      "layer_name": "conv3_3x3_b",
+      "shape": "24x24x64 -> 3x3 -> 24x24x64",
+      "gate_assumption": "rowhandoff 板级复用验证的第二优先对照层",
+      "board_run_priority": 2,
+      "expected_mode1_cycle_gain_vs_emptyhooks": null,
+      "expected_mode1_gain_per_hit": null,
+      "handshake_row_resident_cycles": 5630,
+      "handshake_reload_cycles": 6350
+    }
+  ],
+  "board_sequence": [
+    {
+      "step": 1,
+      "name": "trace_counter_only_conv2_3x3_b",
+      "goal": "先不改 datapath，只确认 mode1_full 的计数是否接近 46/45/1/1。"
+    },
+    {
+      "step": 2,
+      "name": "tail_bucket_check_conv2_3x3_b",
+      "goal": "确认后段 row bucket 是否能显著区分 mode1_full 与 backhalf。"
+    },
+    {
+      "step": 3,
+      "name": "sanity_check_conv3_3x3_b",
+      "goal": "确认这套计数语义是否能平移到第二个单层对照对象。"
+    }
+  ]
+}

@@ -1,0 +1,322 @@
+{
+  "model": "/home/steveguo/coralnpu-gesture/gesture_project/models/static_cnn_regularized_3x3_i96_e70_hagrid6_sample/model_int8.tflite",
+  "ops_profile": "/home/steveguo/coralnpu-gesture/gesture_project/reports/static_cnn_regularized_3x3_i96_e70_hagrid6_sample_tflite_ops.json",
+  "total_layers_counted": 7,
+  "total_macs": 89800704,
+  "total_reference_cycles": 1130091475,
+  "total_optimized_cycles": 63313052,
+  "total_speedup": 17.849266,
+  "categories": [
+    {
+      "category": "conv2d_3x3",
+      "layer_count": 6,
+      "total_macs": 88915968,
+      "total_reference_cycles": 1106132572,
+      "total_optimized_cycles": 51661187,
+      "mac_share_pct": 99.01,
+      "optimized_cycle_share_pct": 81.6,
+      "reference_cycle_share_pct": 97.88,
+      "speedup": 21.4113
+    },
+    {
+      "category": "conv2d_1x1",
+      "layer_count": 1,
+      "total_macs": 884736,
+      "total_reference_cycles": 23958903,
+      "total_optimized_cycles": 11651865,
+      "mac_share_pct": 0.99,
+      "optimized_cycle_share_pct": 18.4,
+      "reference_cycle_share_pct": 2.12,
+      "speedup": 2.0562
+    }
+  ],
+  "top_hotspots_by_optimized_cycles": [
+    {
+      "index": 1,
+      "op_name": "CONV_2D",
+      "category": "conv2d_3x3",
+      "kernel": "3x3",
+      "shape_signature": "1x96x96x16 -> 3x3 -> 1x96x96x16",
+      "input_shapes": [
+        [
+          1,
+          96,
+          96,
+          16
+        ],
+        [
+          16,
+          3,
+          3,
+          16
+        ],
+        [
+          16
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          96,
+          96,
+          16
+        ]
+      ],
+      "estimated_macs": 21233664,
+      "estimated_reference_cycles": 264151062,
+      "estimated_optimized_cycles": 12337000,
+      "estimated_speedup": 21.411288861096267,
+      "rate_source": "3x3_oc_vectorized_microbench",
+      "rank": 1,
+      "optimized_cycle_share_pct": 19.49,
+      "reference_cycle_share_pct": 23.37,
+      "mac_share_pct": 23.65
+    },
+    {
+      "index": 4,
+      "op_name": "CONV_2D",
+      "category": "conv2d_3x3",
+      "kernel": "3x3",
+      "shape_signature": "1x48x48x32 -> 3x3 -> 1x48x48x32",
+      "input_shapes": [
+        [
+          1,
+          48,
+          48,
+          32
+        ],
+        [
+          32,
+          3,
+          3,
+          32
+        ],
+        [
+          32
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          48,
+          48,
+          32
+        ]
+      ],
+      "estimated_macs": 21233664,
+      "estimated_reference_cycles": 264151062,
+      "estimated_optimized_cycles": 12337000,
+      "estimated_speedup": 21.411288861096267,
+      "rate_source": "3x3_oc_vectorized_microbench",
+      "rank": 2,
+      "optimized_cycle_share_pct": 19.49,
+      "reference_cycle_share_pct": 23.37,
+      "mac_share_pct": 23.65
+    },
+    {
+      "index": 7,
+      "op_name": "CONV_2D",
+      "category": "conv2d_3x3",
+      "kernel": "3x3",
+      "shape_signature": "1x24x24x64 -> 3x3 -> 1x24x24x64",
+      "input_shapes": [
+        [
+          1,
+          24,
+          24,
+          64
+        ],
+        [
+          64,
+          3,
+          3,
+          64
+        ],
+        [
+          64
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          24,
+          24,
+          64
+        ]
+      ],
+      "estimated_macs": 21233664,
+      "estimated_reference_cycles": 264151062,
+      "estimated_optimized_cycles": 12337000,
+      "estimated_speedup": 21.411288861096267,
+      "rate_source": "3x3_oc_vectorized_microbench",
+      "rank": 3,
+      "optimized_cycle_share_pct": 19.49,
+      "reference_cycle_share_pct": 23.37,
+      "mac_share_pct": 23.65
+    },
+    {
+      "index": 9,
+      "op_name": "CONV_2D",
+      "category": "conv2d_1x1",
+      "kernel": "1x1",
+      "shape_signature": "1x12x12x64 -> 1x1 -> 1x12x12x96",
+      "input_shapes": [
+        [
+          1,
+          12,
+          12,
+          64
+        ],
+        [
+          96,
+          1,
+          1,
+          64
+        ],
+        [
+          96
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          12,
+          12,
+          96
+        ]
+      ],
+      "estimated_macs": 884736,
+      "estimated_reference_cycles": 23958903,
+      "estimated_optimized_cycles": 11651865,
+      "estimated_speedup": 2.0562289339372244,
+      "rate_source": "1x1_pointwise_microbench",
+      "rank": 4,
+      "optimized_cycle_share_pct": 18.4,
+      "reference_cycle_share_pct": 2.12,
+      "mac_share_pct": 0.99
+    },
+    {
+      "index": 3,
+      "op_name": "CONV_2D",
+      "category": "conv2d_3x3",
+      "kernel": "3x3",
+      "shape_signature": "1x48x48x16 -> 3x3 -> 1x48x48x32",
+      "input_shapes": [
+        [
+          1,
+          48,
+          48,
+          16
+        ],
+        [
+          32,
+          3,
+          3,
+          16
+        ],
+        [
+          32
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          48,
+          48,
+          32
+        ]
+      ],
+      "estimated_macs": 10616832,
+      "estimated_reference_cycles": 132075531,
+      "estimated_optimized_cycles": 6168500,
+      "estimated_speedup": 21.411288861096267,
+      "rate_source": "3x3_oc_vectorized_microbench",
+      "rank": 5,
+      "optimized_cycle_share_pct": 9.74,
+      "reference_cycle_share_pct": 11.69,
+      "mac_share_pct": 11.82
+    },
+    {
+      "index": 6,
+      "op_name": "CONV_2D",
+      "category": "conv2d_3x3",
+      "kernel": "3x3",
+      "shape_signature": "1x24x24x32 -> 3x3 -> 1x24x24x64",
+      "input_shapes": [
+        [
+          1,
+          24,
+          24,
+          32
+        ],
+        [
+          64,
+          3,
+          3,
+          32
+        ],
+        [
+          64
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          24,
+          24,
+          64
+        ]
+      ],
+      "estimated_macs": 10616832,
+      "estimated_reference_cycles": 132075531,
+      "estimated_optimized_cycles": 6168500,
+      "estimated_speedup": 21.411288861096267,
+      "rate_source": "3x3_oc_vectorized_microbench",
+      "rank": 6,
+      "optimized_cycle_share_pct": 9.74,
+      "reference_cycle_share_pct": 11.69,
+      "mac_share_pct": 11.82
+    },
+    {
+      "index": 0,
+      "op_name": "CONV_2D",
+      "category": "conv2d_3x3",
+      "kernel": "3x3",
+      "shape_signature": "1x96x96x3 -> 3x3 -> 1x96x96x16",
+      "input_shapes": [
+        [
+          1,
+          96,
+          96,
+          3
+        ],
+        [
+          16,
+          3,
+          3,
+          3
+        ],
+        [
+          16
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          96,
+          96,
+          16
+        ]
+      ],
+      "estimated_macs": 3981312,
+      "estimated_reference_cycles": 49528324,
+      "estimated_optimized_cycles": 2313187,
+      "estimated_speedup": 21.411288861096264,
+      "rate_source": "3x3_oc_vectorized_microbench",
+      "rank": 7,
+      "optimized_cycle_share_pct": 3.65,
+      "reference_cycle_share_pct": 4.38,
+      "mac_share_pct": 4.43
+    }
+  ]
+}

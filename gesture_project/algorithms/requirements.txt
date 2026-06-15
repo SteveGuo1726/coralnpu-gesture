@@ -1,0 +1,4 @@
+tensorflow>=2.15,<2.18
+numpy>=1.23,<2.0
+pillow>=9.0
+scikit-learn>=1.2

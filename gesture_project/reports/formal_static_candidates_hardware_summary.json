@@ -1,0 +1,105 @@
+{
+  "title": "正式静态手势模型硬件优先总表",
+  "dataset": "gesture_project/datasets/processed/hagrid_sample_static_6cls",
+  "candidates": [
+    {
+      "name": "static_cnn_regularized_3x3_i96_e70_hagrid6_sample",
+      "family": "3x3-heavy static cnn",
+      "notes": "当前正式主线；高精度且硬件收益集中在 3x3 主体层。",
+      "model_path": "models/static_cnn_regularized_3x3_i96_e70_hagrid6_sample/model_int8.tflite",
+      "keras_accuracy": 0.7728888888888888,
+      "tflite_accuracy": 0.7706666666666667,
+      "accuracy_drop_pct": 0.22222222222221255,
+      "conv2d_macs": 89800704,
+      "depthwise_macs": 0,
+      "total_reference_cycles": 1130091474,
+      "total_optimized_cycles": 63313051,
+      "total_speedup": 17.8492657168141,
+      "dominant_category": "conv2d_3x3",
+      "dominant_category_cycle_share_pct": 81.6,
+      "top_hotspot_shape": "1x96x96x16 -> 3x3 -> 1x96x96x16",
+      "top_hotspot_cycle_share_pct": 19.49,
+      "top_hotspot_speedup": 21.411288861096267,
+      "categories": [
+        {
+          "category": "conv2d_3x3",
+          "layer_count": 6,
+          "total_macs": 88915968,
+          "total_reference_cycles": 1106132572,
+          "total_optimized_cycles": 51661187,
+          "mac_share_pct": 99.01,
+          "optimized_cycle_share_pct": 81.6,
+          "reference_cycle_share_pct": 97.88,
+          "speedup": 21.4113
+        },
+        {
+          "category": "conv2d_1x1",
+          "layer_count": 1,
+          "total_macs": 884736,
+          "total_reference_cycles": 23958903,
+          "total_optimized_cycles": 11651865,
+          "mac_share_pct": 0.99,
+          "optimized_cycle_share_pct": 18.4,
+          "reference_cycle_share_pct": 2.12,
+          "speedup": 2.0562
+        }
+      ],
+      "rtl_priority": "进入 3x3 RTL 主线"
+    },
+    {
+      "name": "mobilenet_v2_a050_96_imagenet_frozen_finetune_hagrid6_sample",
+      "family": "mobilenetv2",
+      "notes": "轻量对照；保留为 1x1 pointwise 次级基准。",
+      "model_path": "models/mobilenet_v2_a050_96_imagenet_frozen_finetune_hagrid6_sample/model_int8.tflite",
+      "keras_accuracy": 0.5973333333333334,
+      "tflite_accuracy": 0.584,
+      "accuracy_drop_pct": 1.333333333333342,
+      "conv2d_macs": 15547392,
+      "depthwise_macs": 2058048,
+      "total_reference_cycles": 513626757,
+      "total_optimized_cycles": 195936730,
+      "total_speedup": 2.621390878462484,
+      "dominant_category": "conv2d_1x1",
+      "dominant_category_cycle_share_pct": 97.81,
+      "top_hotspot_shape": "1x3x3x160 -> 1x1 -> 1x3x3x1280",
+      "top_hotspot_cycle_share_pct": 12.39,
+      "top_hotspot_speedup": 2.0562289339372244,
+      "categories": [
+        {
+          "category": "conv2d_1x1",
+          "layer_count": 34,
+          "total_macs": 14552064,
+          "total_reference_cycles": 394074041,
+          "total_optimized_cycles": 191648905,
+          "mac_share_pct": 82.66,
+          "optimized_cycle_share_pct": 97.81,
+          "reference_cycle_share_pct": 76.72,
+          "speedup": 2.0562
+        },
+        {
+          "category": "depthwise_conv2d",
+          "layer_count": 17,
+          "total_macs": 2058048,
+          "total_reference_cycles": 107170640,
+          "total_optimized_cycles": 3709522,
+          "mac_share_pct": 11.69,
+          "optimized_cycle_share_pct": 1.89,
+          "reference_cycle_share_pct": 20.87,
+          "speedup": 28.8907
+        },
+        {
+          "category": "conv2d_3x3",
+          "layer_count": 1,
+          "total_macs": 995328,
+          "total_reference_cycles": 12382081,
+          "total_optimized_cycles": 578297,
+          "mac_share_pct": 5.65,
+          "optimized_cycle_share_pct": 0.3,
+          "reference_cycle_share_pct": 2.41,
+          "speedup": 21.4113
+        }
+      ],
+      "rtl_priority": "保留为 1x1 次级基准"
+    }
+  ]
+}

@@ -1,0 +1,3214 @@
+{
+  "model": "/home/steveguo/coralnpu-gesture/gesture_project/models/mobilenet_v2_a050_96_imagenet_frozen_finetune_hagrid6_sample/model_int8.tflite",
+  "backend": "tensorflow",
+  "operators": [
+    {
+      "index": 0,
+      "op_name": "MUL",
+      "input_tensors": [
+        "serving_default_image:0",
+        "tfl.pseudo_qconst107"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_rescale_1/mul"
+      ],
+      "input_shapes": [
+        [
+          1,
+          96,
+          96,
+          3
+        ],
+        []
+      ],
+      "output_shapes": [
+        [
+          1,
+          96,
+          96,
+          3
+        ]
+      ],
+      "estimated_macs": null
+    },
+    {
+      "index": 1,
+      "op_name": "ADD",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_rescale_1/mul",
+        "tfl.pseudo_qconst106"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_rescale_1/add"
+      ],
+      "input_shapes": [
+        [
+          1,
+          96,
+          96,
+          3
+        ],
+        []
+      ],
+      "output_shapes": [
+        [
+          1,
+          96,
+          96,
+          3
+        ]
+      ],
+      "estimated_macs": null
+    },
+    {
+      "index": 2,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_rescale_1/add",
+        "tfl.pseudo_qconst105",
+        "tfl.pseudo_qconst104"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/Conv1_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/bn_Conv1_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/Conv1_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/bn_Conv1_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          96,
+          96,
+          3
+        ],
+        [
+          16,
+          3,
+          3,
+          3
+        ],
+        [
+          16
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          48,
+          48,
+          16
+        ]
+      ],
+      "estimated_macs": 995328
+    },
+    {
+      "index": 3,
+      "op_name": "DEPTHWISE_CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/Conv1_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/bn_Conv1_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/Conv1_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/bn_Conv1_1/batchnorm/sub",
+        "tfl.pseudo_qconst103",
+        "tfl.pseudo_qconst102"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/expanded_conv_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/expanded_conv_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/expanded_conv_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/expanded_conv_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/expanded_conv_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/expanded_conv_depthwise_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          48,
+          48,
+          16
+        ],
+        [
+          1,
+          3,
+          3,
+          16
+        ],
+        [
+          16
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          48,
+          48,
+          16
+        ]
+      ],
+      "estimated_macs": 331776
+    },
+    {
+      "index": 4,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/expanded_conv_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/expanded_conv_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/expanded_conv_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/expanded_conv_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/expanded_conv_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/expanded_conv_depthwise_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst101",
+        "tfl.pseudo_qconst100"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/expanded_conv_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/expanded_conv_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/expanded_conv_project_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          48,
+          48,
+          16
+        ],
+        [
+          8,
+          1,
+          1,
+          16
+        ],
+        [
+          8
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          48,
+          48,
+          8
+        ]
+      ],
+      "estimated_macs": 294912
+    },
+    {
+      "index": 5,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/expanded_conv_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/expanded_conv_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/expanded_conv_project_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst99",
+        "tfl.pseudo_qconst98"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_expand_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          48,
+          48,
+          8
+        ],
+        [
+          48,
+          1,
+          1,
+          8
+        ],
+        [
+          48
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          48,
+          48,
+          48
+        ]
+      ],
+      "estimated_macs": 884736
+    },
+    {
+      "index": 6,
+      "op_name": "PAD",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_expand_BN_1/batchnorm/sub",
+        "arith.constant"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_pad_1/Pad"
+      ],
+      "input_shapes": [
+        [
+          1,
+          48,
+          48,
+          48
+        ],
+        [
+          4,
+          2
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          49,
+          49,
+          48
+        ]
+      ],
+      "estimated_macs": null
+    },
+    {
+      "index": 7,
+      "op_name": "DEPTHWISE_CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_pad_1/Pad",
+        "tfl.pseudo_qconst97",
+        "tfl.pseudo_qconst96"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_depthwise_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          49,
+          49,
+          48
+        ],
+        [
+          1,
+          3,
+          3,
+          48
+        ],
+        [
+          48
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          24,
+          24,
+          48
+        ]
+      ],
+      "estimated_macs": 248832
+    },
+    {
+      "index": 8,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_depthwise_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst95",
+        "tfl.pseudo_qconst94"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_project_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          24,
+          24,
+          48
+        ],
+        [
+          16,
+          1,
+          1,
+          48
+        ],
+        [
+          16
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          24,
+          24,
+          16
+        ]
+      ],
+      "estimated_macs": 442368
+    },
+    {
+      "index": 9,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_project_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst93",
+        "tfl.pseudo_qconst92"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_expand_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          24,
+          24,
+          16
+        ],
+        [
+          96,
+          1,
+          1,
+          16
+        ],
+        [
+          96
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          24,
+          24,
+          96
+        ]
+      ],
+      "estimated_macs": 884736
+    },
+    {
+      "index": 10,
+      "op_name": "DEPTHWISE_CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_expand_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst91",
+        "tfl.pseudo_qconst90"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_depthwise_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          24,
+          24,
+          96
+        ],
+        [
+          1,
+          3,
+          3,
+          96
+        ],
+        [
+          96
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          24,
+          24,
+          96
+        ]
+      ],
+      "estimated_macs": 497664
+    },
+    {
+      "index": 11,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_depthwise_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst89",
+        "tfl.pseudo_qconst88"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_project_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          24,
+          24,
+          96
+        ],
+        [
+          16,
+          1,
+          1,
+          96
+        ],
+        [
+          16
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          24,
+          24,
+          16
+        ]
+      ],
+      "estimated_macs": 884736
+    },
+    {
+      "index": 12,
+      "op_name": "ADD",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_1_project_BN_1/batchnorm/sub",
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_project_BN_1/batchnorm/sub"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_add_1/Add"
+      ],
+      "input_shapes": [
+        [
+          1,
+          24,
+          24,
+          16
+        ],
+        [
+          1,
+          24,
+          24,
+          16
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          24,
+          24,
+          16
+        ]
+      ],
+      "estimated_macs": null
+    },
+    {
+      "index": 13,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_2_add_1/Add",
+        "tfl.pseudo_qconst87",
+        "tfl.pseudo_qconst86"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_expand_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          24,
+          24,
+          16
+        ],
+        [
+          96,
+          1,
+          1,
+          16
+        ],
+        [
+          96
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          24,
+          24,
+          96
+        ]
+      ],
+      "estimated_macs": 884736
+    },
+    {
+      "index": 14,
+      "op_name": "PAD",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_expand_BN_1/batchnorm/sub",
+        "arith.constant"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_pad_1/Pad"
+      ],
+      "input_shapes": [
+        [
+          1,
+          24,
+          24,
+          96
+        ],
+        [
+          4,
+          2
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          25,
+          25,
+          96
+        ]
+      ],
+      "estimated_macs": null
+    },
+    {
+      "index": 15,
+      "op_name": "DEPTHWISE_CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_pad_1/Pad",
+        "tfl.pseudo_qconst85",
+        "tfl.pseudo_qconst84"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_depthwise_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          25,
+          25,
+          96
+        ],
+        [
+          1,
+          3,
+          3,
+          96
+        ],
+        [
+          96
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          12,
+          12,
+          96
+        ]
+      ],
+      "estimated_macs": 124416
+    },
+    {
+      "index": 16,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_depthwise_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst83",
+        "tfl.pseudo_qconst82"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_project_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          12,
+          12,
+          96
+        ],
+        [
+          16,
+          1,
+          1,
+          96
+        ],
+        [
+          16
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          12,
+          12,
+          16
+        ]
+      ],
+      "estimated_macs": 221184
+    },
+    {
+      "index": 17,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_project_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst81",
+        "tfl.pseudo_qconst80"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_expand_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          12,
+          12,
+          16
+        ],
+        [
+          96,
+          1,
+          1,
+          16
+        ],
+        [
+          96
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          12,
+          12,
+          96
+        ]
+      ],
+      "estimated_macs": 221184
+    },
+    {
+      "index": 18,
+      "op_name": "DEPTHWISE_CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_expand_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst79",
+        "tfl.pseudo_qconst78"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_depthwise_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          12,
+          12,
+          96
+        ],
+        [
+          1,
+          3,
+          3,
+          96
+        ],
+        [
+          96
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          12,
+          12,
+          96
+        ]
+      ],
+      "estimated_macs": 124416
+    },
+    {
+      "index": 19,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_depthwise_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst77",
+        "tfl.pseudo_qconst76"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_project_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          12,
+          12,
+          96
+        ],
+        [
+          16,
+          1,
+          1,
+          96
+        ],
+        [
+          16
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          12,
+          12,
+          16
+        ]
+      ],
+      "estimated_macs": 221184
+    },
+    {
+      "index": 20,
+      "op_name": "ADD",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_3_project_BN_1/batchnorm/sub",
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_project_BN_1/batchnorm/sub"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_add_1/Add"
+      ],
+      "input_shapes": [
+        [
+          1,
+          12,
+          12,
+          16
+        ],
+        [
+          1,
+          12,
+          12,
+          16
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          12,
+          12,
+          16
+        ]
+      ],
+      "estimated_macs": null
+    },
+    {
+      "index": 21,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_add_1/Add",
+        "tfl.pseudo_qconst75",
+        "tfl.pseudo_qconst74"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_expand_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          12,
+          12,
+          16
+        ],
+        [
+          96,
+          1,
+          1,
+          16
+        ],
+        [
+          96
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          12,
+          12,
+          96
+        ]
+      ],
+      "estimated_macs": 221184
+    },
+    {
+      "index": 22,
+      "op_name": "DEPTHWISE_CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_expand_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst73",
+        "tfl.pseudo_qconst72"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_depthwise_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          12,
+          12,
+          96
+        ],
+        [
+          1,
+          3,
+          3,
+          96
+        ],
+        [
+          96
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          12,
+          12,
+          96
+        ]
+      ],
+      "estimated_macs": 124416
+    },
+    {
+      "index": 23,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_depthwise_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst71",
+        "tfl.pseudo_qconst70"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_project_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          12,
+          12,
+          96
+        ],
+        [
+          16,
+          1,
+          1,
+          96
+        ],
+        [
+          16
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          12,
+          12,
+          16
+        ]
+      ],
+      "estimated_macs": 221184
+    },
+    {
+      "index": 24,
+      "op_name": "ADD",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_4_add_1/Add",
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_project_BN_1/batchnorm/sub"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_add_1/Add"
+      ],
+      "input_shapes": [
+        [
+          1,
+          12,
+          12,
+          16
+        ],
+        [
+          1,
+          12,
+          12,
+          16
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          12,
+          12,
+          16
+        ]
+      ],
+      "estimated_macs": null
+    },
+    {
+      "index": 25,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_5_add_1/Add",
+        "tfl.pseudo_qconst69",
+        "tfl.pseudo_qconst68"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_expand_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          12,
+          12,
+          16
+        ],
+        [
+          96,
+          1,
+          1,
+          16
+        ],
+        [
+          96
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          12,
+          12,
+          96
+        ]
+      ],
+      "estimated_macs": 221184
+    },
+    {
+      "index": 26,
+      "op_name": "PAD",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_expand_BN_1/batchnorm/sub",
+        "arith.constant"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_pad_1/Pad"
+      ],
+      "input_shapes": [
+        [
+          1,
+          12,
+          12,
+          96
+        ],
+        [
+          4,
+          2
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          13,
+          13,
+          96
+        ]
+      ],
+      "estimated_macs": null
+    },
+    {
+      "index": 27,
+      "op_name": "DEPTHWISE_CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_pad_1/Pad",
+        "tfl.pseudo_qconst67",
+        "tfl.pseudo_qconst66"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_depthwise_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          13,
+          13,
+          96
+        ],
+        [
+          1,
+          3,
+          3,
+          96
+        ],
+        [
+          96
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          96
+        ]
+      ],
+      "estimated_macs": 31104
+    },
+    {
+      "index": 28,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_depthwise_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst65",
+        "tfl.pseudo_qconst64"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_project_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          96
+        ],
+        [
+          32,
+          1,
+          1,
+          96
+        ],
+        [
+          32
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          32
+        ]
+      ],
+      "estimated_macs": 110592
+    },
+    {
+      "index": 29,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_project_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst63",
+        "tfl.pseudo_qconst62"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_expand_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          32
+        ],
+        [
+          192,
+          1,
+          1,
+          32
+        ],
+        [
+          192
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          192
+        ]
+      ],
+      "estimated_macs": 221184
+    },
+    {
+      "index": 30,
+      "op_name": "DEPTHWISE_CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_expand_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst61",
+        "tfl.pseudo_qconst60"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_depthwise_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          192
+        ],
+        [
+          1,
+          3,
+          3,
+          192
+        ],
+        [
+          192
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          192
+        ]
+      ],
+      "estimated_macs": 62208
+    },
+    {
+      "index": 31,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_depthwise_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst59",
+        "tfl.pseudo_qconst58"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_project_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          192
+        ],
+        [
+          32,
+          1,
+          1,
+          192
+        ],
+        [
+          32
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          32
+        ]
+      ],
+      "estimated_macs": 221184
+    },
+    {
+      "index": 32,
+      "op_name": "ADD",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_6_project_BN_1/batchnorm/sub",
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_project_BN_1/batchnorm/sub"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_add_1/Add"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          32
+        ],
+        [
+          1,
+          6,
+          6,
+          32
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          32
+        ]
+      ],
+      "estimated_macs": null
+    },
+    {
+      "index": 33,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_add_1/Add",
+        "tfl.pseudo_qconst57",
+        "tfl.pseudo_qconst56"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_expand_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          32
+        ],
+        [
+          192,
+          1,
+          1,
+          32
+        ],
+        [
+          192
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          192
+        ]
+      ],
+      "estimated_macs": 221184
+    },
+    {
+      "index": 34,
+      "op_name": "DEPTHWISE_CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_expand_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst55",
+        "tfl.pseudo_qconst54"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_depthwise_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          192
+        ],
+        [
+          1,
+          3,
+          3,
+          192
+        ],
+        [
+          192
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          192
+        ]
+      ],
+      "estimated_macs": 62208
+    },
+    {
+      "index": 35,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_depthwise_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst53",
+        "tfl.pseudo_qconst52"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_project_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          192
+        ],
+        [
+          32,
+          1,
+          1,
+          192
+        ],
+        [
+          32
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          32
+        ]
+      ],
+      "estimated_macs": 221184
+    },
+    {
+      "index": 36,
+      "op_name": "ADD",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_7_add_1/Add",
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_project_BN_1/batchnorm/sub"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_add_1/Add"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          32
+        ],
+        [
+          1,
+          6,
+          6,
+          32
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          32
+        ]
+      ],
+      "estimated_macs": null
+    },
+    {
+      "index": 37,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_add_1/Add",
+        "tfl.pseudo_qconst51",
+        "tfl.pseudo_qconst50"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_expand_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          32
+        ],
+        [
+          192,
+          1,
+          1,
+          32
+        ],
+        [
+          192
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          192
+        ]
+      ],
+      "estimated_macs": 221184
+    },
+    {
+      "index": 38,
+      "op_name": "DEPTHWISE_CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_expand_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst49",
+        "tfl.pseudo_qconst48"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_depthwise_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          192
+        ],
+        [
+          1,
+          3,
+          3,
+          192
+        ],
+        [
+          192
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          192
+        ]
+      ],
+      "estimated_macs": 62208
+    },
+    {
+      "index": 39,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_depthwise_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst47",
+        "tfl.pseudo_qconst46"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_project_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          192
+        ],
+        [
+          32,
+          1,
+          1,
+          192
+        ],
+        [
+          32
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          32
+        ]
+      ],
+      "estimated_macs": 221184
+    },
+    {
+      "index": 40,
+      "op_name": "ADD",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_8_add_1/Add",
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_project_BN_1/batchnorm/sub"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_add_1/Add"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          32
+        ],
+        [
+          1,
+          6,
+          6,
+          32
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          32
+        ]
+      ],
+      "estimated_macs": null
+    },
+    {
+      "index": 41,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_9_add_1/Add",
+        "tfl.pseudo_qconst45",
+        "tfl.pseudo_qconst44"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_expand_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          32
+        ],
+        [
+          192,
+          1,
+          1,
+          32
+        ],
+        [
+          192
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          192
+        ]
+      ],
+      "estimated_macs": 221184
+    },
+    {
+      "index": 42,
+      "op_name": "DEPTHWISE_CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_expand_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst43",
+        "tfl.pseudo_qconst42"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_depthwise_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          192
+        ],
+        [
+          1,
+          3,
+          3,
+          192
+        ],
+        [
+          192
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          192
+        ]
+      ],
+      "estimated_macs": 62208
+    },
+    {
+      "index": 43,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_depthwise_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst41",
+        "tfl.pseudo_qconst40"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_project_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          192
+        ],
+        [
+          48,
+          1,
+          1,
+          192
+        ],
+        [
+          48
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          48
+        ]
+      ],
+      "estimated_macs": 331776
+    },
+    {
+      "index": 44,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_project_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst39",
+        "tfl.pseudo_qconst38"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_expand_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          48
+        ],
+        [
+          288,
+          1,
+          1,
+          48
+        ],
+        [
+          288
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          288
+        ]
+      ],
+      "estimated_macs": 497664
+    },
+    {
+      "index": 45,
+      "op_name": "DEPTHWISE_CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_expand_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst37",
+        "tfl.pseudo_qconst36"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_depthwise_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          288
+        ],
+        [
+          1,
+          3,
+          3,
+          288
+        ],
+        [
+          288
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          288
+        ]
+      ],
+      "estimated_macs": 93312
+    },
+    {
+      "index": 46,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_depthwise_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst35",
+        "tfl.pseudo_qconst34"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_project_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          288
+        ],
+        [
+          48,
+          1,
+          1,
+          288
+        ],
+        [
+          48
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          48
+        ]
+      ],
+      "estimated_macs": 497664
+    },
+    {
+      "index": 47,
+      "op_name": "ADD",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_10_project_BN_1/batchnorm/sub",
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_project_BN_1/batchnorm/sub"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_add_1/Add"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          48
+        ],
+        [
+          1,
+          6,
+          6,
+          48
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          48
+        ]
+      ],
+      "estimated_macs": null
+    },
+    {
+      "index": 48,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_add_1/Add",
+        "tfl.pseudo_qconst33",
+        "tfl.pseudo_qconst32"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_expand_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          48
+        ],
+        [
+          288,
+          1,
+          1,
+          48
+        ],
+        [
+          288
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          288
+        ]
+      ],
+      "estimated_macs": 497664
+    },
+    {
+      "index": 49,
+      "op_name": "DEPTHWISE_CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_expand_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst31",
+        "tfl.pseudo_qconst30"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_depthwise_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          288
+        ],
+        [
+          1,
+          3,
+          3,
+          288
+        ],
+        [
+          288
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          288
+        ]
+      ],
+      "estimated_macs": 93312
+    },
+    {
+      "index": 50,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_depthwise_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst29",
+        "tfl.pseudo_qconst28"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_project_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          288
+        ],
+        [
+          48,
+          1,
+          1,
+          288
+        ],
+        [
+          48
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          48
+        ]
+      ],
+      "estimated_macs": 497664
+    },
+    {
+      "index": 51,
+      "op_name": "ADD",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_11_add_1/Add",
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_project_BN_1/batchnorm/sub"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_add_1/Add"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          48
+        ],
+        [
+          1,
+          6,
+          6,
+          48
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          48
+        ]
+      ],
+      "estimated_macs": null
+    },
+    {
+      "index": 52,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_12_add_1/Add",
+        "tfl.pseudo_qconst27",
+        "tfl.pseudo_qconst26"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_expand_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          48
+        ],
+        [
+          288,
+          1,
+          1,
+          48
+        ],
+        [
+          288
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6,
+          6,
+          288
+        ]
+      ],
+      "estimated_macs": 497664
+    },
+    {
+      "index": 53,
+      "op_name": "PAD",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_expand_BN_1/batchnorm/sub",
+        "arith.constant"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_pad_1/Pad"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6,
+          6,
+          288
+        ],
+        [
+          4,
+          2
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          7,
+          7,
+          288
+        ]
+      ],
+      "estimated_macs": null
+    },
+    {
+      "index": 54,
+      "op_name": "DEPTHWISE_CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_pad_1/Pad",
+        "tfl.pseudo_qconst25",
+        "tfl.pseudo_qconst24"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_depthwise_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          7,
+          7,
+          288
+        ],
+        [
+          1,
+          3,
+          3,
+          288
+        ],
+        [
+          288
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          3,
+          3,
+          288
+        ]
+      ],
+      "estimated_macs": 23328
+    },
+    {
+      "index": 55,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_depthwise_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst23",
+        "tfl.pseudo_qconst22"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_project_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          3,
+          3,
+          288
+        ],
+        [
+          80,
+          1,
+          1,
+          288
+        ],
+        [
+          80
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          3,
+          3,
+          80
+        ]
+      ],
+      "estimated_macs": 207360
+    },
+    {
+      "index": 56,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_project_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst21",
+        "tfl.pseudo_qconst20"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_expand_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          3,
+          3,
+          80
+        ],
+        [
+          480,
+          1,
+          1,
+          80
+        ],
+        [
+          480
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          3,
+          3,
+          480
+        ]
+      ],
+      "estimated_macs": 345600
+    },
+    {
+      "index": 57,
+      "op_name": "DEPTHWISE_CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_expand_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst19",
+        "tfl.pseudo_qconst18"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_depthwise_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          3,
+          3,
+          480
+        ],
+        [
+          1,
+          3,
+          3,
+          480
+        ],
+        [
+          480
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          3,
+          3,
+          480
+        ]
+      ],
+      "estimated_macs": 38880
+    },
+    {
+      "index": 58,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_depthwise_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst17",
+        "tfl.pseudo_qconst16"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_project_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          3,
+          3,
+          480
+        ],
+        [
+          80,
+          1,
+          1,
+          480
+        ],
+        [
+          80
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          3,
+          3,
+          80
+        ]
+      ],
+      "estimated_macs": 345600
+    },
+    {
+      "index": 59,
+      "op_name": "ADD",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_13_project_BN_1/batchnorm/sub",
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_project_BN_1/batchnorm/sub"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_add_1/Add"
+      ],
+      "input_shapes": [
+        [
+          1,
+          3,
+          3,
+          80
+        ],
+        [
+          1,
+          3,
+          3,
+          80
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          3,
+          3,
+          80
+        ]
+      ],
+      "estimated_macs": null
+    },
+    {
+      "index": 60,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_add_1/Add",
+        "tfl.pseudo_qconst15",
+        "tfl.pseudo_qconst14"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_expand_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          3,
+          3,
+          80
+        ],
+        [
+          480,
+          1,
+          1,
+          80
+        ],
+        [
+          480
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          3,
+          3,
+          480
+        ]
+      ],
+      "estimated_macs": 345600
+    },
+    {
+      "index": 61,
+      "op_name": "DEPTHWISE_CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_expand_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst13",
+        "tfl.pseudo_qconst12"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_depthwise_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          3,
+          3,
+          480
+        ],
+        [
+          1,
+          3,
+          3,
+          480
+        ],
+        [
+          480
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          3,
+          3,
+          480
+        ]
+      ],
+      "estimated_macs": 38880
+    },
+    {
+      "index": 62,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_depthwise_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst11",
+        "tfl.pseudo_qconst10"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_project_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          3,
+          3,
+          480
+        ],
+        [
+          80,
+          1,
+          1,
+          480
+        ],
+        [
+          80
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          3,
+          3,
+          80
+        ]
+      ],
+      "estimated_macs": 345600
+    },
+    {
+      "index": 63,
+      "op_name": "ADD",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_14_add_1/Add",
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_project_BN_1/batchnorm/sub"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_add_1/Add"
+      ],
+      "input_shapes": [
+        [
+          1,
+          3,
+          3,
+          80
+        ],
+        [
+          1,
+          3,
+          3,
+          80
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          3,
+          3,
+          80
+        ]
+      ],
+      "estimated_macs": null
+    },
+    {
+      "index": 64,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_15_add_1/Add",
+        "tfl.pseudo_qconst9",
+        "tfl.pseudo_qconst8"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_expand_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          3,
+          3,
+          80
+        ],
+        [
+          480,
+          1,
+          1,
+          80
+        ],
+        [
+          480
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          3,
+          3,
+          480
+        ]
+      ],
+      "estimated_macs": 345600
+    },
+    {
+      "index": 65,
+      "op_name": "DEPTHWISE_CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_expand_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_expand_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_expand_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_expand_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst7",
+        "tfl.pseudo_qconst6"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_depthwise_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          3,
+          3,
+          480
+        ],
+        [
+          1,
+          3,
+          3,
+          480
+        ],
+        [
+          480
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          3,
+          3,
+          480
+        ]
+      ],
+      "estimated_macs": 38880
+    },
+    {
+      "index": 66,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_depthwise_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_depthwise_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_depthwise_BN_1/batchnorm/mul_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_depthwise_1/depthwise;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_depthwise_BN_1/batchnorm/mul;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_depthwise_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst5",
+        "tfl.pseudo_qconst4"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_project_BN_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          3,
+          3,
+          480
+        ],
+        [
+          160,
+          1,
+          1,
+          480
+        ],
+        [
+          160
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          3,
+          3,
+          160
+        ]
+      ],
+      "estimated_macs": 691200
+    },
+    {
+      "index": 67,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_project_BN_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_project_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/block_16_project_BN_1/batchnorm/sub",
+        "tfl.pseudo_qconst3",
+        "tfl.pseudo_qconst2"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/out_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/Conv_1_bn_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/Conv_1_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/Conv_1_bn_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          3,
+          3,
+          160
+        ],
+        [
+          1280,
+          1,
+          1,
+          160
+        ],
+        [
+          1280
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          3,
+          3,
+          1280
+        ]
+      ],
+      "estimated_macs": 1843200
+    },
+    {
+      "index": 68,
+      "op_name": "MEAN",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/out_relu_1/Relu6;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/Conv_1_bn_1/batchnorm/add_1;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/Conv_1_1/convolution;gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/Conv_1_bn_1/batchnorm/sub",
+        "arith.constant1"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/global_average_pooling2d_1/Mean"
+      ],
+      "input_shapes": [
+        [
+          1,
+          3,
+          3,
+          1280
+        ],
+        [
+          2
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          1280
+        ]
+      ],
+      "estimated_macs": null
+    },
+    {
+      "index": 69,
+      "op_name": "FULLY_CONNECTED",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/mobilenetv2_0.50_96_1/global_average_pooling2d_1/Mean",
+        "tfl.pseudo_qconst1",
+        "tfl.pseudo_qconst"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/class_1/MatMul;gesture_mobilenet_v2_1/class_1/BiasAdd"
+      ],
+      "input_shapes": [
+        [
+          1,
+          1280
+        ],
+        [
+          6,
+          1280
+        ],
+        [
+          6
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6
+        ]
+      ],
+      "estimated_macs": null
+    },
+    {
+      "index": 70,
+      "op_name": "SOFTMAX",
+      "input_tensors": [
+        "gesture_mobilenet_v2_1/class_1/MatMul;gesture_mobilenet_v2_1/class_1/BiasAdd"
+      ],
+      "output_tensors": [
+        "StatefulPartitionedCall_1:0"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6
+        ]
+      ],
+      "estimated_macs": null
+    },
+    {
+      "index": 71,
+      "op_name": "DELEGATE",
+      "input_tensors": [
+        "serving_default_image:0",
+        "arith.constant",
+        "arith.constant1",
+        "tfl.pseudo_qconst",
+        "tfl.pseudo_qconst1",
+        "tfl.pseudo_qconst2",
+        "tfl.pseudo_qconst3",
+        "tfl.pseudo_qconst4",
+        "tfl.pseudo_qconst5",
+        "tfl.pseudo_qconst6",
+        "tfl.pseudo_qconst7",
+        "tfl.pseudo_qconst8",
+        "tfl.pseudo_qconst9",
+        "tfl.pseudo_qconst10",
+        "tfl.pseudo_qconst11",
+        "tfl.pseudo_qconst12",
+        "tfl.pseudo_qconst13",
+        "tfl.pseudo_qconst14",
+        "tfl.pseudo_qconst15",
+        "tfl.pseudo_qconst16",
+        "tfl.pseudo_qconst17",
+        "tfl.pseudo_qconst18",
+        "tfl.pseudo_qconst19",
+        "tfl.pseudo_qconst20",
+        "tfl.pseudo_qconst21",
+        "tfl.pseudo_qconst22",
+        "tfl.pseudo_qconst23",
+        "tfl.pseudo_qconst24",
+        "tfl.pseudo_qconst25",
+        "tfl.pseudo_qconst26",
+        "tfl.pseudo_qconst27",
+        "tfl.pseudo_qconst28",
+        "tfl.pseudo_qconst29",
+        "tfl.pseudo_qconst30",
+        "tfl.pseudo_qconst31",
+        "tfl.pseudo_qconst32",
+        "tfl.pseudo_qconst33",
+        "tfl.pseudo_qconst34",
+        "tfl.pseudo_qconst35",
+        "tfl.pseudo_qconst36",
+        "tfl.pseudo_qconst37",
+        "tfl.pseudo_qconst38",
+        "tfl.pseudo_qconst39",
+        "tfl.pseudo_qconst40",
+        "tfl.pseudo_qconst41",
+        "tfl.pseudo_qconst42",
+        "tfl.pseudo_qconst43",
+        "tfl.pseudo_qconst44",
+        "tfl.pseudo_qconst45",
+        "tfl.pseudo_qconst46",
+        "tfl.pseudo_qconst47",
+        "tfl.pseudo_qconst48",
+        "tfl.pseudo_qconst49",
+        "tfl.pseudo_qconst50",
+        "tfl.pseudo_qconst51",
+        "tfl.pseudo_qconst52",
+        "tfl.pseudo_qconst53",
+        "tfl.pseudo_qconst54",
+        "tfl.pseudo_qconst55",
+        "tfl.pseudo_qconst56",
+        "tfl.pseudo_qconst57",
+        "tfl.pseudo_qconst58",
+        "tfl.pseudo_qconst59",
+        "tfl.pseudo_qconst60",
+        "tfl.pseudo_qconst61",
+        "tfl.pseudo_qconst62",
+        "tfl.pseudo_qconst63",
+        "tfl.pseudo_qconst64",
+        "tfl.pseudo_qconst65",
+        "tfl.pseudo_qconst66",
+        "tfl.pseudo_qconst67",
+        "tfl.pseudo_qconst68",
+        "tfl.pseudo_qconst69",
+        "tfl.pseudo_qconst70",
+        "tfl.pseudo_qconst71",
+        "tfl.pseudo_qconst72",
+        "tfl.pseudo_qconst73",
+        "tfl.pseudo_qconst74",
+        "tfl.pseudo_qconst75",
+        "tfl.pseudo_qconst76",
+        "tfl.pseudo_qconst77",
+        "tfl.pseudo_qconst78",
+        "tfl.pseudo_qconst79",
+        "tfl.pseudo_qconst80",
+        "tfl.pseudo_qconst81",
+        "tfl.pseudo_qconst82",
+        "tfl.pseudo_qconst83",
+        "tfl.pseudo_qconst84",
+        "tfl.pseudo_qconst85",
+        "tfl.pseudo_qconst86",
+        "tfl.pseudo_qconst87",
+        "tfl.pseudo_qconst88",
+        "tfl.pseudo_qconst89",
+        "tfl.pseudo_qconst90",
+        "tfl.pseudo_qconst91",
+        "tfl.pseudo_qconst92",
+        "tfl.pseudo_qconst93",
+        "tfl.pseudo_qconst94",
+        "tfl.pseudo_qconst95",
+        "tfl.pseudo_qconst96",
+        "tfl.pseudo_qconst97",
+        "tfl.pseudo_qconst98",
+        "tfl.pseudo_qconst99",
+        "tfl.pseudo_qconst100",
+        "tfl.pseudo_qconst101",
+        "tfl.pseudo_qconst102",
+        "tfl.pseudo_qconst103",
+        "tfl.pseudo_qconst104",
+        "tfl.pseudo_qconst105",
+        "tfl.pseudo_qconst106",
+        "tfl.pseudo_qconst107"
+      ],
+      "output_tensors": [
+        "gesture_mobilenet_v2_1/class_1/MatMul;gesture_mobilenet_v2_1/class_1/BiasAdd"
+      ],
+      "input_shapes": [
+        [
+          1,
+          96,
+          96,
+          3
+        ],
+        [
+          4,
+          2
+        ],
+        [
+          2
+        ],
+        [
+          6
+        ],
+        [
+          6,
+          1280
+        ],
+        [
+          1280
+        ],
+        [
+          1280,
+          1,
+          1,
+          160
+        ],
+        [
+          160
+        ],
+        [
+          160,
+          1,
+          1,
+          480
+        ],
+        [
+          480
+        ],
+        [
+          1,
+          3,
+          3,
+          480
+        ],
+        [
+          480
+        ],
+        [
+          480,
+          1,
+          1,
+          80
+        ],
+        [
+          80
+        ],
+        [
+          80,
+          1,
+          1,
+          480
+        ],
+        [
+          480
+        ],
+        [
+          1,
+          3,
+          3,
+          480
+        ],
+        [
+          480
+        ],
+        [
+          480,
+          1,
+          1,
+          80
+        ],
+        [
+          80
+        ],
+        [
+          80,
+          1,
+          1,
+          480
+        ],
+        [
+          480
+        ],
+        [
+          1,
+          3,
+          3,
+          480
+        ],
+        [
+          480
+        ],
+        [
+          480,
+          1,
+          1,
+          80
+        ],
+        [
+          80
+        ],
+        [
+          80,
+          1,
+          1,
+          288
+        ],
+        [
+          288
+        ],
+        [
+          1,
+          3,
+          3,
+          288
+        ],
+        [
+          288
+        ],
+        [
+          288,
+          1,
+          1,
+          48
+        ],
+        [
+          48
+        ],
+        [
+          48,
+          1,
+          1,
+          288
+        ],
+        [
+          288
+        ],
+        [
+          1,
+          3,
+          3,
+          288
+        ],
+        [
+          288
+        ],
+        [
+          288,
+          1,
+          1,
+          48
+        ],
+        [
+          48
+        ],
+        [
+          48,
+          1,
+          1,
+          288
+        ],
+        [
+          288
+        ],
+        [
+          1,
+          3,
+          3,
+          288
+        ],
+        [
+          288
+        ],
+        [
+          288,
+          1,
+          1,
+          48
+        ],
+        [
+          48
+        ],
+        [
+          48,
+          1,
+          1,
+          192
+        ],
+        [
+          192
+        ],
+        [
+          1,
+          3,
+          3,
+          192
+        ],
+        [
+          192
+        ],
+        [
+          192,
+          1,
+          1,
+          32
+        ],
+        [
+          32
+        ],
+        [
+          32,
+          1,
+          1,
+          192
+        ],
+        [
+          192
+        ],
+        [
+          1,
+          3,
+          3,
+          192
+        ],
+        [
+          192
+        ],
+        [
+          192,
+          1,
+          1,
+          32
+        ],
+        [
+          32
+        ],
+        [
+          32,
+          1,
+          1,
+          192
+        ],
+        [
+          192
+        ],
+        [
+          1,
+          3,
+          3,
+          192
+        ],
+        [
+          192
+        ],
+        [
+          192,
+          1,
+          1,
+          32
+        ],
+        [
+          32
+        ],
+        [
+          32,
+          1,
+          1,
+          192
+        ],
+        [
+          192
+        ],
+        [
+          1,
+          3,
+          3,
+          192
+        ],
+        [
+          192
+        ],
+        [
+          192,
+          1,
+          1,
+          32
+        ],
+        [
+          32
+        ],
+        [
+          32,
+          1,
+          1,
+          96
+        ],
+        [
+          96
+        ],
+        [
+          1,
+          3,
+          3,
+          96
+        ],
+        [
+          96
+        ],
+        [
+          96,
+          1,
+          1,
+          16
+        ],
+        [
+          16
+        ],
+        [
+          16,
+          1,
+          1,
+          96
+        ],
+        [
+          96
+        ],
+        [
+          1,
+          3,
+          3,
+          96
+        ],
+        [
+          96
+        ],
+        [
+          96,
+          1,
+          1,
+          16
+        ],
+        [
+          16
+        ],
+        [
+          16,
+          1,
+          1,
+          96
+        ],
+        [
+          96
+        ],
+        [
+          1,
+          3,
+          3,
+          96
+        ],
+        [
+          96
+        ],
+        [
+          96,
+          1,
+          1,
+          16
+        ],
+        [
+          16
+        ],
+        [
+          16,
+          1,
+          1,
+          96
+        ],
+        [
+          96
+        ],
+        [
+          1,
+          3,
+          3,
+          96
+        ],
+        [
+          96
+        ],
+        [
+          96,
+          1,
+          1,
+          16
+        ],
+        [
+          16
+        ],
+        [
+          16,
+          1,
+          1,
+          96
+        ],
+        [
+          96
+        ],
+        [
+          1,
+          3,
+          3,
+          96
+        ],
+        [
+          96
+        ],
+        [
+          96,
+          1,
+          1,
+          16
+        ],
+        [
+          16
+        ],
+        [
+          16,
+          1,
+          1,
+          48
+        ],
+        [
+          48
+        ],
+        [
+          1,
+          3,
+          3,
+          48
+        ],
+        [
+          48
+        ],
+        [
+          48,
+          1,
+          1,
+          8
+        ],
+        [
+          8
+        ],
+        [
+          8,
+          1,
+          1,
+          16
+        ],
+        [
+          16
+        ],
+        [
+          1,
+          3,
+          3,
+          16
+        ],
+        [
+          16
+        ],
+        [
+          16,
+          3,
+          3,
+          3
+        ],
+        [],
+        []
+      ],
+      "output_shapes": [
+        [
+          1,
+          6
+        ]
+      ],
+      "estimated_macs": null
+    }
+  ],
+  "conv2d_total_macs": 15547392,
+  "depthwise_conv2d_total_macs": 2058048,
+  "total_estimated_macs": 17605440
+}

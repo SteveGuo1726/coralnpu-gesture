@@ -1,0 +1,69 @@
+{
+  "model": "static_cnn_regularized_3x3_i96_e70_hagrid6_sample",
+  "scope": "Residual control-only headroom on top of official strategy-8 best replay",
+  "rows": [
+    {
+      "layer_name": "conv2_3x3_a",
+      "shape": "48x48x16 -> 3x3 -> 48x48x32",
+      "official_best_opt_cycles": 5732506,
+      "tail_hidden_ratio": 0.9445940746440938,
+      "full_pipeline_ratio": 0.9376683339746056,
+      "dual_port_full_pipeline_ratio": 0.9293959215082724,
+      "est_tail_hidden_opt_cycles": 5414891,
+      "est_tail_hidden_delta": -317615,
+      "est_full_pipeline_opt_cycles": 5375189,
+      "est_full_pipeline_delta": -357317,
+      "est_dual_port_full_pipeline_opt_cycles": 5327768,
+      "est_dual_port_full_pipeline_delta": -404738
+    },
+    {
+      "layer_name": "conv2_3x3_b",
+      "shape": "48x48x32 -> 3x3 -> 48x48x32",
+      "official_best_opt_cycles": 4617766,
+      "tail_hidden_ratio": 0.9458595732681643,
+      "full_pipeline_ratio": 0.9390920199266848,
+      "dual_port_full_pipeline_ratio": 0.9239590187047655,
+      "est_tail_hidden_opt_cycles": 4367758,
+      "est_tail_hidden_delta": -250008,
+      "est_full_pipeline_opt_cycles": 4336507,
+      "est_full_pipeline_delta": -281259,
+      "est_dual_port_full_pipeline_opt_cycles": 4266627,
+      "est_dual_port_full_pipeline_delta": -351139
+    },
+    {
+      "layer_name": "conv3_3x3_a",
+      "shape": "24x24x32 -> 3x3 -> 24x24x64",
+      "official_best_opt_cycles": 2440498,
+      "tail_hidden_ratio": 0.9460472086923941,
+      "full_pipeline_ratio": 0.9291869614087673,
+      "dual_port_full_pipeline_ratio": 0.9207568377669539,
+      "est_tail_hidden_opt_cycles": 2308826,
+      "est_tail_hidden_delta": -131672,
+      "est_full_pipeline_opt_cycles": 2267679,
+      "est_full_pipeline_delta": -172819,
+      "est_dual_port_full_pipeline_opt_cycles": 2247105,
+      "est_dual_port_full_pipeline_delta": -193393
+    },
+    {
+      "layer_name": "conv3_3x3_b",
+      "shape": "24x24x64 -> 3x3 -> 24x24x64",
+      "official_best_opt_cycles": 4806146,
+      "tail_hidden_ratio": 0.9488454706927176,
+      "full_pipeline_ratio": 0.9328596802841919,
+      "dual_port_full_pipeline_ratio": 0.9177619893428064,
+      "est_tail_hidden_opt_cycles": 4560290,
+      "est_tail_hidden_delta": -245856,
+      "est_full_pipeline_opt_cycles": 4483460,
+      "est_full_pipeline_delta": -322686,
+      "est_dual_port_full_pipeline_opt_cycles": 4410898,
+      "est_dual_port_full_pipeline_delta": -395248
+    }
+  ],
+  "totals": {
+    "official_best_opt_cycles": 17596916,
+    "est_tail_hidden_opt_cycles": 16651765,
+    "est_tail_hidden_delta": -945151,
+    "est_dual_port_full_pipeline_opt_cycles": 16252398,
+    "est_dual_port_full_pipeline_delta": -1344518
+  }
+}

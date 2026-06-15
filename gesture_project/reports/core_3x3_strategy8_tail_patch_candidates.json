@@ -1,0 +1,336 @@
+{
+  "model": "static_cnn_regularized_3x3_i96_e70_hagrid6_sample",
+  "scope": "Minimal tail-patch candidates on top of strategy-8 current best",
+  "definitions": {
+    "branch_only": "只压缩 S6_NEXT_OC_OR_SHIFT。",
+    "writeback_branch": "同时压缩 S5_QUANTIZE_WRITEBACK 与 S6_NEXT_OC_OR_SHIFT。",
+    "inter_oc_tail_closure": "只在同一空间 tile 的 oc_group 交界处吞掉 S5 + S6 + next S3，保留首组装填和末组收尾。"
+  },
+  "rows": [
+    {
+      "layer_name": "conv2_3x3_a",
+      "shape": "48x48x16 -> 3x3 -> 48x48x32",
+      "baseline_opt_cycles": 6445523,
+      "official_best_opt_cycles": 5732506,
+      "row_resident_sim_cycles": 10396,
+      "counts": {
+        "tile_rows": 12,
+        "tiles_per_row": 6,
+        "spatial_tiles": 72,
+        "oc_groups_per_tile": 4,
+        "oc_groups_total": 288,
+        "inter_oc_transitions": 216
+      },
+      "stage_cycles": {
+        "weight_group": 1.0,
+        "compute": 32.0,
+        "writeback": 1.0,
+        "branch": 1.0
+      },
+      "candidates": {
+        "branch_only": {
+          "name": "branch_only",
+          "description": "只压缩 S6_NEXT_OC_OR_SHIFT 的状态成本，不动 S5 和下一次 S3。",
+          "saved_cycles_vs_serial": 288,
+          "sim_cycles": 10108,
+          "cycle_ratio_vs_serial": 0.972297037322047,
+          "mapped_opt_cycles_from_baseline": 6266963,
+          "mapped_opt_delta_vs_baseline": -178560,
+          "est_opt_cycles_from_official_best": 5573699,
+          "est_opt_delta_vs_official_best": -158807
+        },
+        "writeback_branch": {
+          "name": "writeback_branch",
+          "description": "同时压缩 S5_QUANTIZE_WRITEBACK 与 S6_NEXT_OC_OR_SHIFT，不假设下一次 S3 被吞掉。",
+          "saved_cycles_vs_serial": 576,
+          "sim_cycles": 9820,
+          "cycle_ratio_vs_serial": 0.9445940746440938,
+          "mapped_opt_cycles_from_baseline": 6088403,
+          "mapped_opt_delta_vs_baseline": -357120,
+          "est_opt_cycles_from_official_best": 5414891,
+          "est_opt_delta_vs_official_best": -317615
+        },
+        "inter_oc_tail_closure": {
+          "name": "inter_oc_tail_closure",
+          "description": "只在同一空间 tile 的 oc_group 交界处吞掉 S5 + S6 + next S3，保留首组装填和末组收尾。",
+          "saved_cycles_vs_serial": 648,
+          "sim_cycles": 9748,
+          "cycle_ratio_vs_serial": 0.9376683339746056,
+          "mapped_opt_cycles_from_baseline": 6043763,
+          "mapped_opt_delta_vs_baseline": -401760,
+          "est_opt_cycles_from_official_best": 5375189,
+          "est_opt_delta_vs_official_best": -357317,
+          "full_pipeline_total_cycles": 9748,
+          "consistency_delta_vs_full_pipeline": 0
+        }
+      }
+    },
+    {
+      "layer_name": "conv2_3x3_b",
+      "shape": "48x48x32 -> 3x3 -> 48x48x32",
+      "baseline_opt_cycles": 11609523,
+      "official_best_opt_cycles": 4617766,
+      "row_resident_sim_cycles": 10639,
+      "counts": {
+        "tile_rows": 12,
+        "tiles_per_row": 6,
+        "spatial_tiles": 72,
+        "oc_groups_per_tile": 4,
+        "oc_groups_total": 288,
+        "inter_oc_transitions": 216
+      },
+      "stage_cycles": {
+        "weight_group": 1.0,
+        "compute": 32.0,
+        "writeback": 1.0,
+        "branch": 1.0
+      },
+      "candidates": {
+        "branch_only": {
+          "name": "branch_only",
+          "description": "只压缩 S6_NEXT_OC_OR_SHIFT 的状态成本，不动 S5 和下一次 S3。",
+          "saved_cycles_vs_serial": 288,
+          "sim_cycles": 10351,
+          "cycle_ratio_vs_serial": 0.9729297866340821,
+          "mapped_opt_cycles_from_baseline": 11295251,
+          "mapped_opt_delta_vs_baseline": -314272,
+          "est_opt_cycles_from_official_best": 4492762,
+          "est_opt_delta_vs_official_best": -125004
+        },
+        "writeback_branch": {
+          "name": "writeback_branch",
+          "description": "同时压缩 S5_QUANTIZE_WRITEBACK 与 S6_NEXT_OC_OR_SHIFT，不假设下一次 S3 被吞掉。",
+          "saved_cycles_vs_serial": 576,
+          "sim_cycles": 10063,
+          "cycle_ratio_vs_serial": 0.9458595732681643,
+          "mapped_opt_cycles_from_baseline": 10980978,
+          "mapped_opt_delta_vs_baseline": -628545,
+          "est_opt_cycles_from_official_best": 4367758,
+          "est_opt_delta_vs_official_best": -250008
+        },
+        "inter_oc_tail_closure": {
+          "name": "inter_oc_tail_closure",
+          "description": "只在同一空间 tile 的 oc_group 交界处吞掉 S5 + S6 + next S3，保留首组装填和末组收尾。",
+          "saved_cycles_vs_serial": 648,
+          "sim_cycles": 9991,
+          "cycle_ratio_vs_serial": 0.9390920199266848,
+          "mapped_opt_cycles_from_baseline": 10902410,
+          "mapped_opt_delta_vs_baseline": -707113,
+          "est_opt_cycles_from_official_best": 4336507,
+          "est_opt_delta_vs_official_best": -281259,
+          "full_pipeline_total_cycles": 9991,
+          "consistency_delta_vs_full_pipeline": 0
+        }
+      }
+    },
+    {
+      "layer_name": "conv3_3x3_a",
+      "shape": "24x24x32 -> 3x3 -> 24x24x64",
+      "baseline_opt_cycles": 5646477,
+      "official_best_opt_cycles": 2440498,
+      "row_resident_sim_cycles": 5338,
+      "counts": {
+        "tile_rows": 6,
+        "tiles_per_row": 3,
+        "spatial_tiles": 18,
+        "oc_groups_per_tile": 8,
+        "oc_groups_total": 144,
+        "inter_oc_transitions": 126
+      },
+      "stage_cycles": {
+        "weight_group": 1.0,
+        "compute": 32.0,
+        "writeback": 1.0,
+        "branch": 1.0
+      },
+      "candidates": {
+        "branch_only": {
+          "name": "branch_only",
+          "description": "只压缩 S6_NEXT_OC_OR_SHIFT 的状态成本，不动 S5 和下一次 S3。",
+          "saved_cycles_vs_serial": 144,
+          "sim_cycles": 5194,
+          "cycle_ratio_vs_serial": 0.9730236043461971,
+          "mapped_opt_cycles_from_baseline": 5494155,
+          "mapped_opt_delta_vs_baseline": -152322,
+          "est_opt_cycles_from_official_best": 2374662,
+          "est_opt_delta_vs_official_best": -65836
+        },
+        "writeback_branch": {
+          "name": "writeback_branch",
+          "description": "同时压缩 S5_QUANTIZE_WRITEBACK 与 S6_NEXT_OC_OR_SHIFT，不假设下一次 S3 被吞掉。",
+          "saved_cycles_vs_serial": 288,
+          "sim_cycles": 5050,
+          "cycle_ratio_vs_serial": 0.9460472086923941,
+          "mapped_opt_cycles_from_baseline": 5341834,
+          "mapped_opt_delta_vs_baseline": -304643,
+          "est_opt_cycles_from_official_best": 2308826,
+          "est_opt_delta_vs_official_best": -131672
+        },
+        "inter_oc_tail_closure": {
+          "name": "inter_oc_tail_closure",
+          "description": "只在同一空间 tile 的 oc_group 交界处吞掉 S5 + S6 + next S3，保留首组装填和末组收尾。",
+          "saved_cycles_vs_serial": 378,
+          "sim_cycles": 4960,
+          "cycle_ratio_vs_serial": 0.9291869614087673,
+          "mapped_opt_cycles_from_baseline": 5246633,
+          "mapped_opt_delta_vs_baseline": -399844,
+          "est_opt_cycles_from_official_best": 2267679,
+          "est_opt_delta_vs_official_best": -172819,
+          "full_pipeline_total_cycles": 4960,
+          "consistency_delta_vs_full_pipeline": 0
+        }
+      }
+    },
+    {
+      "layer_name": "conv3_3x3_b",
+      "shape": "24x24x64 -> 3x3 -> 24x24x64",
+      "baseline_opt_cycles": 10672141,
+      "official_best_opt_cycles": 4806146,
+      "row_resident_sim_cycles": 5630,
+      "counts": {
+        "tile_rows": 6,
+        "tiles_per_row": 3,
+        "spatial_tiles": 18,
+        "oc_groups_per_tile": 8,
+        "oc_groups_total": 144,
+        "inter_oc_transitions": 126
+      },
+      "stage_cycles": {
+        "weight_group": 1.0,
+        "compute": 32.0,
+        "writeback": 1.0,
+        "branch": 1.0
+      },
+      "candidates": {
+        "branch_only": {
+          "name": "branch_only",
+          "description": "只压缩 S6_NEXT_OC_OR_SHIFT 的状态成本，不动 S5 和下一次 S3。",
+          "saved_cycles_vs_serial": 144,
+          "sim_cycles": 5486,
+          "cycle_ratio_vs_serial": 0.9744227353463588,
+          "mapped_opt_cycles_from_baseline": 10399177,
+          "mapped_opt_delta_vs_baseline": -272964,
+          "est_opt_cycles_from_official_best": 4683218,
+          "est_opt_delta_vs_official_best": -122928
+        },
+        "writeback_branch": {
+          "name": "writeback_branch",
+          "description": "同时压缩 S5_QUANTIZE_WRITEBACK 与 S6_NEXT_OC_OR_SHIFT，不假设下一次 S3 被吞掉。",
+          "saved_cycles_vs_serial": 288,
+          "sim_cycles": 5342,
+          "cycle_ratio_vs_serial": 0.9488454706927176,
+          "mapped_opt_cycles_from_baseline": 10126213,
+          "mapped_opt_delta_vs_baseline": -545928,
+          "est_opt_cycles_from_official_best": 4560290,
+          "est_opt_delta_vs_official_best": -245856
+        },
+        "inter_oc_tail_closure": {
+          "name": "inter_oc_tail_closure",
+          "description": "只在同一空间 tile 的 oc_group 交界处吞掉 S5 + S6 + next S3，保留首组装填和末组收尾。",
+          "saved_cycles_vs_serial": 378,
+          "sim_cycles": 5252,
+          "cycle_ratio_vs_serial": 0.9328596802841919,
+          "mapped_opt_cycles_from_baseline": 9955610,
+          "mapped_opt_delta_vs_baseline": -716531,
+          "est_opt_cycles_from_official_best": 4483460,
+          "est_opt_delta_vs_official_best": -322686,
+          "full_pipeline_total_cycles": 5252,
+          "consistency_delta_vs_full_pipeline": 0
+        }
+      }
+    }
+  ],
+  "totals": {
+    "baseline_opt_cycles": 34373664,
+    "official_best_opt_cycles": 17596916,
+    "branch_only": {
+      "saved_cycles_vs_serial": 864,
+      "mapped_opt_cycles_from_baseline": 33455546,
+      "mapped_opt_delta_vs_baseline": -918118,
+      "est_opt_cycles_from_official_best": 17124341,
+      "est_opt_delta_vs_official_best": -472575
+    },
+    "writeback_branch": {
+      "saved_cycles_vs_serial": 1728,
+      "mapped_opt_cycles_from_baseline": 32537428,
+      "mapped_opt_delta_vs_baseline": -1836236,
+      "est_opt_cycles_from_official_best": 16651765,
+      "est_opt_delta_vs_official_best": -945151
+    },
+    "inter_oc_tail_closure": {
+      "saved_cycles_vs_serial": 2052,
+      "mapped_opt_cycles_from_baseline": 32148416,
+      "mapped_opt_delta_vs_baseline": -2225248,
+      "est_opt_cycles_from_official_best": 16462835,
+      "est_opt_delta_vs_official_best": -1134081
+    }
+  },
+  "rankings": {
+    "branch_only": [
+      {
+        "layer_name": "conv2_3x3_a",
+        "shape": "48x48x16 -> 3x3 -> 48x48x32",
+        "est_opt_delta_vs_official_best": -158807
+      },
+      {
+        "layer_name": "conv2_3x3_b",
+        "shape": "48x48x32 -> 3x3 -> 48x48x32",
+        "est_opt_delta_vs_official_best": -125004
+      },
+      {
+        "layer_name": "conv3_3x3_b",
+        "shape": "24x24x64 -> 3x3 -> 24x24x64",
+        "est_opt_delta_vs_official_best": -122928
+      },
+      {
+        "layer_name": "conv3_3x3_a",
+        "shape": "24x24x32 -> 3x3 -> 24x24x64",
+        "est_opt_delta_vs_official_best": -65836
+      }
+    ],
+    "writeback_branch": [
+      {
+        "layer_name": "conv2_3x3_a",
+        "shape": "48x48x16 -> 3x3 -> 48x48x32",
+        "est_opt_delta_vs_official_best": -317615
+      },
+      {
+        "layer_name": "conv2_3x3_b",
+        "shape": "48x48x32 -> 3x3 -> 48x48x32",
+        "est_opt_delta_vs_official_best": -250008
+      },
+      {
+        "layer_name": "conv3_3x3_b",
+        "shape": "24x24x64 -> 3x3 -> 24x24x64",
+        "est_opt_delta_vs_official_best": -245856
+      },
+      {
+        "layer_name": "conv3_3x3_a",
+        "shape": "24x24x32 -> 3x3 -> 24x24x64",
+        "est_opt_delta_vs_official_best": -131672
+      }
+    ],
+    "inter_oc_tail_closure": [
+      {
+        "layer_name": "conv2_3x3_a",
+        "shape": "48x48x16 -> 3x3 -> 48x48x32",
+        "est_opt_delta_vs_official_best": -357317
+      },
+      {
+        "layer_name": "conv3_3x3_b",
+        "shape": "24x24x64 -> 3x3 -> 24x24x64",
+        "est_opt_delta_vs_official_best": -322686
+      },
+      {
+        "layer_name": "conv2_3x3_b",
+        "shape": "48x48x32 -> 3x3 -> 48x48x32",
+        "est_opt_delta_vs_official_best": -281259
+      },
+      {
+        "layer_name": "conv3_3x3_a",
+        "shape": "24x24x32 -> 3x3 -> 24x24x64",
+        "est_opt_delta_vs_official_best": -172819
+      }
+    ]
+  }
+}

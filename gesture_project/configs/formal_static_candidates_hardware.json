@@ -1,0 +1,26 @@
+{
+  "title": "正式静态手势模型硬件优先总表",
+  "dataset": "gesture_project/datasets/processed/hagrid_sample_static_6cls",
+  "candidates": [
+    {
+      "name": "static_cnn_regularized_3x3_i96_e70_hagrid6_sample",
+      "family": "3x3-heavy static cnn",
+      "notes": "当前正式主线；高精度且硬件收益集中在 3x3 主体层。",
+      "keras_eval": "../reports/static_cnn_regularized_3x3_i96_e70_hagrid6_sample_keras_eval.json",
+      "tflite_eval": "../reports/static_cnn_regularized_3x3_i96_e70_hagrid6_sample_tflite_eval.json",
+      "tflite_ops": "../reports/static_cnn_regularized_3x3_i96_e70_hagrid6_sample_tflite_ops.json",
+      "npucycles": "../reports/static_cnn_regularized_3x3_i96_e70_hagrid6_sample_npucycles.json",
+      "hotspots": "../reports/static_cnn_regularized_3x3_i96_e70_hagrid6_sample_hotspots.json"
+    },
+    {
+      "name": "mobilenet_v2_a050_96_imagenet_frozen_finetune_hagrid6_sample",
+      "family": "mobilenetv2",
+      "notes": "轻量对照；保留为 1x1 pointwise 次级基准。",
+      "keras_eval": "../reports/mobilenet_v2_a050_96_imagenet_frozen_finetune_hagrid6_sample_keras_eval.json",
+      "tflite_eval": "../reports/mobilenet_v2_a050_96_imagenet_frozen_finetune_hagrid6_sample_tflite_eval.json",
+      "tflite_ops": "../reports/mobilenet_v2_a050_96_imagenet_frozen_finetune_hagrid6_sample_tflite_ops.json",
+      "npucycles": "../reports/mobilenet_v2_a050_96_imagenet_frozen_finetune_hagrid6_sample_npucycles.json",
+      "hotspots": "../reports/mobilenet_v2_a050_96_imagenet_frozen_finetune_hagrid6_sample_hotspots.json"
+    }
+  ]
+}

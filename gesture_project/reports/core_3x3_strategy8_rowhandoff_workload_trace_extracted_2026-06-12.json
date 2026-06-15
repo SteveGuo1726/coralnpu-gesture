@@ -1,0 +1,1006 @@
+{
+  "project_stage": "strategy8 rowhandoff cocotb log extracted event trace",
+  "source_log": "gesture_project/reports/core_3x3_strategy8_rowhandoff_workload_trace_raw_2026-06-11.log",
+  "rowhandoff_event_addr": "0x200840",
+  "samples": [
+    {
+      "cycle": 10302,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1",
+      "note": "workload"
+    },
+    {
+      "cycle": 4451650,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x180040",
+      "note": "workload"
+    },
+    {
+      "cycle": 4451670,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x180008",
+      "note": "workload"
+    },
+    {
+      "cycle": 4632312,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x180080",
+      "note": "workload"
+    },
+    {
+      "cycle": 4632334,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x180120",
+      "note": "workload"
+    },
+    {
+      "cycle": 4632530,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x190040",
+      "note": "workload"
+    },
+    {
+      "cycle": 4632548,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x190002",
+      "note": "workload"
+    },
+    {
+      "cycle": 4632550,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x190004",
+      "note": "workload"
+    },
+    {
+      "cycle": 4813169,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x190080",
+      "note": "workload"
+    },
+    {
+      "cycle": 4813191,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x190120",
+      "note": "workload"
+    },
+    {
+      "cycle": 4813387,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1a0040",
+      "note": "workload"
+    },
+    {
+      "cycle": 4813405,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1a0002",
+      "note": "workload"
+    },
+    {
+      "cycle": 4813407,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1a0004",
+      "note": "workload"
+    },
+    {
+      "cycle": 4994026,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1a0080",
+      "note": "workload"
+    },
+    {
+      "cycle": 4994048,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1a0120",
+      "note": "workload"
+    },
+    {
+      "cycle": 4994244,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1b0040",
+      "note": "workload"
+    },
+    {
+      "cycle": 4994262,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1b0002",
+      "note": "workload"
+    },
+    {
+      "cycle": 4994264,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1b0004",
+      "note": "workload"
+    },
+    {
+      "cycle": 5174883,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1b0080",
+      "note": "workload"
+    },
+    {
+      "cycle": 5174905,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1b0120",
+      "note": "workload"
+    },
+    {
+      "cycle": 5175101,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1c0040",
+      "note": "workload"
+    },
+    {
+      "cycle": 5175119,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1c0002",
+      "note": "workload"
+    },
+    {
+      "cycle": 5175121,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1c0004",
+      "note": "workload"
+    },
+    {
+      "cycle": 5355740,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1c0080",
+      "note": "workload"
+    },
+    {
+      "cycle": 5355762,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1c0120",
+      "note": "workload"
+    },
+    {
+      "cycle": 5355958,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1d0040",
+      "note": "workload"
+    },
+    {
+      "cycle": 5355976,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1d0002",
+      "note": "workload"
+    },
+    {
+      "cycle": 5355978,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1d0004",
+      "note": "workload"
+    },
+    {
+      "cycle": 5536597,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1d0080",
+      "note": "workload"
+    },
+    {
+      "cycle": 5536619,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1d0120",
+      "note": "workload"
+    },
+    {
+      "cycle": 5536815,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1e0040",
+      "note": "workload"
+    },
+    {
+      "cycle": 5536833,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1e0002",
+      "note": "workload"
+    },
+    {
+      "cycle": 5536835,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1e0004",
+      "note": "workload"
+    },
+    {
+      "cycle": 5717454,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1e0080",
+      "note": "workload"
+    },
+    {
+      "cycle": 5717476,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1e0120",
+      "note": "workload"
+    },
+    {
+      "cycle": 5717672,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1f0040",
+      "note": "workload"
+    },
+    {
+      "cycle": 5717690,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1f0002",
+      "note": "workload"
+    },
+    {
+      "cycle": 5717692,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1f0004",
+      "note": "workload"
+    },
+    {
+      "cycle": 5898311,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1f0080",
+      "note": "workload"
+    },
+    {
+      "cycle": 5898333,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x1f0120",
+      "note": "workload"
+    },
+    {
+      "cycle": 5898529,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x200040",
+      "note": "workload"
+    },
+    {
+      "cycle": 5898547,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x200002",
+      "note": "workload"
+    },
+    {
+      "cycle": 5898549,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x200004",
+      "note": "workload"
+    },
+    {
+      "cycle": 6079168,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x200080",
+      "note": "workload"
+    },
+    {
+      "cycle": 6079190,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x200120",
+      "note": "workload"
+    },
+    {
+      "cycle": 6079386,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x210040",
+      "note": "workload"
+    },
+    {
+      "cycle": 6079404,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x210002",
+      "note": "workload"
+    },
+    {
+      "cycle": 6079406,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x210004",
+      "note": "workload"
+    },
+    {
+      "cycle": 6260025,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x210080",
+      "note": "workload"
+    },
+    {
+      "cycle": 6260047,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x210120",
+      "note": "workload"
+    },
+    {
+      "cycle": 6260243,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x220040",
+      "note": "workload"
+    },
+    {
+      "cycle": 6260261,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x220002",
+      "note": "workload"
+    },
+    {
+      "cycle": 6260263,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x220004",
+      "note": "workload"
+    },
+    {
+      "cycle": 6440882,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x220080",
+      "note": "workload"
+    },
+    {
+      "cycle": 6440904,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x220120",
+      "note": "workload"
+    },
+    {
+      "cycle": 6441100,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x230040",
+      "note": "workload"
+    },
+    {
+      "cycle": 6441118,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x230002",
+      "note": "workload"
+    },
+    {
+      "cycle": 6441120,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x230004",
+      "note": "workload"
+    },
+    {
+      "cycle": 6621739,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x230080",
+      "note": "workload"
+    },
+    {
+      "cycle": 6621761,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x230120",
+      "note": "workload"
+    },
+    {
+      "cycle": 6621957,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x240040",
+      "note": "workload"
+    },
+    {
+      "cycle": 6621975,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x240002",
+      "note": "workload"
+    },
+    {
+      "cycle": 6621977,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x240004",
+      "note": "workload"
+    },
+    {
+      "cycle": 6802596,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x240080",
+      "note": "workload"
+    },
+    {
+      "cycle": 6802618,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x240120",
+      "note": "workload"
+    },
+    {
+      "cycle": 6802814,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x250040",
+      "note": "workload"
+    },
+    {
+      "cycle": 6802832,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x250002",
+      "note": "workload"
+    },
+    {
+      "cycle": 6802834,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x250004",
+      "note": "workload"
+    },
+    {
+      "cycle": 6983453,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x250080",
+      "note": "workload"
+    },
+    {
+      "cycle": 6983475,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x250120",
+      "note": "workload"
+    },
+    {
+      "cycle": 6983671,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x260040",
+      "note": "workload"
+    },
+    {
+      "cycle": 6983689,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x260002",
+      "note": "workload"
+    },
+    {
+      "cycle": 6983691,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x260004",
+      "note": "workload"
+    },
+    {
+      "cycle": 7164310,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x260080",
+      "note": "workload"
+    },
+    {
+      "cycle": 7164332,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x260120",
+      "note": "workload"
+    },
+    {
+      "cycle": 7164528,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x270040",
+      "note": "workload"
+    },
+    {
+      "cycle": 7164546,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x270002",
+      "note": "workload"
+    },
+    {
+      "cycle": 7164548,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x270004",
+      "note": "workload"
+    },
+    {
+      "cycle": 7345167,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x270080",
+      "note": "workload"
+    },
+    {
+      "cycle": 7345189,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x270120",
+      "note": "workload"
+    },
+    {
+      "cycle": 7345385,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x280040",
+      "note": "workload"
+    },
+    {
+      "cycle": 7345403,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x280002",
+      "note": "workload"
+    },
+    {
+      "cycle": 7345405,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x280004",
+      "note": "workload"
+    },
+    {
+      "cycle": 7526024,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x280080",
+      "note": "workload"
+    },
+    {
+      "cycle": 7526046,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x280120",
+      "note": "workload"
+    },
+    {
+      "cycle": 7526242,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x290040",
+      "note": "workload"
+    },
+    {
+      "cycle": 7526260,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x290002",
+      "note": "workload"
+    },
+    {
+      "cycle": 7526262,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x290004",
+      "note": "workload"
+    },
+    {
+      "cycle": 7706881,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x290080",
+      "note": "workload"
+    },
+    {
+      "cycle": 7706903,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x290120",
+      "note": "workload"
+    },
+    {
+      "cycle": 7707099,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x2a0040",
+      "note": "workload"
+    },
+    {
+      "cycle": 7707117,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x2a0002",
+      "note": "workload"
+    },
+    {
+      "cycle": 7707119,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x2a0004",
+      "note": "workload"
+    },
+    {
+      "cycle": 7887738,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x2a0080",
+      "note": "workload"
+    },
+    {
+      "cycle": 7887760,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x2a0120",
+      "note": "workload"
+    },
+    {
+      "cycle": 7887956,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x2b0040",
+      "note": "workload"
+    },
+    {
+      "cycle": 7887974,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x2b0002",
+      "note": "workload"
+    },
+    {
+      "cycle": 7887976,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x2b0004",
+      "note": "workload"
+    },
+    {
+      "cycle": 8068595,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x2b0080",
+      "note": "workload"
+    },
+    {
+      "cycle": 8068617,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x2b0120",
+      "note": "workload"
+    },
+    {
+      "cycle": 8068813,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x2c0040",
+      "note": "workload"
+    },
+    {
+      "cycle": 8068831,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x2c0002",
+      "note": "workload"
+    },
+    {
+      "cycle": 8068833,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x2c0004",
+      "note": "workload"
+    },
+    {
+      "cycle": 8249452,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x2c0080",
+      "note": "workload"
+    },
+    {
+      "cycle": 8249474,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x2c0120",
+      "note": "workload"
+    },
+    {
+      "cycle": 8249670,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x2d0040",
+      "note": "workload"
+    },
+    {
+      "cycle": 8249688,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x2d0002",
+      "note": "workload"
+    },
+    {
+      "cycle": 8249690,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x2d0004",
+      "note": "workload"
+    },
+    {
+      "cycle": 8430309,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x2d0080",
+      "note": "workload"
+    },
+    {
+      "cycle": 8430331,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x2d0120",
+      "note": "workload"
+    },
+    {
+      "cycle": 8430519,
+      "valid": true,
+      "internal": true,
+      "write": true,
+      "addr": "0x200840",
+      "wdata": "0x2e0010",
+      "note": "workload"
+    }
+  ]
+}

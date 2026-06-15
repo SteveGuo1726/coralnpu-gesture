@@ -1,0 +1,902 @@
+{
+  "project_stage": "strategy8 rowhandoff cocotb log parsing",
+  "input_log": "gesture_project/reports/core_3x3_strategy8_rowhandoff_workload_trace_raw_2026-06-11.log",
+  "rowhandoff_event_addr": "0x200840",
+  "snapshot_count": 0,
+  "scalar_event_count": 0,
+  "event_write_count": 111,
+  "host_preflight_check": null,
+  "expected_profile_check": null,
+  "snapshots": [],
+  "scalar_events": [],
+  "event_writes": [
+    {
+      "line_no": 1,
+      "cycle": 10302,
+      "addr": 2099264,
+      "wdata": 1,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 2,
+      "cycle": 4451650,
+      "addr": 2099264,
+      "wdata": 1572928,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 3,
+      "cycle": 4451670,
+      "addr": 2099264,
+      "wdata": 1572872,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 4,
+      "cycle": 4632312,
+      "addr": 2099264,
+      "wdata": 1572992,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 5,
+      "cycle": 4632334,
+      "addr": 2099264,
+      "wdata": 1573152,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 6,
+      "cycle": 4632530,
+      "addr": 2099264,
+      "wdata": 1638464,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 7,
+      "cycle": 4632548,
+      "addr": 2099264,
+      "wdata": 1638402,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 8,
+      "cycle": 4632550,
+      "addr": 2099264,
+      "wdata": 1638404,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 9,
+      "cycle": 4813169,
+      "addr": 2099264,
+      "wdata": 1638528,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 10,
+      "cycle": 4813191,
+      "addr": 2099264,
+      "wdata": 1638688,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 11,
+      "cycle": 4813387,
+      "addr": 2099264,
+      "wdata": 1704000,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 12,
+      "cycle": 4813405,
+      "addr": 2099264,
+      "wdata": 1703938,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 13,
+      "cycle": 4813407,
+      "addr": 2099264,
+      "wdata": 1703940,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 14,
+      "cycle": 4994026,
+      "addr": 2099264,
+      "wdata": 1704064,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 15,
+      "cycle": 4994048,
+      "addr": 2099264,
+      "wdata": 1704224,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 16,
+      "cycle": 4994244,
+      "addr": 2099264,
+      "wdata": 1769536,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 17,
+      "cycle": 4994262,
+      "addr": 2099264,
+      "wdata": 1769474,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 18,
+      "cycle": 4994264,
+      "addr": 2099264,
+      "wdata": 1769476,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 19,
+      "cycle": 5174883,
+      "addr": 2099264,
+      "wdata": 1769600,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 20,
+      "cycle": 5174905,
+      "addr": 2099264,
+      "wdata": 1769760,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 21,
+      "cycle": 5175101,
+      "addr": 2099264,
+      "wdata": 1835072,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 22,
+      "cycle": 5175119,
+      "addr": 2099264,
+      "wdata": 1835010,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 23,
+      "cycle": 5175121,
+      "addr": 2099264,
+      "wdata": 1835012,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 24,
+      "cycle": 5355740,
+      "addr": 2099264,
+      "wdata": 1835136,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 25,
+      "cycle": 5355762,
+      "addr": 2099264,
+      "wdata": 1835296,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 26,
+      "cycle": 5355958,
+      "addr": 2099264,
+      "wdata": 1900608,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 27,
+      "cycle": 5355976,
+      "addr": 2099264,
+      "wdata": 1900546,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 28,
+      "cycle": 5355978,
+      "addr": 2099264,
+      "wdata": 1900548,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 29,
+      "cycle": 5536597,
+      "addr": 2099264,
+      "wdata": 1900672,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 30,
+      "cycle": 5536619,
+      "addr": 2099264,
+      "wdata": 1900832,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 31,
+      "cycle": 5536815,
+      "addr": 2099264,
+      "wdata": 1966144,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 32,
+      "cycle": 5536833,
+      "addr": 2099264,
+      "wdata": 1966082,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 33,
+      "cycle": 5536835,
+      "addr": 2099264,
+      "wdata": 1966084,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 34,
+      "cycle": 5717454,
+      "addr": 2099264,
+      "wdata": 1966208,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 35,
+      "cycle": 5717476,
+      "addr": 2099264,
+      "wdata": 1966368,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 36,
+      "cycle": 5717672,
+      "addr": 2099264,
+      "wdata": 2031680,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 37,
+      "cycle": 5717690,
+      "addr": 2099264,
+      "wdata": 2031618,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 38,
+      "cycle": 5717692,
+      "addr": 2099264,
+      "wdata": 2031620,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 39,
+      "cycle": 5898311,
+      "addr": 2099264,
+      "wdata": 2031744,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 40,
+      "cycle": 5898333,
+      "addr": 2099264,
+      "wdata": 2031904,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 41,
+      "cycle": 5898529,
+      "addr": 2099264,
+      "wdata": 2097216,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 42,
+      "cycle": 5898547,
+      "addr": 2099264,
+      "wdata": 2097154,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 43,
+      "cycle": 5898549,
+      "addr": 2099264,
+      "wdata": 2097156,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 44,
+      "cycle": 6079168,
+      "addr": 2099264,
+      "wdata": 2097280,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 45,
+      "cycle": 6079190,
+      "addr": 2099264,
+      "wdata": 2097440,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 46,
+      "cycle": 6079386,
+      "addr": 2099264,
+      "wdata": 2162752,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 47,
+      "cycle": 6079404,
+      "addr": 2099264,
+      "wdata": 2162690,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 48,
+      "cycle": 6079406,
+      "addr": 2099264,
+      "wdata": 2162692,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 49,
+      "cycle": 6260025,
+      "addr": 2099264,
+      "wdata": 2162816,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 50,
+      "cycle": 6260047,
+      "addr": 2099264,
+      "wdata": 2162976,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 51,
+      "cycle": 6260243,
+      "addr": 2099264,
+      "wdata": 2228288,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 52,
+      "cycle": 6260261,
+      "addr": 2099264,
+      "wdata": 2228226,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 53,
+      "cycle": 6260263,
+      "addr": 2099264,
+      "wdata": 2228228,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 54,
+      "cycle": 6440882,
+      "addr": 2099264,
+      "wdata": 2228352,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 55,
+      "cycle": 6440904,
+      "addr": 2099264,
+      "wdata": 2228512,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 56,
+      "cycle": 6441100,
+      "addr": 2099264,
+      "wdata": 2293824,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 57,
+      "cycle": 6441118,
+      "addr": 2099264,
+      "wdata": 2293762,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 58,
+      "cycle": 6441120,
+      "addr": 2099264,
+      "wdata": 2293764,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 59,
+      "cycle": 6621739,
+      "addr": 2099264,
+      "wdata": 2293888,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 60,
+      "cycle": 6621761,
+      "addr": 2099264,
+      "wdata": 2294048,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 61,
+      "cycle": 6621957,
+      "addr": 2099264,
+      "wdata": 2359360,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 62,
+      "cycle": 6621975,
+      "addr": 2099264,
+      "wdata": 2359298,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 63,
+      "cycle": 6621977,
+      "addr": 2099264,
+      "wdata": 2359300,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 64,
+      "cycle": 6802596,
+      "addr": 2099264,
+      "wdata": 2359424,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 65,
+      "cycle": 6802618,
+      "addr": 2099264,
+      "wdata": 2359584,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 66,
+      "cycle": 6802814,
+      "addr": 2099264,
+      "wdata": 2424896,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 67,
+      "cycle": 6802832,
+      "addr": 2099264,
+      "wdata": 2424834,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 68,
+      "cycle": 6802834,
+      "addr": 2099264,
+      "wdata": 2424836,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 69,
+      "cycle": 6983453,
+      "addr": 2099264,
+      "wdata": 2424960,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 70,
+      "cycle": 6983475,
+      "addr": 2099264,
+      "wdata": 2425120,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 71,
+      "cycle": 6983671,
+      "addr": 2099264,
+      "wdata": 2490432,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 72,
+      "cycle": 6983689,
+      "addr": 2099264,
+      "wdata": 2490370,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 73,
+      "cycle": 6983691,
+      "addr": 2099264,
+      "wdata": 2490372,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 74,
+      "cycle": 7164310,
+      "addr": 2099264,
+      "wdata": 2490496,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 75,
+      "cycle": 7164332,
+      "addr": 2099264,
+      "wdata": 2490656,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 76,
+      "cycle": 7164528,
+      "addr": 2099264,
+      "wdata": 2555968,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 77,
+      "cycle": 7164546,
+      "addr": 2099264,
+      "wdata": 2555906,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 78,
+      "cycle": 7164548,
+      "addr": 2099264,
+      "wdata": 2555908,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 79,
+      "cycle": 7345167,
+      "addr": 2099264,
+      "wdata": 2556032,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 80,
+      "cycle": 7345189,
+      "addr": 2099264,
+      "wdata": 2556192,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 81,
+      "cycle": 7345385,
+      "addr": 2099264,
+      "wdata": 2621504,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 82,
+      "cycle": 7345403,
+      "addr": 2099264,
+      "wdata": 2621442,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 83,
+      "cycle": 7345405,
+      "addr": 2099264,
+      "wdata": 2621444,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 84,
+      "cycle": 7526024,
+      "addr": 2099264,
+      "wdata": 2621568,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 85,
+      "cycle": 7526046,
+      "addr": 2099264,
+      "wdata": 2621728,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 86,
+      "cycle": 7526242,
+      "addr": 2099264,
+      "wdata": 2687040,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 87,
+      "cycle": 7526260,
+      "addr": 2099264,
+      "wdata": 2686978,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 88,
+      "cycle": 7526262,
+      "addr": 2099264,
+      "wdata": 2686980,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 89,
+      "cycle": 7706881,
+      "addr": 2099264,
+      "wdata": 2687104,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 90,
+      "cycle": 7706903,
+      "addr": 2099264,
+      "wdata": 2687264,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 91,
+      "cycle": 7707099,
+      "addr": 2099264,
+      "wdata": 2752576,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 92,
+      "cycle": 7707117,
+      "addr": 2099264,
+      "wdata": 2752514,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 93,
+      "cycle": 7707119,
+      "addr": 2099264,
+      "wdata": 2752516,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 94,
+      "cycle": 7887738,
+      "addr": 2099264,
+      "wdata": 2752640,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 95,
+      "cycle": 7887760,
+      "addr": 2099264,
+      "wdata": 2752800,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 96,
+      "cycle": 7887956,
+      "addr": 2099264,
+      "wdata": 2818112,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 97,
+      "cycle": 7887974,
+      "addr": 2099264,
+      "wdata": 2818050,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 98,
+      "cycle": 7887976,
+      "addr": 2099264,
+      "wdata": 2818052,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 99,
+      "cycle": 8068595,
+      "addr": 2099264,
+      "wdata": 2818176,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 100,
+      "cycle": 8068617,
+      "addr": 2099264,
+      "wdata": 2818336,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 101,
+      "cycle": 8068813,
+      "addr": 2099264,
+      "wdata": 2883648,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 102,
+      "cycle": 8068831,
+      "addr": 2099264,
+      "wdata": 2883586,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 103,
+      "cycle": 8068833,
+      "addr": 2099264,
+      "wdata": 2883588,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 104,
+      "cycle": 8249452,
+      "addr": 2099264,
+      "wdata": 2883712,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 105,
+      "cycle": 8249474,
+      "addr": 2099264,
+      "wdata": 2883872,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 106,
+      "cycle": 8249670,
+      "addr": 2099264,
+      "wdata": 2949184,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 107,
+      "cycle": 8249688,
+      "addr": 2099264,
+      "wdata": 2949122,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 108,
+      "cycle": 8249690,
+      "addr": 2099264,
+      "wdata": 2949124,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 109,
+      "cycle": 8430309,
+      "addr": 2099264,
+      "wdata": 2949248,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 110,
+      "cycle": 8430331,
+      "addr": 2099264,
+      "wdata": 2949408,
+      "note": "workload",
+      "event_write_pulse": true
+    },
+    {
+      "line_no": 111,
+      "cycle": 8430519,
+      "addr": 2099264,
+      "wdata": 3014672,
+      "note": "workload",
+      "event_write_pulse": true
+    }
+  ]
+}

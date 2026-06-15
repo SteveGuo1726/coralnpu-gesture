@@ -1,0 +1,135 @@
+{
+  "project_stage": "strategy8 rowhandoff backhalf invalidate window probe",
+  "date": "2026-06-13",
+  "target": "//tests/cocotb/tutorial/tfmicro:cocotb_rowhandoff_mmio_bridge_backhalf_invalidate_poll_probe",
+  "probe_chain": "formal backhalf poll probe",
+  "status": "real_runs_completed",
+  "notes": [
+    "All conclusions in this artifact come from real bazel cocotb runs.",
+    "The final run's cocotb body passed and printed valid poll counters, but the wrapper/results.xml tail remained unstable on long runs; the rowhandoff window conclusion below is still based on real printed counters."
+  ],
+  "runs": [
+    {
+      "stop_counter": "produce",
+      "stop_at_least": 1,
+      "warmup_cycles": 4620000,
+      "timeout_cycles": 30000,
+      "poll_interval_cycles": 16,
+      "poll_snapshot_cycles": 4623040,
+      "poll_snapshot_start_counters": {
+        "hit": 0,
+        "miss": 1,
+        "invalidate": 0,
+        "produce": 0,
+        "tail_hit": 0,
+        "interior_row_enter": 1,
+        "right_edge_done": 0,
+        "row_out_y_last": 0
+      },
+      "poll_snapshot_counters": {
+        "hit": 0,
+        "miss": 1,
+        "invalidate": 0,
+        "produce": 1,
+        "tail_hit": 0,
+        "interior_row_enter": 1,
+        "right_edge_done": 1,
+        "row_out_y_last": 24
+      },
+      "bazel_status": "passed"
+    },
+    {
+      "stop_counter": "right_edge_done",
+      "stop_at_least": 1,
+      "warmup_cycles": 4620000,
+      "timeout_cycles": 30000,
+      "poll_interval_cycles": 16,
+      "poll_snapshot_cycles": 4623040,
+      "poll_snapshot_start_counters": {
+        "hit": 0,
+        "miss": 1,
+        "invalidate": 0,
+        "produce": 0,
+        "tail_hit": 0,
+        "interior_row_enter": 1,
+        "right_edge_done": 0,
+        "row_out_y_last": 0
+      },
+      "poll_snapshot_counters": {
+        "hit": 0,
+        "miss": 1,
+        "invalidate": 0,
+        "produce": 1,
+        "tail_hit": 0,
+        "interior_row_enter": 1,
+        "right_edge_done": 1,
+        "row_out_y_last": 24
+      },
+      "bazel_status": "passed"
+    },
+    {
+      "stop_counter": "invalidate",
+      "stop_at_least": 1,
+      "warmup_cycles": 8430000,
+      "timeout_cycles": 2000,
+      "poll_interval_cycles": 8,
+      "poll_snapshot_cycles": 8430048,
+      "poll_snapshot_start_counters": {
+        "hit": 21,
+        "miss": 1,
+        "invalidate": 0,
+        "produce": 21,
+        "tail_hit": 21,
+        "interior_row_enter": 22,
+        "right_edge_done": 21,
+        "row_out_y_last": 44
+      },
+      "poll_snapshot_counters": {
+        "hit": 21,
+        "miss": 1,
+        "invalidate": 1,
+        "produce": 22,
+        "tail_hit": 21,
+        "interior_row_enter": 22,
+        "right_edge_done": 22,
+        "row_out_y_last": 45
+      },
+      "bazel_status": "passed"
+    },
+    {
+      "stop_counter": "invalidate",
+      "stop_at_least": 1,
+      "warmup_cycles": 8430040,
+      "timeout_cycles": 128,
+      "poll_interval_cycles": 4,
+      "poll_snapshot_cycles": 8430064,
+      "poll_snapshot_start_counters": {
+        "hit": 21,
+        "miss": 1,
+        "invalidate": 0,
+        "produce": 21,
+        "tail_hit": 21,
+        "interior_row_enter": 22,
+        "right_edge_done": 21,
+        "row_out_y_last": 44
+      },
+      "poll_snapshot_counters": {
+        "hit": 21,
+        "miss": 1,
+        "invalidate": 1,
+        "produce": 22,
+        "tail_hit": 21,
+        "interior_row_enter": 22,
+        "right_edge_done": 22,
+        "row_out_y_last": 45
+      },
+      "bazel_status": "cocotb_passed_wrapper_tail_failed"
+    }
+  ],
+  "current_best_window": {
+    "counter": "invalidate",
+    "first_hit_after_or_at_cycle": 8430040,
+    "hit_observed_by_cycle": 8430064,
+    "window_width_cycles": 24
+  }
+}

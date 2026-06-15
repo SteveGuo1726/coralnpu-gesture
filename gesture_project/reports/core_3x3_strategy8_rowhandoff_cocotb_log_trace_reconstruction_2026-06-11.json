@@ -1,0 +1,307 @@
+{
+  "project_stage": "strategy8 rowhandoff boundary event trace reconstruction",
+  "input_json": "gesture_project/reports/core_3x3_strategy8_rowhandoff_cocotb_log_trace_2026-06-11.json",
+  "rowhandoff_event_addr": "0x30840",
+  "sample_count": 8,
+  "accepted_events": [
+    {
+      "sample_index": 0,
+      "cycle": 10,
+      "note": "layer_start",
+      "addr": "0x30840",
+      "event_write_pulse": true,
+      "wdata": "0x1",
+      "row_out_y": 0,
+      "decoded_bits": {
+        "layer_start": true,
+        "hit": false,
+        "tail_hit": false,
+        "miss": false,
+        "invalidate": false,
+        "produce": false,
+        "interior_row_enter": false,
+        "right_edge_done": false,
+        "row_out_y_write": false
+      },
+      "decoded_event_names": [
+        "layer_start"
+      ],
+      "state_after": {
+        "row_gate_active": false,
+        "current_row_index": 0,
+        "rowhandoff_valid_state": false,
+        "consume_decision_valid": false,
+        "consume_decision_hit": false,
+        "tail_hit_seen": false,
+        "last_produced_row": 0,
+        "last_invalidated_row": 0,
+        "row_enter_pulse": false,
+        "row_terminal_done_pulse": false,
+        "row_advance_done_pulse": false
+      }
+    },
+    {
+      "sample_index": 1,
+      "cycle": 12,
+      "note": "row24_interior_enter",
+      "addr": "0x30840",
+      "event_write_pulse": true,
+      "wdata": "0x180040",
+      "row_out_y": 24,
+      "decoded_bits": {
+        "layer_start": false,
+        "hit": false,
+        "tail_hit": false,
+        "miss": false,
+        "invalidate": false,
+        "produce": false,
+        "interior_row_enter": true,
+        "right_edge_done": false,
+        "row_out_y_write": false
+      },
+      "decoded_event_names": [
+        "interior_row_enter"
+      ],
+      "state_after": {
+        "row_gate_active": true,
+        "current_row_index": 24,
+        "rowhandoff_valid_state": false,
+        "consume_decision_valid": false,
+        "consume_decision_hit": false,
+        "tail_hit_seen": false,
+        "last_produced_row": 0,
+        "last_invalidated_row": 0,
+        "row_enter_pulse": true,
+        "row_terminal_done_pulse": false,
+        "row_advance_done_pulse": false
+      }
+    },
+    {
+      "sample_index": 2,
+      "cycle": 14,
+      "note": "row24_hit",
+      "addr": "0x30840",
+      "event_write_pulse": true,
+      "wdata": "0x180002",
+      "row_out_y": 24,
+      "decoded_bits": {
+        "layer_start": false,
+        "hit": true,
+        "tail_hit": false,
+        "miss": false,
+        "invalidate": false,
+        "produce": false,
+        "interior_row_enter": false,
+        "right_edge_done": false,
+        "row_out_y_write": false
+      },
+      "decoded_event_names": [
+        "hit"
+      ],
+      "state_after": {
+        "row_gate_active": true,
+        "current_row_index": 24,
+        "rowhandoff_valid_state": false,
+        "consume_decision_valid": true,
+        "consume_decision_hit": true,
+        "tail_hit_seen": false,
+        "last_produced_row": 0,
+        "last_invalidated_row": 0,
+        "row_enter_pulse": false,
+        "row_terminal_done_pulse": false,
+        "row_advance_done_pulse": false
+      }
+    },
+    {
+      "sample_index": 3,
+      "cycle": 16,
+      "note": "row24_tail_hit",
+      "addr": "0x30840",
+      "event_write_pulse": true,
+      "wdata": "0x180004",
+      "row_out_y": 24,
+      "decoded_bits": {
+        "layer_start": false,
+        "hit": false,
+        "tail_hit": true,
+        "miss": false,
+        "invalidate": false,
+        "produce": false,
+        "interior_row_enter": false,
+        "right_edge_done": false,
+        "row_out_y_write": false
+      },
+      "decoded_event_names": [
+        "tail_hit"
+      ],
+      "state_after": {
+        "row_gate_active": true,
+        "current_row_index": 24,
+        "rowhandoff_valid_state": false,
+        "consume_decision_valid": true,
+        "consume_decision_hit": true,
+        "tail_hit_seen": true,
+        "last_produced_row": 0,
+        "last_invalidated_row": 0,
+        "row_enter_pulse": false,
+        "row_terminal_done_pulse": false,
+        "row_advance_done_pulse": false
+      }
+    },
+    {
+      "sample_index": 4,
+      "cycle": 18,
+      "note": "row24_right_edge_done",
+      "addr": "0x30840",
+      "event_write_pulse": true,
+      "wdata": "0x180080",
+      "row_out_y": 24,
+      "decoded_bits": {
+        "layer_start": false,
+        "hit": false,
+        "tail_hit": false,
+        "miss": false,
+        "invalidate": false,
+        "produce": false,
+        "interior_row_enter": false,
+        "right_edge_done": true,
+        "row_out_y_write": false
+      },
+      "decoded_event_names": [
+        "right_edge_done"
+      ],
+      "state_after": {
+        "row_gate_active": false,
+        "current_row_index": 24,
+        "rowhandoff_valid_state": false,
+        "consume_decision_valid": true,
+        "consume_decision_hit": true,
+        "tail_hit_seen": true,
+        "last_produced_row": 0,
+        "last_invalidated_row": 0,
+        "row_enter_pulse": false,
+        "row_terminal_done_pulse": true,
+        "row_advance_done_pulse": false
+      }
+    },
+    {
+      "sample_index": 6,
+      "cycle": 20,
+      "note": "row24_produce",
+      "addr": "0x30840",
+      "event_write_pulse": true,
+      "wdata": "0x180020",
+      "row_out_y": 24,
+      "decoded_bits": {
+        "layer_start": false,
+        "hit": false,
+        "tail_hit": false,
+        "miss": false,
+        "invalidate": false,
+        "produce": true,
+        "interior_row_enter": false,
+        "right_edge_done": false,
+        "row_out_y_write": false
+      },
+      "decoded_event_names": [
+        "produce"
+      ],
+      "state_after": {
+        "row_gate_active": false,
+        "current_row_index": 24,
+        "rowhandoff_valid_state": true,
+        "consume_decision_valid": true,
+        "consume_decision_hit": true,
+        "tail_hit_seen": true,
+        "last_produced_row": 24,
+        "last_invalidated_row": 0,
+        "row_enter_pulse": false,
+        "row_terminal_done_pulse": false,
+        "row_advance_done_pulse": false
+      }
+    },
+    {
+      "sample_index": 7,
+      "cycle": 22,
+      "note": "row25_invalidate",
+      "addr": "0x30840",
+      "event_write_pulse": true,
+      "wdata": "0x190010",
+      "row_out_y": 25,
+      "decoded_bits": {
+        "layer_start": false,
+        "hit": false,
+        "tail_hit": false,
+        "miss": false,
+        "invalidate": true,
+        "produce": false,
+        "interior_row_enter": false,
+        "right_edge_done": false,
+        "row_out_y_write": false
+      },
+      "decoded_event_names": [
+        "invalidate"
+      ],
+      "state_after": {
+        "row_gate_active": false,
+        "current_row_index": 25,
+        "rowhandoff_valid_state": false,
+        "consume_decision_valid": true,
+        "consume_decision_hit": true,
+        "tail_hit_seen": true,
+        "last_produced_row": 24,
+        "last_invalidated_row": 25,
+        "row_enter_pulse": false,
+        "row_terminal_done_pulse": false,
+        "row_advance_done_pulse": true
+      }
+    }
+  ],
+  "ignored_samples": [
+    {
+      "sample_index": 5,
+      "cycle": 19,
+      "note": "non_rowhandoff_addr_should_ignore",
+      "addr": "0x30844",
+      "event_write_pulse": false
+    }
+  ],
+  "summary": {
+    "accepted_event_count": 7,
+    "counters": {
+      "layer_start": 1,
+      "interior_row_enter": 1,
+      "hit": 1,
+      "tail_hit": 1,
+      "miss": 0,
+      "right_edge_done": 1,
+      "produce": 1,
+      "invalidate": 1,
+      "row_out_y_write": 0
+    },
+    "produced_rows": [
+      24
+    ],
+    "invalidated_rows": [
+      25
+    ],
+    "consistency_checks": {
+      "produce_ge_invalidate": true,
+      "right_edge_done_le_produce": true,
+      "tail_hit_le_hit_plus_miss": true
+    },
+    "last_trace_state": {
+      "row_gate_active": false,
+      "current_row_index": 25,
+      "rowhandoff_valid_state": false,
+      "consume_decision_valid": true,
+      "consume_decision_hit": true,
+      "tail_hit_seen": true,
+      "last_produced_row": 24,
+      "last_invalidated_row": 25,
+      "row_enter_pulse": false,
+      "row_terminal_done_pulse": false,
+      "row_advance_done_pulse": true
+    }
+  }
+}

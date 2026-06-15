@@ -1,0 +1,103 @@
+{
+  "model": "/home/steveguo/coralnpu-gesture/gesture_project/models/static_cnn_regularized_3x3_i96_e70_hagrid6_sample/model_int8.tflite",
+  "data_dir": "/home/steveguo/coralnpu-gesture/gesture_project/datasets/processed/hagrid_sample_static_6cls/test",
+  "labels": [
+    "fist",
+    "like",
+    "ok",
+    "palm",
+    "peace",
+    "stop"
+  ],
+  "input_shape": [
+    1,
+    96,
+    96,
+    3
+  ],
+  "num_samples": 2250,
+  "accuracy": 0.7706666666666667,
+  "correct": 1734,
+  "confusion_matrix": [
+    [
+      287,
+      42,
+      13,
+      2,
+      5,
+      26
+    ],
+    [
+      21,
+      316,
+      19,
+      6,
+      7,
+      6
+    ],
+    [
+      16,
+      25,
+      285,
+      31,
+      7,
+      11
+    ],
+    [
+      8,
+      21,
+      34,
+      298,
+      3,
+      11
+    ],
+    [
+      15,
+      23,
+      57,
+      10,
+      261,
+      9
+    ],
+    [
+      20,
+      27,
+      13,
+      24,
+      4,
+      287
+    ]
+  ],
+  "per_class": {
+    "fist": {
+      "total": 375,
+      "correct": 287,
+      "accuracy": 0.7653333333333333
+    },
+    "like": {
+      "total": 375,
+      "correct": 316,
+      "accuracy": 0.8426666666666667
+    },
+    "ok": {
+      "total": 375,
+      "correct": 285,
+      "accuracy": 0.76
+    },
+    "palm": {
+      "total": 375,
+      "correct": 298,
+      "accuracy": 0.7946666666666666
+    },
+    "peace": {
+      "total": 375,
+      "correct": 261,
+      "accuracy": 0.696
+    },
+    "stop": {
+      "total": 375,
+      "correct": 287,
+      "accuracy": 0.7653333333333333
+    }
+  }
+}

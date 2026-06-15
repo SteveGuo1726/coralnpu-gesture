@@ -1,0 +1,108 @@
+{
+  "model": "static_cnn_regularized_3x3_i96_e70_hagrid6_sample",
+  "target_layer": {
+    "layer_name": "conv2_3x3_b",
+    "shape": "48x48x32 -> 3x3 -> 48x48x32"
+  },
+  "baseline": {
+    "currentbest_opt_cycles": 4620158,
+    "mode1_delta_vs_emptyhooks": -9205,
+    "tiles_y": 12,
+    "tiles_x": 6,
+    "controller_trace_event_count": 120,
+    "controller_trace_truncated": true
+  },
+  "row_window_family": [
+    {
+      "name": "mode1_full",
+      "row_window": "[0, 46) interior rows",
+      "trial_opt_cycles": 4610953,
+      "emptyhooks_opt_cycles": 4620158,
+      "currentbest_opt_cycles": 4620158,
+      "delta_vs_emptyhooks": -9205,
+      "delta_vs_currentbest": -9205,
+      "kept_ratio_vs_mode1": 1.0
+    },
+    {
+      "name": "mode1_backhalf",
+      "row_window": "[24, 46) interior rows",
+      "trial_opt_cycles": 4612723,
+      "emptyhooks_opt_cycles": 4619790,
+      "currentbest_opt_cycles": 4620158,
+      "delta_vs_emptyhooks": -7067,
+      "delta_vs_currentbest": -7435,
+      "kept_ratio_vs_mode1": 0.7677349266702879
+    },
+    {
+      "name": "mode1_backthird",
+      "row_window": "[32, 46) interior rows",
+      "trial_opt_cycles": 4612675,
+      "emptyhooks_opt_cycles": 4619790,
+      "currentbest_opt_cycles": 4620158,
+      "delta_vs_emptyhooks": -7115,
+      "delta_vs_currentbest": -7483,
+      "kept_ratio_vs_mode1": 0.7729494839761
+    },
+    {
+      "name": "mode1_window32_40",
+      "row_window": "[32, 40) interior rows",
+      "trial_opt_cycles": 4612699,
+      "emptyhooks_opt_cycles": 4620158,
+      "currentbest_opt_cycles": 4620158,
+      "delta_vs_emptyhooks": -7459,
+      "delta_vs_currentbest": -7459,
+      "kept_ratio_vs_mode1": 0.8103204780010864
+    },
+    {
+      "name": "mode1_window40_46",
+      "row_window": "[40, 46) interior rows",
+      "trial_opt_cycles": 4612671,
+      "emptyhooks_opt_cycles": 4620158,
+      "currentbest_opt_cycles": 4620158,
+      "delta_vs_emptyhooks": -7487,
+      "delta_vs_currentbest": -7487,
+      "kept_ratio_vs_mode1": 0.8133623030961434
+    }
+  ],
+  "plateau_metrics": {
+    "window_delta_min": -7487,
+    "window_delta_max": -7459,
+    "window_delta_spread": 28,
+    "window_spread_vs_mode1": 0.003041825095057034
+  },
+  "decision": {
+    "row_only_narrowing_plateau": true,
+    "summary": "window32_40 与 window40_46 的净收益几乎重合，且都弱于原始 mode=1，说明单靠连续 row 区间继续后移已经平台化。",
+    "why": [
+      "mode1_full 对 emptyhooks 为 -9,205，而两个 row-window 只剩约 -7.46k。",
+      "window32_40 与 window40_46 之间只差 28 cycles，已经小到不足以支持继续沿纯 row 维度盲扫。",
+      "这类窗口仍然只表达 software row loop 的位置，尚未引入更贴近 RTL 的 spatial reuse / tile terminal 节拍。"
+    ]
+  },
+  "next_candidates": [
+    {
+      "rank": 1,
+      "name": "post_right_edge_row_terminal + 非纯 row 条件",
+      "trigger_dimension": "row-end + 更贴近 row/tile 节拍",
+      "reason": "保留当前已验证可显影的 row terminal 锚点，但不要继续只按连续 row 窗口后移。",
+      "est_conv2_3x3_b_branch_delta": -19966,
+      "est_conv2_3x3_b_writeback_branch_delta": -39932
+    },
+    {
+      "rank": 2,
+      "name": "tile 末切列节拍",
+      "trigger_dimension": "advance out_x_tile",
+      "reason": "与 row-only 不同，开始引入 spatial reuse / window shift 节拍，理论空间大于单纯 row-end。",
+      "est_conv2_3x3_b_branch_delta": -26042,
+      "est_conv2_3x3_b_writeback_branch_delta": -52085
+    },
+    {
+      "rank": 3,
+      "name": "tile-row 切行节拍",
+      "trigger_dimension": "advance out_y_tile",
+      "reason": "更贴近 line buffer 纵向换行，但触发次数太少，更适合作为二次确认。",
+      "est_conv2_3x3_b_branch_delta": -4774,
+      "est_conv2_3x3_b_writeback_branch_delta": -9549
+    }
+  ]
+}

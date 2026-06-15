@@ -1,0 +1,50 @@
+# Local Codex / agent state
+.agents/
+.codex/
+.git-local/
+
+# Upstream dependency: clone locally when needed, do not duplicate upload
+coralnpu/
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local environment and caches under project workspace
+gesture_project/algorithms/.venv/
+gesture_project/algorithms/.keras_cache/
+
+# Local datasets and model artifacts
+gesture_project/datasets/raw/
+gesture_project/datasets/processed/
+gesture_project/models/
+
+# Local experimental worktrees derived from upstream coralnpu
+gesture_project/worktrees/
+
+# Personal notes and scratch material not meant for team sharing
+gesture_project/notes/
+
+# Temporary reports and locally regenerated traces
+gesture_project/reports/tmp_strategy_scan_*
+gesture_project/reports/*predictions.csv
+gesture_project/reports/*_eval.csv
+gesture_project/reports/*.log
+gesture_project/reports/*_raw_*.json
+gesture_project/reports/*_raw_*.log
+gesture_project/reports/*poll_trace_raw*.log
+
+# Historical early patches kept locally if needed; only keep the cumulative patch
+gesture_project/patches/0001-*.patch
+gesture_project/patches/0002-*.patch
+
+# Common editor / OS junk
+.DS_Store
+Thumbs.db
+*.swp
+*.swo

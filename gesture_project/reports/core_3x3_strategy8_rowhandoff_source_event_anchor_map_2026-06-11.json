@@ -1,0 +1,87 @@
+{
+  "project_stage": "strategy8 rowhandoff source-event anchor extraction",
+  "conv_cc": "gesture_project/worktrees/coralnpu-3x3-conv/sw/opt/litert-micro/conv.cc",
+  "event_csr_addr_macro": "STRATEGY8_ID32_W48_ROWHANDOFF_MMIO_CSR_ADDR",
+  "event_payload_row_bits": "[21:16]",
+  "event_bits": [
+    {
+      "name": "layer_start",
+      "bit": 0
+    },
+    {
+      "name": "hit",
+      "bit": 1
+    },
+    {
+      "name": "tail_hit",
+      "bit": 2
+    },
+    {
+      "name": "miss",
+      "bit": 3
+    },
+    {
+      "name": "invalidate",
+      "bit": 4
+    },
+    {
+      "name": "produce",
+      "bit": 5
+    },
+    {
+      "name": "interior_row_enter",
+      "bit": 6
+    },
+    {
+      "name": "right_edge_done",
+      "bit": 7
+    },
+    {
+      "name": "row_out_y_write",
+      "bit": 8
+    }
+  ],
+  "anchors": {
+    "layer_start_macro": 2477,
+    "gate_enable_expr": 2710,
+    "interior_row_enter_macro": 2734,
+    "reuse_try_begin": 2733,
+    "hit_macro": 2780,
+    "tail_hit_macro": 2789,
+    "miss_macro": 2799,
+    "right_edge_call": 3352,
+    "right_edge_done_macro": 3684,
+    "produce_macro": 3734,
+    "invalidate_non_gate_macro": 2718,
+    "final_invalidate_macro": 3789
+  },
+  "rtl_candidates": [
+    {
+      "name": "row_enter_event",
+      "line_gate": 2710,
+      "line_event": 2734,
+      "reason": "最接近“该 row 被 gate 接纳并开始进入 interior 主体计算”的单拍。"
+    },
+    {
+      "name": "row_terminal_done",
+      "line_call": 3352,
+      "line_event": 3684,
+      "reason": "最接近“right-edge 完成后，当前 row terminal 收口”的单拍。"
+    },
+    {
+      "name": "row_index_snapshot",
+      "line_event": 3734,
+      "line_payload": 319,
+      "reason": "当前 software bridge 用 out_y 直接编码进 payload[21:16]，可作为 out_y_q 的第一版代理。"
+    }
+  ],
+  "ordered_events": [
+    "layer_start",
+    "interior_row_enter",
+    "hit/miss",
+    "tail_hit",
+    "right_edge_done",
+    "produce",
+    "invalidate"
+  ]
+}

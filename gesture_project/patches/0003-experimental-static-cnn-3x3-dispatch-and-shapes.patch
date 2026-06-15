@@ -1,0 +1,758 @@
+diff --git a/sw/opt/litert-micro/conv.cc b/sw/opt/litert-micro/conv.cc
+index b24a2a5..5661866 100644
+--- a/sw/opt/litert-micro/conv.cc
++++ b/sw/opt/litert-micro/conv.cc
+@@ -942,6 +942,279 @@ void Conv_4_4_16(const ConvParams& params, const OpDataConvCustom& data,
+                       output_data);
+ }
+ 
++void Conv_3_3_16_StrideN(
++    const ConvParams& params, const OpDataConvCustom& data,
++    const int32_t* output_multiplier, const uint8_t* shift_left,
++    const uint8_t* shift_right, TfLiteContext* context,
++    const RuntimeShape& input_shape, const int8_t* input_data,
++    const RuntimeShape& filter_shape, const int8_t* filter_data,
++    const RuntimeShape& bias_shape, const int32_t* bias_data,
++    const RuntimeShape& output_shape, int8_t* output_data) {
++  const auto batches = MatchingDim(input_shape, 0, output_shape, 0);
++  const int16_t input_offset = params.input_offset;  // r = s(q - Z)
++  const auto output_offset = params.output_offset;
++  const int32_t output_activation_min = params.quantized_activation_min;
++  const int32_t output_activation_max = params.quantized_activation_max;
++  const auto stride_width = params.stride_width;
++  const auto stride_height = params.stride_height;
++  const auto pad_width = params.padding_values.width;
++  const auto pad_height = params.padding_values.height;
++  const auto input_height = input_shape.Dims(1);
++  const auto input_width = input_shape.Dims(2);
++  const auto input_depth = input_shape.Dims(3);
++
++  const auto filter_height = filter_shape.Dims(1);
++  const auto filter_width = filter_shape.Dims(2);
++  TFLITE_DCHECK_EQ(filter_height, 3);
++  TFLITE_DCHECK_EQ(filter_width, 3);
++  TFLITE_DCHECK_LE(input_depth, 16);
++
++  const auto output_height = output_shape.Dims(1);
++  const auto output_width = output_shape.Dims(2);
++  const auto output_depth = output_shape.Dims(3);
++  size_t vl = __riscv_vsetvl_e8m1(input_depth);
++  const int row_stride = input_width * input_depth;
++  const int col_stride = input_depth;
++  const int row_step = stride_height * row_stride;
++  const int col_step = stride_width * col_stride;
++
++  const int filter_row_stride = filter_shape.Dims(2) * input_depth;
++  const int filter_col_stride = input_depth;
++
++  int32_t* accs_buf = static_cast<int32_t*>(
++      context->GetScratchBuffer(context, data.accs_buffer_index));
++  TFLITE_DCHECK_NE(accs_buf, nullptr);
++  Memset(
++      accs_buf, 0,
++      batches * output_height * output_width * output_depth * sizeof(int32_t));
++
++  for (int out_channel = 0; out_channel < output_depth; ++out_channel) {
++    const int8_t* filter_base_ptr =
++        &filter_data[Offset(filter_shape, out_channel, 0, 0, 0)];
++    register vint8m1_t fil00 __asm__("v1");
++    register vint8m1_t fil01 __asm__("v2");
++    register vint8m1_t fil02 __asm__("v3");
++    register vint8m1_t fil10 __asm__("v4");
++    register vint8m1_t fil11 __asm__("v5");
++    register vint8m1_t fil12 __asm__("v6");
++    register vint8m1_t fil20 __asm__("v7");
++    register vint8m1_t fil21 __asm__("v8");
++    register vint8m1_t fil22 __asm__("v9");
++
++    fil00 = __riscv_vle8_v_i8m1(filter_base_ptr, vl);
++    fil01 = __riscv_vle8_v_i8m1(filter_base_ptr + 1 * filter_col_stride, vl);
++    fil02 = __riscv_vle8_v_i8m1(filter_base_ptr + 2 * filter_col_stride, vl);
++    fil10 = __riscv_vle8_v_i8m1(filter_base_ptr + filter_row_stride, vl);
++    fil11 = __riscv_vle8_v_i8m1(
++        filter_base_ptr + filter_row_stride + 1 * filter_col_stride, vl);
++    fil12 = __riscv_vle8_v_i8m1(
++        filter_base_ptr + filter_row_stride + 2 * filter_col_stride, vl);
++    fil20 = __riscv_vle8_v_i8m1(filter_base_ptr + 2 * filter_row_stride, vl);
++    fil21 = __riscv_vle8_v_i8m1(
++        filter_base_ptr + 2 * filter_row_stride + 1 * filter_col_stride, vl);
++    fil22 = __riscv_vle8_v_i8m1(
++        filter_base_ptr + 2 * filter_row_stride + 2 * filter_col_stride, vl);
++
++    for (int batch = 0; batch < batches; ++batch) {
++      const int8_t* batch_base_ptr =
++          &input_data[Offset(input_shape, batch, 0, 0, 0)];
++      const int8_t* row_ptr =
++          batch_base_ptr - pad_height * row_stride - pad_width * col_stride;
++      for (int out_y = 0; out_y < output_height; ++out_y) {
++        const int in_y_origin = (out_y * stride_height) - pad_height;
++        const int8_t* base_ptr = row_ptr;
++
++        for (int out_x = 0; out_x < output_width; ++out_x) {
++          const int in_x_origin = (out_x * stride_width) - pad_width;
++
++          vint32m4_t mul_acc1;
++          mul_acc1 = __riscv_vmv_v_x_i32m4(0, vl);
++
++          const int8_t* in_ptrs[3][3];
++          for (int r = 0; r < 3; ++r) {
++            for (int c = 0; c < 3; ++c) {
++              in_ptrs[r][c] = base_ptr + r * row_stride + c * col_stride;
++            }
++          }
++          if (in_y_origin >= 0 && in_y_origin + 2 < input_height &&
++              in_x_origin >= 0 && in_x_origin + 2 < input_width) {
++            CONV_MAC(in_ptrs[0][0], fil00, mul_acc1);
++            CONV_MAC(in_ptrs[0][1], fil01, mul_acc1);
++            CONV_MAC(in_ptrs[0][2], fil02, mul_acc1);
++            CONV_MAC(in_ptrs[1][0], fil10, mul_acc1);
++            CONV_MAC(in_ptrs[1][1], fil11, mul_acc1);
++            CONV_MAC(in_ptrs[1][2], fil12, mul_acc1);
++            CONV_MAC(in_ptrs[2][0], fil20, mul_acc1);
++            CONV_MAC(in_ptrs[2][1], fil21, mul_acc1);
++            CONV_MAC(in_ptrs[2][2], fil22, mul_acc1);
++          } else {
++            const bool rv0 =
++                (in_y_origin + 0 >= 0) && (in_y_origin + 0 < input_height);
++            const bool rv1 =
++                (in_y_origin + 1 >= 0) && (in_y_origin + 1 < input_height);
++            const bool rv2 =
++                (in_y_origin + 2 >= 0) && (in_y_origin + 2 < input_height);
++
++            const bool cv0 =
++                (in_x_origin + 0 >= 0) && (in_x_origin + 0 < input_width);
++            const bool cv1 =
++                (in_x_origin + 1 >= 0) && (in_x_origin + 1 < input_width);
++            const bool cv2 =
++                (in_x_origin + 2 >= 0) && (in_x_origin + 2 < input_width);
++
++            if (rv0) {
++              if (cv0) {
++                CONV_MAC(in_ptrs[0][0], fil00, mul_acc1);
++              }
++              if (cv1) {
++                CONV_MAC(in_ptrs[0][1], fil01, mul_acc1);
++              }
++              if (cv2) {
++                CONV_MAC(in_ptrs[0][2], fil02, mul_acc1);
++              }
++            }
++            if (rv1) {
++              if (cv0) {
++                CONV_MAC(in_ptrs[1][0], fil10, mul_acc1);
++              }
++              if (cv1) {
++                CONV_MAC(in_ptrs[1][1], fil11, mul_acc1);
++              }
++              if (cv2) {
++                CONV_MAC(in_ptrs[1][2], fil12, mul_acc1);
++              }
++            }
++            if (rv2) {
++              if (cv0) {
++                CONV_MAC(in_ptrs[2][0], fil20, mul_acc1);
++              }
++              if (cv1) {
++                CONV_MAC(in_ptrs[2][1], fil21, mul_acc1);
++              }
++              if (cv2) {
++                CONV_MAC(in_ptrs[2][2], fil22, mul_acc1);
++              }
++            }
++          }
++          int32_t temp_acc =
++              __riscv_vmv_x_s_i32m1_i32(__riscv_vredsum_vs_i32m4_i32m1(
++                  mul_acc1, __riscv_vmv_v_x_i32m1(0, 1), vl));
++          accs_buf[Offset(output_shape, batch, out_y, out_x, out_channel)] =
++              temp_acc;
++          base_ptr += col_step;
++        }
++        row_ptr += row_step;
++      }
++    }
++  }
++
++  PostprocessAcc(accs_buf, bias_data, shift_left, output_multiplier,
++                 shift_right, output_offset, output_activation_min,
++                 output_activation_max, output_data,
++                 batches * output_height * output_width, output_depth);
++}
++
++void Conv_3x3_OCStrided(
++    const ConvParams& params, const OpDataConvCustom& data,
++    const int32_t* output_multiplier, const uint8_t* shift_left,
++    const uint8_t* shift_right, TfLiteContext* context,
++    const RuntimeShape& input_shape, const int8_t* input_data,
++    const RuntimeShape& filter_shape, const int8_t* filter_data,
++    const RuntimeShape& bias_shape, const int32_t* bias_data,
++    const RuntimeShape& output_shape, int8_t* output_data) {
++  const int batches = MatchingDim(input_shape, 0, output_shape, 0);
++  const int input_height = input_shape.Dims(1);
++  const int input_width = input_shape.Dims(2);
++  const int input_depth = input_shape.Dims(3);
++  const int output_height = output_shape.Dims(1);
++  const int output_width = output_shape.Dims(2);
++  const int output_depth = output_shape.Dims(3);
++  const int filter_height = filter_shape.Dims(1);
++  const int filter_width = filter_shape.Dims(2);
++  TFLITE_DCHECK_EQ(filter_height, 3);
++  TFLITE_DCHECK_EQ(filter_width, 3);
++
++  const int stride_width = params.stride_width;
++  const int stride_height = params.stride_height;
++  const int dilation_width_factor = params.dilation_width_factor;
++  const int dilation_height_factor = params.dilation_height_factor;
++  const int pad_width = params.padding_values.width;
++  const int pad_height = params.padding_values.height;
++  const int32_t input_offset = params.input_offset;
++  const int32_t output_offset = params.output_offset;
++  const int32_t output_activation_min = params.quantized_activation_min;
++  const int32_t output_activation_max = params.quantized_activation_max;
++
++  const int stride_filter = filter_height * filter_width * input_depth;
++  const int filter_row_stride = filter_width * input_depth;
++
++  int32_t* accs_buf = static_cast<int32_t*>(
++      context->GetScratchBuffer(context, data.accs_buffer_index));
++  TFLITE_DCHECK_NE(accs_buf, nullptr);
++
++  for (int batch = 0; batch < batches; ++batch) {
++    for (int out_y = 0; out_y < output_height; ++out_y) {
++      const int in_y_origin = (out_y * stride_height) - pad_height;
++      for (int out_x = 0; out_x < output_width; ++out_x) {
++        const int in_x_origin = (out_x * stride_width) - pad_width;
++        for (int oc_block = 0; oc_block < output_depth;) {
++          const size_t vl = __riscv_vsetvl_e32m4(output_depth - oc_block);
++          vint32m4_t acc = __riscv_vmv_v_x_i32m4(0, vl);
++
++          for (int ky = 0; ky < filter_height; ++ky) {
++            const int in_y = in_y_origin + dilation_height_factor * ky;
++            if (in_y < 0 || in_y >= input_height) {
++              continue;
++            }
++            for (int kx = 0; kx < filter_width; ++kx) {
++              const int in_x = in_x_origin + dilation_width_factor * kx;
++              if (in_x < 0 || in_x >= input_width) {
++                continue;
++              }
++              const int8_t* input_ptr =
++                  input_data + Offset(input_shape, batch, in_y, in_x, 0);
++              const int8_t* weight_ptr =
++                  filter_data + oc_block * stride_filter +
++                  ky * filter_row_stride + kx * input_depth;
++              for (int ic = 0; ic < input_depth; ++ic) {
++                const int16_t input_val =
++                    static_cast<int16_t>(input_ptr[ic] + input_offset);
++                vint8m1_t w8 =
++                    __riscv_vlse8_v_i8m1(weight_ptr + ic, stride_filter, vl);
++                vint16m2_t w16 = __riscv_vwadd_vx_i16m2(w8, 0, vl);
++                acc = __riscv_vwmacc_vx_i32m4(acc, input_val, w16, vl);
++              }
++            }
++          }
++
++          int32_t* acc_ptr =
++              accs_buf + Offset(output_shape, batch, out_y, out_x, oc_block);
++          __riscv_vse32_v_i32m4(acc_ptr, acc, vl);
++          oc_block += vl;
++        }
++      }
++    }
++  }
++
++  PostprocessAcc(accs_buf, bias_data, shift_left, output_multiplier,
++                 shift_right, output_offset, output_activation_min,
++                 output_activation_max, output_data,
++                 batches * output_height * output_width, output_depth);
++}
++
++void Conv_3_3_16(const ConvParams& params, const OpDataConvCustom& data,
++                 const int32_t* output_multiplier, const uint8_t* shift_left,
++                 const uint8_t* shift_right, TfLiteContext* context,
++                 const RuntimeShape& input_shape, const int8_t* input_data,
++                 const RuntimeShape& filter_shape, const int8_t* filter_data,
++                 const RuntimeShape& bias_shape, const int32_t* bias_data,
++                 const RuntimeShape& output_shape, int8_t* output_data) {
++  Conv_3_3_16_StrideN(params, data, output_multiplier, shift_left, shift_right,
++                      context, input_shape, input_data, filter_shape,
++                      filter_data, bias_shape, bias_data, output_shape,
++                      output_data);
++}
++
+ #undef CONV_MAC
+ 
+ void RepackWeightsD48(const int8_t* __restrict src, int16_t* __restrict dst,
+@@ -1291,7 +1564,17 @@ void ConvPerChannel(const ConvParams& params, const OpDataConvCustom& data,
+   PrepareShiftParams(shift_left.get(), shift_right.get(), output_shift,
+                      output_depth);
+ 
+-  if (filter_height == 4 && filter_width == 4 && (input_depth % 4 == 0) &&
++  if (filter_height == 3 && filter_width == 3 && output_depth >= 8) {
++    Conv_3x3_OCStrided(params, data, output_multiplier, shift_left.get(),
++                       shift_right.get(), context, input_shape, input_data,
++                       filter_shape, filter_data_copy.get(), bias_shape,
++                       bias_data_copy.get(), output_shape, output_data);
++  } else if (filter_height == 3 && filter_width == 3 && input_depth <= 16) {
++    Conv_3_3_16(params, data, output_multiplier, shift_left.get(),
++                shift_right.get(), context, input_shape, input_data,
++                filter_shape, filter_data_copy.get(), bias_shape,
++                bias_data_copy.get(), output_shape, output_data);
++  } else if (filter_height == 4 && filter_width == 4 && (input_depth % 4 == 0) &&
+       data.repacked_weights != nullptr) {
+     int8_t* tiled_buffer = static_cast<int8_t*>(
+         context->GetScratchBuffer(context, data.tiled_input_buffer_index));
+diff --git a/tests/cocotb/tutorial/tfmicro/BUILD b/tests/cocotb/tutorial/tfmicro/BUILD
+index 8cf61b9..e2ba23b 100644
+--- a/tests/cocotb/tutorial/tfmicro/BUILD
++++ b/tests/cocotb/tutorial/tfmicro/BUILD
+@@ -187,6 +187,17 @@ py_binary(
+     ],
+ )
+ 
++py_binary(
++    name = "npusim_static_cnn_conv2d",
++    srcs = ["npusim_static_cnn_conv2d.py"],
++    data = [":conv2d_test"],
++    deps = [
++        "//sw/coralnpu_sim:coralnpu_v2_sim_utils_lib",
++        "@bazel_tools//tools/python/runfiles",
++        requirement("numpy"),
++    ],
++)
++
+ coralnpu_v2_binary(
+     name = "conv2d_test",
+     srcs = ["conv2d_test.cc"],
+@@ -205,6 +216,9 @@ cocotb_test_suite(
+         "vcs",
+     ],
+     testcases = [
++        "test_conv2d_3x3_16x1",
++        "test_conv2d_3x3_16x16",
++        "test_conv2d_3x3_16x32",
+         "test_conv2d_4x1_h2w2",
+         "test_conv2d_9x2",
+         "test_conv2d_16x1",
+@@ -348,4 +362,3 @@ cocotb_test_suite(
+     },
+     verilator_model = "//tests/cocotb:rvv_core_mini_highmem_axi_model",
+ )
+-
+diff --git a/tests/cocotb/tutorial/tfmicro/cocotb_conv2d.py b/tests/cocotb/tutorial/tfmicro/cocotb_conv2d.py
+index d81d70d..bbce774 100644
+--- a/tests/cocotb/tutorial/tfmicro/cocotb_conv2d.py
++++ b/tests/cocotb/tutorial/tfmicro/cocotb_conv2d.py
+@@ -24,13 +24,13 @@ def tolerate(target: int, tolerance = 1.2) -> int:
+ 
+ 
+ class Conv2DTest:
+-    # frozen filter_xy=4, padding=1
+-    def __init__(self, in_d, out_d, stride=1, out_h=4, out_w=4):
++    def __init__(self, in_d, out_d, stride=1, out_h=4, out_w=4, filter_hw=4):
+         self.stride = stride
+         in_h = out_h * stride
+         in_w = out_w * stride
+         self.in_shape = np.array([1, in_h, in_w, in_d], dtype=np.uint32)
+-        self.f_shape = np.array([out_d, 4, 4, in_d], dtype=np.uint32)
++        self.f_shape = np.array(
++            [out_d, filter_hw, filter_hw, in_d], dtype=np.uint32)
+         self.bias_shape = np.array([out_d], dtype=np.uint32)
+         self.out_shape = np.array([1, out_h, out_w, out_d], dtype=np.uint32)
+         self.out_size = int(np.prod(self.out_shape))
+@@ -106,6 +106,27 @@ class Conv2DTest:
+ # Cycle count targets come from `-c dbg` runs and are significantly
+ # slower than `-c opt` because DCHECKs are enabled.
+ 
++@cocotb.test()
++async def test_conv2d_3x3_16x1(dut):
++    t = Conv2DTest(in_d=16, out_d=1, filter_hw=3)
++    await t.load_and_populate_input(dut)
++    await t.test(ref_target=58_600, opt_target=9_700)
++
++
++@cocotb.test()
++async def test_conv2d_3x3_16x16(dut):
++    t = Conv2DTest(in_d=16, out_d=16, filter_hw=3)
++    await t.load_and_populate_input(dut)
++    await t.test(ref_target=913_600, opt_target=80_000)
++
++
++@cocotb.test()
++async def test_conv2d_3x3_16x32(dut):
++    t = Conv2DTest(in_d=16, out_d=32, filter_hw=3)
++    await t.load_and_populate_input(dut)
++    await t.test(ref_target=795_602, opt_target=89_080)
++
++
+ @cocotb.test()
+ async def test_conv2d_4x1_h2w2(dut):
+     t = Conv2DTest(in_d=4, out_d=1, out_h=2, out_w=2)
+diff --git a/tests/cocotb/tutorial/tfmicro/conv2d_test.cc b/tests/cocotb/tutorial/tfmicro/conv2d_test.cc
+index d2b89bc..d44ba5c 100644
+--- a/tests/cocotb/tutorial/tfmicro/conv2d_test.cc
++++ b/tests/cocotb/tutorial/tfmicro/conv2d_test.cc
+@@ -18,8 +18,10 @@
+ #include "tensorflow/lite/kernels/internal/reference/integer_ops/conv.h"
+ 
+ namespace {
+-constexpr size_t kMaxOutDepth = 48;
+-constexpr size_t kMaxInDepth = 48;
++constexpr size_t kMaxOutDepth = 64;
++constexpr size_t kMaxInDepth = 64;
++constexpr size_t kMaxFeatureHeight = 64;
++constexpr size_t kMaxFeatureWidth = 64;
+ constexpr size_t kFilterBufSize = kMaxInDepth * 4 * 4 * kMaxOutDepth;
+ }  // namespace
+ 
+@@ -67,7 +69,10 @@ const int32_t output_multiplier[kMaxOutDepth]
+         1426900540, 1546138407, 1380396539, 1702080653, 1121365462, 1144420619,
+         1122488162, 2145134492, 1461154981, 1595052156, 1907144767, 1077003598,
+         1422688689, 1585130899, 1286683399, 1865152526, 2139474298, 1527320570,
+-        1511848683, 1287305898, 1644075469, 1597290527, 1482922030, 1820744170};
++        1511848683, 1287305898, 1644075469, 1597290527, 1482922030, 1820744170,
++        1235840340, 1520469761, 1656859321, 1103093522, 1192854726, 1402908252,
++        1974709089, 2034447402, 1915563165, 2014775867, 1508993251, 2121015926,
++        1271486218, 1606426928, 1085270251, 2108678555};
+ 
+ const int32_t output_shift[kMaxOutDepth]
+     __attribute__((section(".rodata"), aligned(16))) = {
+@@ -83,9 +88,9 @@ const int32_t bias[kMaxOutDepth] __attribute__((aligned(16))) = {
+ 
+ // Expecting model arena to be in dtcm.
+ // Expecting model arena to be in dtcm.
+-int8_t input_data[32 * 32 * kMaxInDepth]
++int8_t input_data[kMaxFeatureHeight * kMaxFeatureWidth * kMaxInDepth]
+     __attribute__((section(".data"), aligned(16)));
+-int8_t output_data[32 * 32 * kMaxOutDepth]
++int8_t output_data[kMaxFeatureHeight * kMaxFeatureWidth * kMaxOutDepth]
+     __attribute__((section(".data"), aligned(16)));
+ 
+ void prep() {
+@@ -109,9 +114,9 @@ static TfLiteContext dummy_context;
+ static coralnpu_v2::opt::litert_micro::OpDataConvCustom dummy_data;
+ 
+ // Simple scratch buffer for testing
+-// Use kMaxOutDepth (48) to allow testing larger output depths without overflow
+-// Moving to .extdata to avoid overflowing DTCM (1MB)
+-static int32_t scratch_buf[120 * 160 * kMaxOutDepth]
++// Size this to the largest tensor covered by our Conv2D microbenchmarks.
++// The previous broad allocation overflows EXTMEM once out_depth grows to 64.
++static int32_t scratch_buf[kMaxFeatureHeight * kMaxFeatureWidth * kMaxOutDepth]
+     __attribute__((section(".extdata"), aligned(16)));
+ static void* GetScratchBuffer(TfLiteContext* ctx, int idx) {
+   return scratch_buf;
+diff --git a/tests/cocotb/tutorial/tfmicro/npusim_conv2d.py b/tests/cocotb/tutorial/tfmicro/npusim_conv2d.py
+index 33b5a93..b8e4922 100644
+--- a/tests/cocotb/tutorial/tfmicro/npusim_conv2d.py
++++ b/tests/cocotb/tutorial/tfmicro/npusim_conv2d.py
+@@ -16,13 +16,15 @@ from bazel_tools.tools.python.runfiles import runfiles
+ from coralnpu_v2_sim_utils import CoralNPUV2Simulator
+ import numpy as np
+ 
++
+ class MpactConv2DTest:
+-    def __init__(self, in_d, out_d, stride=1, out_h=4, out_w=4):
++    def __init__(self, in_d, out_d, stride=1, out_h=4, out_w=4, filter_hw=4):
+         self.stride = stride
+         in_h = out_h * stride
+         in_w = out_w * stride
+         self.in_shape = np.array([1, in_h, in_w, in_d], dtype=np.uint32)
+-        self.f_shape = np.array([out_d, 4, 4, in_d], dtype=np.uint32)
++        self.f_shape = np.array(
++            [out_d, filter_hw, filter_hw, in_d], dtype=np.uint32)
+         self.bias_shape = np.array([out_d], dtype=np.uint32)
+         self.out_shape = np.array([1, out_h, out_w, out_d], dtype=np.uint32)
+         self.out_size = int(np.prod(self.out_shape))
+@@ -94,6 +96,23 @@ class MpactConv2DTest:
+ 
+ 
+ def run_tests():
++    print("test_conv2d_3x3_16x1")
++    t = MpactConv2DTest(
++        in_d=16, out_d=1, stride=1, out_h=4, out_w=4, filter_hw=3)
++    t.load_and_populate_input()
++    t.test()
++
++    print("test_conv2d_3x3_16x16")
++    t = MpactConv2DTest(
++        in_d=16, out_d=16, stride=1, out_h=4, out_w=4, filter_hw=3)
++    t.load_and_populate_input()
++    t.test()
++
++    print("test_conv2d_3x3_16x32")
++    t = MpactConv2DTest(
++        in_d=16, out_d=32, stride=1, out_h=4, out_w=4, filter_hw=3)
++    t.load_and_populate_input()
++    t.test()
+ 
+     print("test_conv2d_16x1")
+     t = MpactConv2DTest(in_d=16, out_d=1, stride=1, out_h=4, out_w=4)
+diff --git a/tests/cocotb/tutorial/tfmicro/npusim_static_cnn_conv2d.py b/tests/cocotb/tutorial/tfmicro/npusim_static_cnn_conv2d.py
+new file mode 100644
+index 0000000..2561757
+--- /dev/null
++++ b/tests/cocotb/tutorial/tfmicro/npusim_static_cnn_conv2d.py
+@@ -0,0 +1,263 @@
++# Copyright 2026 Google LLC
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#     https://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++"""Replay gesture_static_cnn_v1 Conv2D shapes in NPUSim."""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++
++import numpy as np
++from bazel_tools.tools.python.runfiles import runfiles
++from coralnpu_v2_sim_utils import CoralNPUV2Simulator
++
++
++STATIC_CNN_3X3_CASES = [
++    {
++        "layer_name": "conv1_3x3_a",
++        "out_h": 64,
++        "out_w": 64,
++        "in_d": 3,
++        "out_d": 16,
++        "filter_hw": 3,
++        "expected_current_path": "3x3_oc_vectorized",
++    },
++    {
++        "layer_name": "conv1_3x3_b",
++        "out_h": 64,
++        "out_w": 64,
++        "in_d": 16,
++        "out_d": 16,
++        "filter_hw": 3,
++        "expected_current_path": "3x3_oc_vectorized",
++    },
++    {
++        "layer_name": "conv2_3x3_a",
++        "out_h": 32,
++        "out_w": 32,
++        "in_d": 16,
++        "out_d": 32,
++        "filter_hw": 3,
++        "expected_current_path": "3x3_oc_vectorized",
++    },
++    {
++        "layer_name": "conv2_3x3_b",
++        "out_h": 32,
++        "out_w": 32,
++        "in_d": 32,
++        "out_d": 32,
++        "filter_hw": 3,
++        "expected_current_path": "3x3_oc_vectorized",
++    },
++    {
++        "layer_name": "conv3_3x3_a",
++        "out_h": 16,
++        "out_w": 16,
++        "in_d": 32,
++        "out_d": 64,
++        "filter_hw": 3,
++        "expected_current_path": "3x3_oc_vectorized",
++    },
++    {
++        "layer_name": "conv3_3x3_b",
++        "out_h": 16,
++        "out_w": 16,
++        "in_d": 64,
++        "out_d": 64,
++        "filter_hw": 3,
++        "expected_current_path": "3x3_oc_vectorized",
++    },
++]
++
++
++class MpactConv2DTest:
++    def __init__(
++        self,
++        *,
++        in_d: int,
++        out_d: int,
++        stride: int = 1,
++        out_h: int = 4,
++        out_w: int = 4,
++        filter_hw: int = 4,
++        seed: int = 20260601,
++    ):
++        self.stride = stride
++        self.seed = seed
++        in_h = out_h * stride
++        in_w = out_w * stride
++        self.in_shape = np.array([1, in_h, in_w, in_d], dtype=np.uint32)
++        self.f_shape = np.array([out_d, filter_hw, filter_hw, in_d], dtype=np.uint32)
++        self.bias_shape = np.array([out_d], dtype=np.uint32)
++        self.out_shape = np.array([1, out_h, out_w, out_d], dtype=np.uint32)
++        self.out_size = int(np.prod(self.out_shape))
++        self.macs = int(out_h * out_w * out_d * filter_hw * filter_hw * in_d)
++
++        r = runfiles.Create()
++        self.elf_file = r.Rlocation(
++            "coralnpu_hw/tests/cocotb/tutorial/tfmicro/conv2d_test.elf"
++        )
++
++    def load_and_populate_input(self):
++        self.npu_sim = CoralNPUV2Simulator(highmem_ld=True)
++        self.entry_point, self.symbol_map = self.npu_sim.get_elf_entry_and_symbol(
++            self.elf_file,
++            [
++                "impl",
++                "run_ref",
++                "run_opt",
++                "stride",
++                "filter_shape",
++                "filter_data",
++                "bias_shape",
++                "bias_data",
++                "input_shape",
++                "input_data",
++                "output_shape",
++                "output_data",
++            ],
++        )
++        self.npu_sim.load_program(self.elf_file)
++        rng = np.random.default_rng(self.seed)
++        filter_data = rng.integers(-128, 128, self.f_shape, dtype=np.int8).flatten()
++        bias_data = rng.integers(-100000, 100000, self.out_shape[3], dtype=np.int32)
++        input_data = rng.integers(-128, 128, self.in_shape, dtype=np.int8).flatten()
++
++        self.npu_sim.write_word(self.symbol_map["stride"], np.uint32(self.stride))
++        self.npu_sim.write_memory(self.symbol_map["filter_shape"], self.f_shape)
++        self.npu_sim.write_memory(self.symbol_map["filter_data"], filter_data)
++        self.npu_sim.write_memory(self.symbol_map["bias_shape"], self.bias_shape)
++        self.npu_sim.write_memory(self.symbol_map["bias_data"], bias_data)
++        self.npu_sim.write_memory(self.symbol_map["input_shape"], self.in_shape)
++        self.npu_sim.write_memory(self.symbol_map["input_data"], input_data)
++        self.npu_sim.write_memory(self.symbol_map["output_shape"], self.out_shape)
++
++    def run(self, fun_ptr: str):
++        self.npu_sim.write_register("pc", self.entry_point)
++        self.npu_sim.write_ptr(self.symbol_map["impl"], self.symbol_map[fun_ptr])
++        self.npu_sim.write_memory(
++            self.symbol_map["output_data"], np.zeros([self.out_size], dtype=np.int8)
++        )
++        self.npu_sim.run()
++        self.npu_sim.wait()
++        cycles = self.npu_sim.get_cycle_count()
++        outputs = self.npu_sim.read_memory(
++            self.symbol_map["output_data"], self.out_size
++        ).view(np.int8)
++        return cycles, outputs
++
++    def test(self, *, verify_ref: bool):
++        opt_cycles, opt_outputs = self.run("run_opt")
++        ref_cycles = None
++        correct = None
++        if verify_ref:
++            ref_cycles, ref_outputs = self.run("run_ref")
++            correct = bool((opt_outputs == ref_outputs).all())
++            if not correct:
++                raise AssertionError("optimized output differs from reference output")
++        return ref_cycles, opt_cycles, correct
++
++
++def parse_args() -> argparse.Namespace:
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--json_out", help="Optional JSON report path.")
++    parser.add_argument(
++        "--skip_ref_for_fallback",
++        action="store_true",
++        help="Run fallback-only layers without reference replay to save time.",
++    )
++    return parser.parse_args()
++
++
++def run_cases(args: argparse.Namespace) -> dict:
++    results = []
++    for index, case in enumerate(STATIC_CNN_3X3_CASES):
++        print(
++            f"{case['layer_name']} "
++            f"h={case['out_h']} w={case['out_w']} "
++            f"in_d={case['in_d']} out_d={case['out_d']} "
++            f"path={case['expected_current_path']}",
++            flush=True,
++        )
++        test = MpactConv2DTest(
++            in_d=case["in_d"],
++            out_d=case["out_d"],
++            stride=1,
++            out_h=case["out_h"],
++            out_w=case["out_w"],
++            filter_hw=case["filter_hw"],
++            seed=20260601 + index,
++        )
++        test.load_and_populate_input()
++        verify_ref = not (
++            args.skip_ref_for_fallback
++            and case["expected_current_path"] == "reference_fallback"
++        )
++        ref_cycles, opt_cycles, correct = test.test(verify_ref=verify_ref)
++        speedup = (ref_cycles / opt_cycles) if ref_cycles and opt_cycles else None
++        result = {
++            **case,
++            "input_shape": test.in_shape.astype(int).tolist(),
++            "filter_shape": test.f_shape.astype(int).tolist(),
++            "output_shape": test.out_shape.astype(int).tolist(),
++            "estimated_macs": test.macs,
++            "ref_cycles": ref_cycles,
++            "opt_cycles": opt_cycles,
++            "correct_vs_ref": correct,
++            "speedup": speedup,
++            "opt_cycles_per_mac": opt_cycles / test.macs,
++            "ref_cycles_per_mac": (ref_cycles / test.macs) if ref_cycles else None,
++        }
++        print(
++            f"  ref_cycles={ref_cycles} opt_cycles={opt_cycles} "
++            f"speedup={speedup if speedup is not None else 'n/a'}",
++            flush=True,
++        )
++        results.append(result)
++
++    opt_total = sum(item["opt_cycles"] for item in results)
++    ref_items = [item for item in results if item["ref_cycles"] is not None]
++    ref_total = sum(item["ref_cycles"] for item in ref_items)
++    report = {
++        "model": "gesture_static_cnn_v1",
++        "scope": "3x3 Conv2D layers from the static CNN baseline",
++        "results": results,
++        "totals": {
++            "estimated_macs": sum(item["estimated_macs"] for item in results),
++            "opt_cycles": opt_total,
++            "ref_cycles_for_verified_layers": ref_total,
++            "verified_layer_count": len(ref_items),
++            "layer_count": len(results),
++            "speedup_for_verified_layers": (ref_total / opt_total)
++            if len(ref_items) == len(results) and opt_total
++            else None,
++        },
++    }
++    return report
++
++
++def main() -> None:
++    args = parse_args()
++    report = run_cases(args)
++    if args.json_out:
++        out_path = Path(args.json_out)
++        out_path.parent.mkdir(parents=True, exist_ok=True)
++        out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
++        print(f"Wrote {out_path}", flush=True)
++
++
++if __name__ == "__main__":
++    main()
