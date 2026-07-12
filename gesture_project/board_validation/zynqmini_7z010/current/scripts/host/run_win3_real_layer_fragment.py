@@ -48,7 +48,7 @@ LAYER_BINDINGS: dict[str, LayerBinding] = {
 
 
 PARTIAL_RE = re.compile(
-    r"WIN3_PARTIAL ic=(?P<ic>\d+) result0=0x(?P<r0>[0-9A-Fa-f]{8}) "
+    r"WIN3_PARTIAL(?: col=\d+)? ic=(?P<ic>\d+) result0=0x(?P<r0>[0-9A-Fa-f]{8}) "
     r"result1=0x(?P<r1>[0-9A-Fa-f]{8}) result2=0x(?P<r2>[0-9A-Fa-f]{8})"
 )
 
@@ -76,6 +76,11 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=WINDOW_DELAY_MS,
         help="Per-channel board settle delay in milliseconds.",
+    )
+    parser.add_argument(
+        "--full_row",
+        action="store_true",
+        help="Replay the whole output row for this output channel, using consecutive 3-window tiles.",
     )
     return parser.parse_args()
 
@@ -120,13 +125,14 @@ def load_quantized_input(image_path: Path) -> np.ndarray:
     return (array - 128).astype(np.int8)
 
 
-def build_fragment_payload(
+def build_run_payload(
     interpreter: tf.lite.Interpreter,
     layer_name: str,
     image_q: np.ndarray,
     output_channel: int,
     output_row: int,
     start_col: int,
+    full_row: bool,
 ) -> dict:
     binding = LAYER_BINDINGS[layer_name]
     input_detail = interpreter.get_input_details()[0]
@@ -145,30 +151,47 @@ def build_fragment_payload(
         raise ValueError(f"output_channel {output_channel} out of range 0..{out_c - 1}")
     if not (0 <= output_row < out_h):
         raise ValueError(f"output_row {output_row} out of range 0..{out_h - 1}")
-    if start_col < 0 or start_col + 2 >= out_w:
-        raise ValueError(f"start_col {start_col} must satisfy 0 <= start_col <= {out_w - 3}")
+
+    if full_row:
+        if out_w % 3 != 0:
+            raise ValueError(f"full_row currently requires output width divisible by 3, got {out_w}")
+        start_cols = list(range(0, out_w, 3))
+    else:
+        if start_col < 0 or start_col + 2 >= out_w:
+            raise ValueError(f"start_col {start_col} must satisfy 0 <= start_col <= {out_w - 3}")
+        start_cols = [start_col]
 
     padded = np.pad(
         activation.astype(np.int32),
         ((1, 1), (1, 1), (0, 0)),
         constant_values=activation_zero_point,
     )
-    local = padded[output_row : output_row + 3, start_col : start_col + 5, :]
+    weight_sum = int(weights[output_channel].astype(np.int32).sum())
+    adjusted_bias = int(bias[output_channel]) - activation_zero_point * weight_sum
 
-    cases: list[dict] = []
-    sw_partials: list[list[int]] = []
-    for input_channel in range(activation.shape[2]):
-        patch5 = local[:, :, input_channel].astype(np.int32)
-        kernel = weights[output_channel, :, :, input_channel].astype(np.int32)
-        partials = []
-        for dx in range(3):
-            patch3 = patch5[:, dx : dx + 3]
-            partials.append(int(np.sum(patch3 * kernel)))
+    tiles: list[dict] = []
+    cases_flat: list[dict] = []
+    sw_partials_flat: list[list[int]] = []
+    final_row_int32: list[int] = []
+    final_row_relu8: list[int] = []
+    tflite_row_q: list[int] = []
 
-        sw_partials.append(partials)
-        cases.append(
-            {
+    for tile_start_col in start_cols:
+        local = padded[output_row : output_row + 3, tile_start_col : tile_start_col + 5, :]
+        tile_cases: list[dict] = []
+        tile_sw_partials: list[list[int]] = []
+        for input_channel in range(activation.shape[2]):
+            patch5 = local[:, :, input_channel].astype(np.int32)
+            kernel = weights[output_channel, :, :, input_channel].astype(np.int32)
+            partials = []
+            for dx in range(3):
+                patch3 = patch5[:, dx : dx + 3]
+                partials.append(int(np.sum(patch3 * kernel)))
+
+            tile_sw_partials.append(partials)
+            case = {
                 "ic": input_channel,
+                "start_col": tile_start_col,
                 "row0_lo": pack_i8_bytes(patch5[0, 0:4].tolist(), 4),
                 "row0_hi": pack_i8_bytes([int(patch5[0, 4])], 1),
                 "row1_lo": pack_i8_bytes(patch5[1, 0:4].tolist(), 4),
@@ -179,13 +202,28 @@ def build_fragment_payload(
                 "wgt1": pack_i8_bytes(kernel.reshape(-1)[4:8].tolist(), 4),
                 "wgt2": pack_i8_bytes([int(kernel.reshape(-1)[8])], 1),
             }
-        )
+            tile_cases.append(case)
+            cases_flat.append(case)
+            sw_partials_flat.append(partials)
 
-    sw_partials_arr = np.asarray(sw_partials, dtype=np.int64)
-    partial_sum = sw_partials_arr.sum(axis=0)
-    weight_sum = int(weights[output_channel].astype(np.int32).sum())
-    adjusted_bias = int(bias[output_channel]) - activation_zero_point * weight_sum
-    final_totals = partial_sum + adjusted_bias
+        tile_sw_partials_arr = np.asarray(tile_sw_partials, dtype=np.int64)
+        tile_partial_sum = tile_sw_partials_arr.sum(axis=0)
+        tile_final_totals = tile_partial_sum + adjusted_bias
+        tile_tflite_q = output[output_row, tile_start_col : tile_start_col + 3, output_channel].astype(int).tolist()
+
+        final_row_int32.extend(int(x) for x in tile_final_totals.tolist())
+        final_row_relu8.extend(relu8_sat(int(x)) for x in tile_final_totals.tolist())
+        tflite_row_q.extend(tile_tflite_q)
+        tiles.append(
+            {
+                "start_col": tile_start_col,
+                "sw_partials": tile_sw_partials_arr,
+                "sw_partial_sum": tile_partial_sum,
+                "final_totals": tile_final_totals,
+                "tflite_output_q": tile_tflite_q,
+                "cases": tile_cases,
+            }
+        )
 
     return {
         "layer_name": layer_name,
@@ -195,14 +233,17 @@ def build_fragment_payload(
         "output_channel": output_channel,
         "output_row": output_row,
         "start_col": start_col,
+        "full_row": full_row,
+        "start_cols": start_cols,
         "raw_bias": int(bias[output_channel]),
         "weight_sum": weight_sum,
         "adjusted_bias": adjusted_bias,
-        "sw_partials": sw_partials_arr,
-        "sw_partial_sum": partial_sum,
-        "final_totals": final_totals,
-        "tflite_output_chunk": output[output_row, start_col : start_col + 3, output_channel].astype(int).tolist(),
-        "cases": cases,
+        "tiles": tiles,
+        "sw_partials_flat": np.asarray(sw_partials_flat, dtype=np.int64),
+        "cases": cases_flat,
+        "final_row_int32": final_row_int32,
+        "final_row_relu8": final_row_relu8,
+        "tflite_row_q": tflite_row_q,
     }
 
 
@@ -232,8 +273,8 @@ def write_tcl_script(cases: list[dict], delay_ms: int, path: Path) -> None:
             "set result1 [cfg9_apu_read32_int [expr {$base_addr + 0x1A4}]]",
             "set result2 [cfg9_apu_read32_int [expr {$base_addr + 0x1A8}]]",
             (
-                "puts [format \"WIN3_PARTIAL ic=%d result0=0x%08X result1=0x%08X result2=0x%08X\" "
-                f"{case['ic']} $result0 $result1 $result2]"
+                "puts [format \"WIN3_PARTIAL col=%d ic=%d result0=0x%08X result1=0x%08X result2=0x%08X\" "
+                f"{case['start_col']} {case['ic']} $result0 $result1 $result2]"
             ),
         ]
     lines += [
@@ -287,13 +328,14 @@ def main() -> None:
     args = parse_args()
     interpreter = load_interpreter(args.model)
     image_q = load_quantized_input(args.image)
-    payload = build_fragment_payload(
+    payload = build_run_payload(
         interpreter=interpreter,
         layer_name=args.layer,
         image_q=image_q,
         output_channel=args.output_channel,
         output_row=args.output_row,
         start_col=args.start_col,
+        full_row=args.full_row,
     )
 
     with tempfile.TemporaryDirectory(prefix="win3_real_layer_") as tmp_dir:
@@ -302,47 +344,75 @@ def main() -> None:
         stdout = run_xsdb_script(tcl_path)
 
     board_partials = parse_board_partials(stdout, expected_cases=len(payload["cases"]))
-    if not np.array_equal(board_partials, payload["sw_partials"]):
+    if not np.array_equal(board_partials, payload["sw_partials_flat"]):
         raise SystemExit(
             "Board partial sums mismatch software partials.\n"
-            f"software={payload['sw_partials'].tolist()}\n"
+            f"software={payload['sw_partials_flat'].tolist()}\n"
             f"board={board_partials.tolist()}\n"
         )
 
-    board_partial_sum = board_partials.sum(axis=0)
-    board_final = board_partial_sum + payload["adjusted_bias"]
-    if not np.array_equal(board_final, payload["final_totals"]):
-        raise SystemExit(
-            "Board accumulated totals mismatch software golden.\n"
-            f"software={payload['final_totals'].tolist()}\n"
-            f"board={board_final.tolist()}\n"
-        )
-
-    relu_pack = [relu8_sat(int(v)) for v in board_final.tolist()]
+    channels_per_tile = payload["input_shape"][2]
+    board_tiles = board_partials.reshape(len(payload["tiles"]), channels_per_tile, 3)
+    board_row_int32: list[int] = []
+    board_row_relu8: list[int] = []
+    for tile_idx, tile in enumerate(payload["tiles"]):
+        board_partial_sum = board_tiles[tile_idx].sum(axis=0)
+        board_final = board_partial_sum + payload["adjusted_bias"]
+        if not np.array_equal(board_final, tile["final_totals"]):
+            raise SystemExit(
+                "Board accumulated totals mismatch software golden.\n"
+                f"tile_start_col={tile['start_col']}\n"
+                f"software={tile['final_totals'].tolist()}\n"
+                f"board={board_final.tolist()}\n"
+            )
+        board_row_int32.extend(int(x) for x in board_final.tolist())
+        board_row_relu8.extend(relu8_sat(int(x)) for x in board_final.tolist())
 
     print(f"LAYER {payload['layer_name']}")
     print(f"IMAGE {args.image}")
-    print(
-        "FRAGMENT oc={oc} row={row} cols={c0}-{c2}".format(
-            oc=payload["output_channel"],
-            row=payload["output_row"],
-            c0=payload["start_col"],
-            c2=payload["start_col"] + 2,
+    if payload["full_row"]:
+        print(
+            "FULL_ROW oc={oc} row={row} width={w} tiles={tiles}".format(
+                oc=payload["output_channel"],
+                row=payload["output_row"],
+                w=payload["output_shape"][1],
+                tiles=len(payload["tiles"]),
+            )
         )
-    )
+    else:
+        print(
+            "FRAGMENT oc={oc} row={row} cols={c0}-{c2}".format(
+                oc=payload["output_channel"],
+                row=payload["output_row"],
+                c0=payload["start_col"],
+                c2=payload["start_col"] + 2,
+            )
+        )
     print(f"INPUT_SHAPE {payload['input_shape']}")
     print(f"OUTPUT_SHAPE {payload['output_shape']}")
     print(f"ACTIVATION_ZERO_POINT {payload['activation_zero_point']}")
     print(f"RAW_BIAS {payload['raw_bias']}")
     print(f"WEIGHT_SUM {payload['weight_sum']}")
     print(f"ADJUSTED_BIAS {payload['adjusted_bias']}")
-    print(f"SOFTWARE_PARTIAL_SUM {payload['sw_partial_sum'].tolist()}")
-    print(f"BOARD_PARTIAL_SUM {board_partial_sum.tolist()}")
-    print(f"FINAL_INT32_GOLDEN {payload['final_totals'].tolist()}")
-    print(f"BOARD_FINAL_INT32 {board_final.tolist()}")
-    print(f"FINAL_RELU8_SAT {relu_pack}")
-    print(f"TFLITE_OUTPUT_Q {payload['tflite_output_chunk']}")
-    print("WIN3_REAL_LAYER_FRAGMENT_PASS")
+    if payload["full_row"]:
+        print(f"START_COLS {payload['start_cols']}")
+        print(f"FINAL_ROW_INT32_GOLDEN {payload['final_row_int32']}")
+        print(f"BOARD_FINAL_ROW_INT32 {board_row_int32}")
+        print(f"FINAL_ROW_RELU8_SAT {board_row_relu8}")
+        print(f"TFLITE_OUTPUT_Q_ROW {payload['tflite_row_q']}")
+        print("WIN3_REAL_LAYER_FULL_ROW_PASS")
+    else:
+        tile = payload["tiles"][0]
+        board_partial_sum = board_tiles[0].sum(axis=0)
+        board_final = board_partial_sum + payload["adjusted_bias"]
+        relu_pack = [relu8_sat(int(v)) for v in board_final.tolist()]
+        print(f"SOFTWARE_PARTIAL_SUM {tile['sw_partial_sum'].tolist()}")
+        print(f"BOARD_PARTIAL_SUM {board_partial_sum.tolist()}")
+        print(f"FINAL_INT32_GOLDEN {tile['final_totals'].tolist()}")
+        print(f"BOARD_FINAL_INT32 {board_final.tolist()}")
+        print(f"FINAL_RELU8_SAT {relu_pack}")
+        print(f"TFLITE_OUTPUT_Q {tile['tflite_output_q']}")
+        print("WIN3_REAL_LAYER_FRAGMENT_PASS")
 
 
 if __name__ == "__main__":
