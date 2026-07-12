@@ -2,6 +2,7 @@
 .agents/
 .codex/
 .git-local/
+local_env/
 
 # Upstream dependency: clone locally when needed, do not duplicate upload
 coralnpu/
@@ -27,6 +28,44 @@ gesture_project/models/
 # Local experimental worktrees derived from upstream coralnpu
 gesture_project/worktrees/
 
+# Regenerated board-validation build products
+gesture_project/board_validation/**/*.o
+gesture_project/board_validation/**/*.bin
+gesture_project/board_validation/**/*.elf
+gesture_project/board_validation/**/*.bit
+gesture_project/board_validation/**/*.xsa
+gesture_project/board_validation/**/*.dcp
+gesture_project/board_validation/**/*.jou
+gesture_project/board_validation/**/*.log
+gesture_project/board_validation/**/*.str
+gesture_project/board_validation/**/*.xml
+gesture_project/board_validation/**/*.html
+gesture_project/board_validation/**/.Xil/
+gesture_project/board_validation/**/.cache/
+gesture_project/board_validation/**/.runs/
+gesture_project/board_validation/**/rowhandoff_*_build/
+gesture_project/board_validation/**/vivado/PROJECT.*
+gesture_project/board_validation/**/vivado/*.hw
+gesture_project/board_validation/**/vivado/*.ip_user_files/
+gesture_project/board_validation/**/vivado/*.sim/
+gesture_project/board_validation/**/vivado/*.gen/
+gesture_project/board_validation/**/reports/*.rpt
+gesture_project/board_validation/**/reports/*.pb
+gesture_project/board_validation/**/reports/*.xml
+gesture_project/board_validation/**/reports/*.xmsgs
+gesture_project/board_validation/**/reports/*.jou
+gesture_project/board_validation/**/reports/*.log
+gesture_project/board_validation/**/reports/*.txt
+gesture_project/board_validation/**/reports/*.json
+gesture_project/board_validation/**/generated_rtl/
+gesture_project/board_validation/**/generated_rtl_*/
+gesture_project/board_validation/**/generated_rtl_official/
+gesture_project/board_validation/**/coralnpu_lite7z010/*.dcp
+gesture_project/board_validation/**/coralnpu_lite7z010/*.jou
+gesture_project/board_validation/**/coralnpu_lite7z010/*.log
+gesture_project/board_validation/**/coralnpu_lite7z010/*.rpt
+gesture_project/board_validation/**/coralnpu_lite7z010/*.str
+
 # Personal notes and scratch material not meant for team sharing
 gesture_project/notes/
 
@@ -38,6 +77,7 @@ gesture_project/reports/*.log
 gesture_project/reports/*_raw_*.json
 gesture_project/reports/*_raw_*.log
 gesture_project/reports/*poll_trace_raw*.log
+gesture_project/reports/*_tflite_eval.json
 
 # Historical early patches kept locally if needed; only keep the cumulative patch
 gesture_project/patches/0001-*.patch
