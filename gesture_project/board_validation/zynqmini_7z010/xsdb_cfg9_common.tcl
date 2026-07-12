@@ -68,6 +68,15 @@ proc cfg9_program_and_init_ps {bit_file ps7_init_file} {
   fpga -file $bit_file
   after 1500
 
+  set dap_after_fpga_rc [catch {cfg9_select_target_by_name "DAP*"} dap_after_fpga_msg]
+  if {$dap_after_fpga_rc == 0} {
+    set dap_rst_rc [catch {rst -system} dap_rst_msg]
+    puts "CORAL_CFG9_DAP_RST_AFTER_FPGA rc=$dap_rst_rc msg=$dap_rst_msg"
+    after 1500
+  } else {
+    puts "CORAL_CFG9_DAP_AFTER_FPGA_NOT_FOUND $dap_after_fpga_msg"
+  }
+
   puts "CORAL_CFG9_INIT_PS7"
   uplevel #0 [list source $ps7_init_file]
   cfg9_prepare_arm_targets
