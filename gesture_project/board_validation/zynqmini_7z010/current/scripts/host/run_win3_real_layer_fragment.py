@@ -113,6 +113,11 @@ def relu8_sat(value: int) -> int:
     return value
 
 
+def requantize_to_int8(raw_value: int, input_scale: float, weight_scale: float, output_scale: float, output_zero_point: int) -> int:
+    scaled = np.rint(raw_value * (input_scale * weight_scale / output_scale))
+    return int(np.clip(scaled + output_zero_point, -128, 127))
+
+
 def pack_i8_bytes(values: list[int], width: int) -> int:
     if len(values) > width:
         raise ValueError(f"expected at most {width} bytes, got {len(values)}")
@@ -156,7 +161,13 @@ def build_run_payload(
     bias = interpreter.get_tensor(binding.bias_index)
     output = interpreter.get_tensor(binding.output_index)[0]
     activation_detail = interpreter.get_tensor_details()[binding.input_index]
+    output_detail = interpreter.get_tensor_details()[binding.output_index]
+    weight_detail = interpreter.get_tensor_details()[binding.weight_index]
     activation_zero_point = int(activation_detail["quantization"][1])
+    activation_scale = float(activation_detail["quantization_parameters"]["scales"][0])
+    output_scale = float(output_detail["quantization_parameters"]["scales"][0])
+    output_zero_point = int(output_detail["quantization_parameters"]["zero_points"][0])
+    weight_scales = weight_detail["quantization_parameters"]["scales"]
 
     out_h, out_w, out_c = output.shape
     if not (0 <= output_channel < out_c):
@@ -186,6 +197,7 @@ def build_run_payload(
     sw_partials_flat: list[list[int]] = []
     final_row_int32: list[int] = []
     final_row_relu8: list[int] = []
+    final_row_int8_q: list[int] = []
     tflite_row_q: list[int] = []
 
     for tile_start_col in start_cols:
@@ -222,9 +234,20 @@ def build_run_payload(
         tile_partial_sum = tile_sw_partials_arr.sum(axis=0)
         tile_final_totals = tile_partial_sum + adjusted_bias
         tile_tflite_q = output[output_row, tile_start_col : tile_start_col + 3, output_channel].astype(int).tolist()
+        tile_final_q = [
+            requantize_to_int8(
+                int(raw_value),
+                input_scale=activation_scale,
+                weight_scale=float(weight_scales[output_channel]),
+                output_scale=output_scale,
+                output_zero_point=output_zero_point,
+            )
+            for raw_value in tile_final_totals.tolist()
+        ]
 
         final_row_int32.extend(int(x) for x in tile_final_totals.tolist())
         final_row_relu8.extend(relu8_sat(int(x)) for x in tile_final_totals.tolist())
+        final_row_int8_q.extend(tile_final_q)
         tflite_row_q.extend(tile_tflite_q)
         tiles.append(
             {
@@ -232,6 +255,7 @@ def build_run_payload(
                 "sw_partials": tile_sw_partials_arr,
                 "sw_partial_sum": tile_partial_sum,
                 "final_totals": tile_final_totals,
+                "final_q": tile_final_q,
                 "tflite_output_q": tile_tflite_q,
                 "cases": tile_cases,
             }
@@ -242,6 +266,10 @@ def build_run_payload(
         "input_shape": tuple(int(x) for x in activation.shape),
         "output_shape": tuple(int(x) for x in output.shape),
         "activation_zero_point": activation_zero_point,
+        "activation_scale": activation_scale,
+        "output_scale": output_scale,
+        "output_zero_point": output_zero_point,
+        "weight_scale": float(weight_scales[output_channel]),
         "output_channel": output_channel,
         "output_row": output_row,
         "start_col": start_col,
@@ -255,6 +283,7 @@ def build_run_payload(
         "cases": cases_flat,
         "final_row_int32": final_row_int32,
         "final_row_relu8": final_row_relu8,
+        "final_row_int8_q": final_row_int8_q,
         "tflite_row_q": tflite_row_q,
     }
 
@@ -391,6 +420,7 @@ def main() -> None:
         board_tiles = board_partials.reshape(len(payload["tiles"]), channels_per_tile, 3)
         board_row_int32: list[int] = []
         board_row_relu8: list[int] = []
+        board_row_int8_q: list[int] = []
         for tile_idx, tile in enumerate(payload["tiles"]):
             board_partial_sum = board_tiles[tile_idx].sum(axis=0)
             board_final = board_partial_sum + payload["adjusted_bias"]
@@ -404,11 +434,42 @@ def main() -> None:
                 )
             board_row_int32.extend(int(x) for x in board_final.tolist())
             board_row_relu8.extend(relu8_sat(int(x)) for x in board_final.tolist())
+            board_q = [
+                requantize_to_int8(
+                    int(raw_value),
+                    input_scale=payload["activation_scale"],
+                    weight_scale=payload["weight_scale"],
+                    output_scale=payload["output_scale"],
+                    output_zero_point=payload["output_zero_point"],
+                )
+                for raw_value in board_final.tolist()
+            ]
+            if board_q != tile["final_q"]:
+                raise SystemExit(
+                    "Board requantized int8 mismatch software requant.\n"
+                    f"output_channel={payload['output_channel']}\n"
+                    f"tile_start_col={tile['start_col']}\n"
+                    f"software={tile['final_q']}\n"
+                    f"board={board_q}\n"
+                )
+            board_row_int8_q.extend(board_q)
+
+        if board_row_int8_q != payload["tflite_row_q"]:
+            raise SystemExit(
+                "Board requantized int8 row mismatch TFLite final output row.\n"
+                f"output_channel={payload['output_channel']}\n"
+                f"board={board_row_int8_q}\n"
+                f"tflite={payload['tflite_row_q']}\n"
+            )
 
         print(f"OUTPUT_CHANNEL {payload['output_channel']}")
         print(f"RAW_BIAS {payload['raw_bias']}")
         print(f"WEIGHT_SUM {payload['weight_sum']}")
         print(f"ADJUSTED_BIAS {payload['adjusted_bias']}")
+        print(f"ACTIVATION_SCALE {payload['activation_scale']}")
+        print(f"WEIGHT_SCALE {payload['weight_scale']}")
+        print(f"OUTPUT_SCALE {payload['output_scale']}")
+        print(f"OUTPUT_ZERO_POINT {payload['output_zero_point']}")
         if payload["full_row"]:
             print(
                 "FULL_ROW oc={oc} row={row} width={w} tiles={tiles}".format(
@@ -421,6 +482,8 @@ def main() -> None:
             print(f"START_COLS {payload['start_cols']}")
             print(f"FINAL_ROW_INT32_GOLDEN {payload['final_row_int32']}")
             print(f"BOARD_FINAL_ROW_INT32 {board_row_int32}")
+            print(f"FINAL_ROW_INT8_Q_GOLDEN {payload['final_row_int8_q']}")
+            print(f"BOARD_FINAL_ROW_INT8_Q {board_row_int8_q}")
             print(f"FINAL_ROW_RELU8_SAT {board_row_relu8}")
             print(f"TFLITE_OUTPUT_Q_ROW {payload['tflite_row_q']}")
         else:
@@ -440,6 +503,8 @@ def main() -> None:
             print(f"BOARD_PARTIAL_SUM {board_partial_sum.tolist()}")
             print(f"FINAL_INT32_GOLDEN {tile['final_totals'].tolist()}")
             print(f"BOARD_FINAL_INT32 {board_final.tolist()}")
+            print(f"FINAL_INT8_Q_GOLDEN {tile['final_q']}")
+            print(f"BOARD_FINAL_INT8_Q {board_q}")
             print(f"FINAL_RELU8_SAT {relu_pack}")
             print(f"TFLITE_OUTPUT_Q {tile['tflite_output_q']}")
 
