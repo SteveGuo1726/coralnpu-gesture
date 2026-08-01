@@ -1,101 +1,102 @@
 # algorithms 目录说明
 
-本目录保存项目当前活跃的算法训练、量化、评估、official 回放桥接、patch 量化、rowhandoff trace 解析与重建脚本。
+`gesture_project/algorithms/` 现在只保留当前还会直接用于后续算法筛选和部署判断的代码。
 
-## 当前最重要的几类脚本
+之前大量 `core_3x3`、`strategy8`、`rowhandoff`、`conv2_3x3_b` 控制器原型脚本，已经整体归档到：
 
-### 1. 训练与量化
+- `/home/steveguo/beifen/coralnpu-gesture/2026-07-30_route_cleanup`
 
-- `static_cnn/train_static_cnn.py`
-  当前静态卷积主线训练入口。
-- `static_cnn/quantize_tflite.py`
-  当前主线模型和对照模型的 INT8 量化入口。
-- `mobilenet_candidates/train_mobilenet_candidate.py`
-  MobileNet 家族对照训练入口。
+因此，这个目录现在的重点已经从“3×3 局部软件收敛”切回：
 
-### 2. 模型评估与画像
+1. 静态手势模型训练与量化。
+2. 关键点分支与融合路线。
+3. 不同候选模型的统一评估与周期估算。
 
-- `tools/evaluate_keras_classifier.py`
-  浮点模型逐图评估。
-- `tools/evaluate_tflite_classifier.py`
-  INT8 TFLite 模型逐图评估。
-- `tools/profile_tflite_ops.py`
-  TFLite 算子画像。
-- `tools/estimate_npu_cycles.py`
-  NPU 周期估算。
-- `tools/compare_model_candidates.py`
-  候选模型统一对比。
-- `tools/summarize_candidate_hardware.py`
-  候选模型的硬件导向摘要汇总。
+## 当前最重要的子目录
 
-### 3. official 回放与 current best 收敛
+### 1. `static_cnn/`
 
-- `tools/run_core_3x3_worktree_replay.py`
-  当前四个主体层 official worktree 回放主入口。
-- `tools/build_worktree_core_3x3_bridge.py`
-  项目侧模型信息和 official worktree 参数桥接工具。
-- `tools/compare_two_strategy_runs.py`
-  两轮 strategy 结果对比。
-- `tools/compare_core_3x3_strategy_totals.py`
-  四层总周期汇总与比较。
-- `tools/analyze_strategy8_tail_patch_candidates.py`
-  尾部 patch 候选分析。
-- `tools/analyze_strategy8_tail_micro_patch_candidates.py`
-  更细粒度尾部 patch 候选分析。
-- `tools/analyze_strategy8_row_end_tail_candidates.py`
-  row-end 与 tail 候选分析。
-- `tools/analyze_strategy8_official_patch_entry.py`
-  official 最小 patch 入口定位。
-- `tools/estimate_strategy8_residual_control_headroom.py`
-  在 current best 基础上估算剩余控制空间。
+- `train_static_cnn.py`
+  当前纯图像卷积基线与变体训练入口。
+- `quantize_tflite.py`
+  当前 Keras 模型到 INT8 TFLite 的量化入口。
+- `export_repvgg_deploy.py`
+  仅在复查结构重参数化路线时使用，不是当前主入口。
 
-### 4. rowhandoff 与硬件参考线
+### 2. `landmark_dynamic/`
 
-- `tools/export_strategy8_rowhandoff_min_sideband_patch.py`
-  最小 sideband patch 导出。
-- `tools/export_strategy8_rowhandoff_source_event_anchor_map.py`
-  source 事件锚点映射导出。
-- `tools/export_strategy8_rowhandoff_trace_csr_integration.py`
-  trace 与 CSR 接入口径导出。
-- `tools/export_strategy8_rowhandoff_board_contract.py`
-  板级验证合同导出。
-- `tools/export_strategy8_rowhandoff_board_csr_map.py`
-  CSR 地址映射导出。
-- `tools/export_strategy8_rowhandoff_corecsr_patch.py`
-  CoreAxiCSR 接入 patch 方案导出。
-- `tools/parse_strategy8_rowhandoff_cocotb_log.py`
-  cocotb 日志解析。
-- `tools/reconstruct_strategy8_rowhandoff_event_trace.py`
-  row 生命周期重建。
+- `extract_static_hand_landmarks.py`
+  从图像数据集中抽取 `MediaPipe 21 点手部关键点`。
+- `train_static_landmark_mlp.py`
+  当前关键点静态分类主入口。
+- `evaluate_static_cnn_landmark_fusion.py`
+  当前图像分支与关键点分支的晚融合评估入口。
 
-## 当前主线使用建议
+### 3. `mobilenet_candidates/`
 
-### 算法侧
+- `train_mobilenet_candidate.py`
+  轻量卷积候选对照训练入口。
+- `README.md`
+  记录为什么保留这条线做对照，而不是把它当当前主线。
 
-优先围绕：
+### 4. `tools/`
 
-- `static_cnn_regularized_3x3_i96_e70_hagrid6_sample`
+当前只保留通用评估和画像脚本：
 
-而不是重新大规模铺开候选模型。
+- `evaluate_keras_classifier.py`
+- `evaluate_tflite_classifier.py`
+- `profile_tflite_ops.py`
+- `estimate_npu_cycles.py`
+- `estimate_candidate_cycles.py`
+- `estimate_shape_report_cycles.py`
+- `compare_model_candidates.py`
+- `summarize_candidate_hardware.py`
+- `summarize_hardware_hotspots.py`
+- `static_cnn_shape_report.py`
 
-### software current best 侧
+## 当前算法主线如何使用
 
-优先围绕：
+### 1. 纯卷积保底线
 
-- `strategy=8 + x4_id32/x4_id64 + 静态主体块调度 + interior 6tap + 顶/底 4/6/4`
+用途：
 
-而不是回头捡已判死的 `repack`、`postprocess` 或边界窄特化路线。
+- 为后续 CoralNPU 空间卷积硬件映射提供最稳定的纯图像网络基线。
 
-### rowhandoff 侧
+当前核心证据：
 
-优先围绕：
+- `../reports/static_cnn_regularized_3x3_i96_e70_hagrid6_sample_keras_eval.json`
+- `../reports/static_cnn_regularized_3x3_i96_e70_hagrid6_sample_tflite_eval.json`
+- `../reports/static_cnn_regularized_3x3_i96_e70_hagrid6_sample_npucycles.json`
 
-- `rowhandoff_rowbase_recur mode=1`
+### 2. 当前整体静态最优线
 
-以及 `CoreAxi / CoreAxiCSR / RowhandoffCounterBank / CSR readback / trace 对账` 这条 official 风格收口路径。
+用途：
 
-## 进一步说明
+- 作为当前项目真实最高静态精度的系统线。
+- 为后续蒸馏、动态时序建模和双分支系统设计提供上限参考。
 
-完整的活跃代码文件逐项说明见：
+当前核心证据：
 
-- `../docs/仓库共享版_活跃代码与文件说明.md`
+- `../reports/static_cnn_landmark_fusion_20260728.json`
+- `../reports/static_cnn_landmark_geom_fusion_20260728.json`
+- `../reports/static_cnn_landmark_geom_fusion_20260728_script.json`
+
+### 3. 候选对照线
+
+用途：
+
+- 证明哪些结构不适合当前 CoralNPU 软件主链。
+
+当前主要保留：
+
+- `MobileNetV2` 对照
+- 纯卷积主线
+- `landmark` 路线
+
+## 当前使用原则
+
+- 不再从已归档的 `3x3` 局部控制脚本重新起步。
+- 不把 `1x1 pointwise` 占主导的模型直接当成最优硬件候选。
+- 不把 `LSTM` 直接当动态主线，而是优先做 `landmark + GRU/TCN`。
+- 新候选必须经过：
+  `真实训练 -> INT8 量化 -> TFLite 评估 -> 算子画像 -> 周期估算 -> 是否继续`

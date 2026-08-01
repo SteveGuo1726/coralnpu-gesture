@@ -1,0 +1,555 @@
+{
+  "model": "/home/steveguo/coralnpu-gesture/gesture_project/models/static_cnn_regularized_plain_k4_i96_e40_hagrid6_sample_20260730/model_int8.tflite",
+  "backend": "tensorflow",
+  "operators": [
+    {
+      "index": 0,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "serving_default_image:0",
+        "tfl.pseudo_qconst15",
+        "tfl.pseudo_qconst14"
+      ],
+      "output_tensors": [
+        "gesture_static_cnn_v1_1/relu1_a_1/Relu;gesture_static_cnn_v1_1/bn1_a_1/batchnorm/add_1;gesture_static_cnn_v1_1/conv1_4x4_a_1/convolution;gesture_static_cnn_v1_1/bn1_a_1/batchnorm/sub1"
+      ],
+      "input_shapes": [
+        [
+          1,
+          96,
+          96,
+          3
+        ],
+        [
+          16,
+          4,
+          4,
+          3
+        ],
+        [
+          16
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          96,
+          96,
+          16
+        ]
+      ],
+      "estimated_macs": 7077888
+    },
+    {
+      "index": 1,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_static_cnn_v1_1/relu1_a_1/Relu;gesture_static_cnn_v1_1/bn1_a_1/batchnorm/add_1;gesture_static_cnn_v1_1/conv1_4x4_a_1/convolution;gesture_static_cnn_v1_1/bn1_a_1/batchnorm/sub1",
+        "tfl.pseudo_qconst13",
+        "tfl.pseudo_qconst12"
+      ],
+      "output_tensors": [
+        "gesture_static_cnn_v1_1/relu1_b_1/Relu;gesture_static_cnn_v1_1/bn1_b_1/batchnorm/add_1;gesture_static_cnn_v1_1/conv1_4x4_b_1/convolution;gesture_static_cnn_v1_1/bn1_b_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          96,
+          96,
+          16
+        ],
+        [
+          16,
+          4,
+          4,
+          16
+        ],
+        [
+          16
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          96,
+          96,
+          16
+        ]
+      ],
+      "estimated_macs": 37748736
+    },
+    {
+      "index": 2,
+      "op_name": "MAX_POOL_2D",
+      "input_tensors": [
+        "gesture_static_cnn_v1_1/relu1_b_1/Relu;gesture_static_cnn_v1_1/bn1_b_1/batchnorm/add_1;gesture_static_cnn_v1_1/conv1_4x4_b_1/convolution;gesture_static_cnn_v1_1/bn1_b_1/batchnorm/sub"
+      ],
+      "output_tensors": [
+        "gesture_static_cnn_v1_1/pool1_1/MaxPool2d"
+      ],
+      "input_shapes": [
+        [
+          1,
+          96,
+          96,
+          16
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          48,
+          48,
+          16
+        ]
+      ],
+      "estimated_macs": null
+    },
+    {
+      "index": 3,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_static_cnn_v1_1/pool1_1/MaxPool2d",
+        "tfl.pseudo_qconst11",
+        "tfl.pseudo_qconst10"
+      ],
+      "output_tensors": [
+        "gesture_static_cnn_v1_1/relu2_a_1/Relu;gesture_static_cnn_v1_1/bn2_a_1/batchnorm/add_1;gesture_static_cnn_v1_1/conv2_4x4_a_1/convolution;gesture_static_cnn_v1_1/bn2_a_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          48,
+          48,
+          16
+        ],
+        [
+          32,
+          4,
+          4,
+          16
+        ],
+        [
+          32
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          48,
+          48,
+          32
+        ]
+      ],
+      "estimated_macs": 18874368
+    },
+    {
+      "index": 4,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_static_cnn_v1_1/relu2_a_1/Relu;gesture_static_cnn_v1_1/bn2_a_1/batchnorm/add_1;gesture_static_cnn_v1_1/conv2_4x4_a_1/convolution;gesture_static_cnn_v1_1/bn2_a_1/batchnorm/sub",
+        "tfl.pseudo_qconst9",
+        "tfl.pseudo_qconst8"
+      ],
+      "output_tensors": [
+        "gesture_static_cnn_v1_1/relu2_b_1/Relu;gesture_static_cnn_v1_1/bn2_b_1/batchnorm/add_1;gesture_static_cnn_v1_1/conv2_4x4_b_1/convolution;gesture_static_cnn_v1_1/bn2_b_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          48,
+          48,
+          32
+        ],
+        [
+          32,
+          4,
+          4,
+          32
+        ],
+        [
+          32
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          48,
+          48,
+          32
+        ]
+      ],
+      "estimated_macs": 37748736
+    },
+    {
+      "index": 5,
+      "op_name": "MAX_POOL_2D",
+      "input_tensors": [
+        "gesture_static_cnn_v1_1/relu2_b_1/Relu;gesture_static_cnn_v1_1/bn2_b_1/batchnorm/add_1;gesture_static_cnn_v1_1/conv2_4x4_b_1/convolution;gesture_static_cnn_v1_1/bn2_b_1/batchnorm/sub"
+      ],
+      "output_tensors": [
+        "gesture_static_cnn_v1_1/pool2_1/MaxPool2d"
+      ],
+      "input_shapes": [
+        [
+          1,
+          48,
+          48,
+          32
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          24,
+          24,
+          32
+        ]
+      ],
+      "estimated_macs": null
+    },
+    {
+      "index": 6,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_static_cnn_v1_1/pool2_1/MaxPool2d",
+        "tfl.pseudo_qconst7",
+        "tfl.pseudo_qconst6"
+      ],
+      "output_tensors": [
+        "gesture_static_cnn_v1_1/relu3_a_1/Relu;gesture_static_cnn_v1_1/bn3_a_1/batchnorm/add_1;gesture_static_cnn_v1_1/conv3_4x4_a_1/convolution;gesture_static_cnn_v1_1/bn3_a_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          24,
+          24,
+          32
+        ],
+        [
+          64,
+          4,
+          4,
+          32
+        ],
+        [
+          64
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          24,
+          24,
+          64
+        ]
+      ],
+      "estimated_macs": 18874368
+    },
+    {
+      "index": 7,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_static_cnn_v1_1/relu3_a_1/Relu;gesture_static_cnn_v1_1/bn3_a_1/batchnorm/add_1;gesture_static_cnn_v1_1/conv3_4x4_a_1/convolution;gesture_static_cnn_v1_1/bn3_a_1/batchnorm/sub",
+        "tfl.pseudo_qconst5",
+        "tfl.pseudo_qconst4"
+      ],
+      "output_tensors": [
+        "gesture_static_cnn_v1_1/relu3_b_1/Relu;gesture_static_cnn_v1_1/bn3_b_1/batchnorm/add_1;gesture_static_cnn_v1_1/conv3_4x4_b_1/convolution;gesture_static_cnn_v1_1/bn3_b_1/batchnorm/sub"
+      ],
+      "input_shapes": [
+        [
+          1,
+          24,
+          24,
+          64
+        ],
+        [
+          64,
+          4,
+          4,
+          64
+        ],
+        [
+          64
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          24,
+          24,
+          64
+        ]
+      ],
+      "estimated_macs": 37748736
+    },
+    {
+      "index": 8,
+      "op_name": "MAX_POOL_2D",
+      "input_tensors": [
+        "gesture_static_cnn_v1_1/relu3_b_1/Relu;gesture_static_cnn_v1_1/bn3_b_1/batchnorm/add_1;gesture_static_cnn_v1_1/conv3_4x4_b_1/convolution;gesture_static_cnn_v1_1/bn3_b_1/batchnorm/sub"
+      ],
+      "output_tensors": [
+        "gesture_static_cnn_v1_1/pool3_1/MaxPool2d"
+      ],
+      "input_shapes": [
+        [
+          1,
+          24,
+          24,
+          64
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          12,
+          12,
+          64
+        ]
+      ],
+      "estimated_macs": null
+    },
+    {
+      "index": 9,
+      "op_name": "CONV_2D",
+      "input_tensors": [
+        "gesture_static_cnn_v1_1/pool3_1/MaxPool2d",
+        "tfl.pseudo_qconst3",
+        "tfl.pseudo_qconst2"
+      ],
+      "output_tensors": [
+        "gesture_static_cnn_v1_1/conv_head_1x1_1/Relu;gesture_static_cnn_v1_1/conv_head_1x1_1/BiasAdd;gesture_static_cnn_v1_1/conv_head_1x1_1/convolution;gesture_static_cnn_v1_1/conv_head_1x1_1/Squeeze"
+      ],
+      "input_shapes": [
+        [
+          1,
+          12,
+          12,
+          64
+        ],
+        [
+          96,
+          1,
+          1,
+          64
+        ],
+        [
+          96
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          12,
+          12,
+          96
+        ]
+      ],
+      "estimated_macs": 884736
+    },
+    {
+      "index": 10,
+      "op_name": "MEAN",
+      "input_tensors": [
+        "gesture_static_cnn_v1_1/conv_head_1x1_1/Relu;gesture_static_cnn_v1_1/conv_head_1x1_1/BiasAdd;gesture_static_cnn_v1_1/conv_head_1x1_1/convolution;gesture_static_cnn_v1_1/conv_head_1x1_1/Squeeze",
+        "arith.constant"
+      ],
+      "output_tensors": [
+        "gesture_static_cnn_v1_1/global_avg_pool_1/Mean"
+      ],
+      "input_shapes": [
+        [
+          1,
+          12,
+          12,
+          96
+        ],
+        [
+          2
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          96
+        ]
+      ],
+      "estimated_macs": null
+    },
+    {
+      "index": 11,
+      "op_name": "FULLY_CONNECTED",
+      "input_tensors": [
+        "gesture_static_cnn_v1_1/global_avg_pool_1/Mean",
+        "tfl.pseudo_qconst1",
+        "tfl.pseudo_qconst"
+      ],
+      "output_tensors": [
+        "gesture_static_cnn_v1_1/class_1/MatMul;gesture_static_cnn_v1_1/class_1/BiasAdd"
+      ],
+      "input_shapes": [
+        [
+          1,
+          96
+        ],
+        [
+          6,
+          96
+        ],
+        [
+          6
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6
+        ]
+      ],
+      "estimated_macs": null
+    },
+    {
+      "index": 12,
+      "op_name": "SOFTMAX",
+      "input_tensors": [
+        "gesture_static_cnn_v1_1/class_1/MatMul;gesture_static_cnn_v1_1/class_1/BiasAdd"
+      ],
+      "output_tensors": [
+        "StatefulPartitionedCall_1:0"
+      ],
+      "input_shapes": [
+        [
+          1,
+          6
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6
+        ]
+      ],
+      "estimated_macs": null
+    },
+    {
+      "index": 13,
+      "op_name": "DELEGATE",
+      "input_tensors": [
+        "serving_default_image:0",
+        "arith.constant",
+        "tfl.pseudo_qconst",
+        "tfl.pseudo_qconst1",
+        "tfl.pseudo_qconst2",
+        "tfl.pseudo_qconst3",
+        "tfl.pseudo_qconst4",
+        "tfl.pseudo_qconst5",
+        "tfl.pseudo_qconst6",
+        "tfl.pseudo_qconst7",
+        "tfl.pseudo_qconst8",
+        "tfl.pseudo_qconst9",
+        "tfl.pseudo_qconst10",
+        "tfl.pseudo_qconst11",
+        "tfl.pseudo_qconst12",
+        "tfl.pseudo_qconst13",
+        "tfl.pseudo_qconst14",
+        "tfl.pseudo_qconst15"
+      ],
+      "output_tensors": [
+        "gesture_static_cnn_v1_1/class_1/MatMul;gesture_static_cnn_v1_1/class_1/BiasAdd"
+      ],
+      "input_shapes": [
+        [
+          1,
+          96,
+          96,
+          3
+        ],
+        [
+          2
+        ],
+        [
+          6
+        ],
+        [
+          6,
+          96
+        ],
+        [
+          96
+        ],
+        [
+          96,
+          1,
+          1,
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64,
+          4,
+          4,
+          64
+        ],
+        [
+          64
+        ],
+        [
+          64,
+          4,
+          4,
+          32
+        ],
+        [
+          32
+        ],
+        [
+          32,
+          4,
+          4,
+          32
+        ],
+        [
+          32
+        ],
+        [
+          32,
+          4,
+          4,
+          16
+        ],
+        [
+          16
+        ],
+        [
+          16,
+          4,
+          4,
+          16
+        ],
+        [
+          16
+        ],
+        [
+          16,
+          4,
+          4,
+          3
+        ]
+      ],
+      "output_shapes": [
+        [
+          1,
+          6
+        ]
+      ],
+      "estimated_macs": null
+    }
+  ],
+  "conv2d_total_macs": 158957568,
+  "depthwise_conv2d_total_macs": 0,
+  "total_estimated_macs": 158957568
+}

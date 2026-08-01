@@ -1,0 +1,127 @@
+{
+  "data_dir": "/home/steveguo/coralnpu-gesture/gesture_project/datasets/processed/hagrid_sample_static_6cls",
+  "out_dir": "/home/steveguo/coralnpu-gesture/gesture_project/datasets/processed/hagrid_sample_static_6cls_handcrop_mp_20260731",
+  "crop_scale": 1.9,
+  "fallback_mode": "center_crop",
+  "min_detection_confidence": 0.45,
+  "min_tracking_confidence": 0.45,
+  "splits": {
+    "train": {
+      "num_samples": 10500,
+      "num_detected": 9625,
+      "detection_rate": 0.9166666666666666,
+      "mean_detected_crop_size_px": 131.55958441558442,
+      "median_detected_crop_size_px": 120.0,
+      "per_class": {
+        "fist": {
+          "total": 1750,
+          "detected": 1592,
+          "detection_rate": 0.9097142857142857
+        },
+        "like": {
+          "total": 1750,
+          "detected": 1550,
+          "detection_rate": 0.8857142857142857
+        },
+        "ok": {
+          "total": 1750,
+          "detected": 1636,
+          "detection_rate": 0.9348571428571428
+        },
+        "palm": {
+          "total": 1750,
+          "detected": 1639,
+          "detection_rate": 0.9365714285714286
+        },
+        "peace": {
+          "total": 1750,
+          "detected": 1596,
+          "detection_rate": 0.912
+        },
+        "stop": {
+          "total": 1750,
+          "detected": 1612,
+          "detection_rate": 0.9211428571428572
+        }
+      }
+    },
+    "val": {
+      "num_samples": 2250,
+      "num_detected": 2070,
+      "detection_rate": 0.92,
+      "mean_detected_crop_size_px": 131.89227053140095,
+      "median_detected_crop_size_px": 120.0,
+      "per_class": {
+        "fist": {
+          "total": 375,
+          "detected": 339,
+          "detection_rate": 0.904
+        },
+        "like": {
+          "total": 375,
+          "detected": 332,
+          "detection_rate": 0.8853333333333333
+        },
+        "ok": {
+          "total": 375,
+          "detected": 345,
+          "detection_rate": 0.92
+        },
+        "palm": {
+          "total": 375,
+          "detected": 355,
+          "detection_rate": 0.9466666666666667
+        },
+        "peace": {
+          "total": 375,
+          "detected": 346,
+          "detection_rate": 0.9226666666666666
+        },
+        "stop": {
+          "total": 375,
+          "detected": 353,
+          "detection_rate": 0.9413333333333334
+        }
+      }
+    },
+    "test": {
+      "num_samples": 2250,
+      "num_detected": 2061,
+      "detection_rate": 0.916,
+      "mean_detected_crop_size_px": 133.38282387190685,
+      "median_detected_crop_size_px": 123.0,
+      "per_class": {
+        "fist": {
+          "total": 375,
+          "detected": 332,
+          "detection_rate": 0.8853333333333333
+        },
+        "like": {
+          "total": 375,
+          "detected": 328,
+          "detection_rate": 0.8746666666666667
+        },
+        "ok": {
+          "total": 375,
+          "detected": 347,
+          "detection_rate": 0.9253333333333333
+        },
+        "palm": {
+          "total": 375,
+          "detected": 356,
+          "detection_rate": 0.9493333333333334
+        },
+        "peace": {
+          "total": 375,
+          "detected": 340,
+          "detection_rate": 0.9066666666666666
+        },
+        "stop": {
+          "total": 375,
+          "detected": 358,
+          "detection_rate": 0.9546666666666667
+        }
+      }
+    }
+  }
+}

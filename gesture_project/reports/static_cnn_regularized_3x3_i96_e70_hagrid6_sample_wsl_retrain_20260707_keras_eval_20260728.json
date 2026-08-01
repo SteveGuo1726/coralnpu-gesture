@@ -1,0 +1,71 @@
+{
+  "model": "/home/steveguo/coralnpu-gesture/gesture_project/models/static_cnn_regularized_3x3_i96_e70_hagrid6_sample_wsl_retrain_20260707/model.keras",
+  "num_samples": 2250,
+  "accuracy": 0.7924444444444444,
+  "correct": 1783,
+  "labels": [
+    "fist",
+    "like",
+    "ok",
+    "palm",
+    "peace",
+    "stop"
+  ],
+  "confusion_matrix": [
+    [
+      299,
+      46,
+      17,
+      3,
+      3,
+      7
+    ],
+    [
+      25,
+      330,
+      8,
+      2,
+      5,
+      5
+    ],
+    [
+      16,
+      28,
+      265,
+      33,
+      26,
+      7
+    ],
+    [
+      13,
+      14,
+      38,
+      300,
+      2,
+      8
+    ],
+    [
+      11,
+      30,
+      37,
+      2,
+      289,
+      6
+    ],
+    [
+      15,
+      27,
+      10,
+      18,
+      5,
+      300
+    ]
+  ],
+  "input_shape": [
+    null,
+    96,
+    96,
+    3
+  ],
+  "params": 79574
+}

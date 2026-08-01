@@ -1,0 +1,114 @@
+{
+  "title": "CoralNPU 适配优先候选排序（2026-07-30）",
+  "candidates": [
+    {
+      "name": "static_cnn_regularized_3x3_i96_e70_hagrid6_sample",
+      "type": "measured_tflite",
+      "task": "static_image",
+      "family": "plain_spatial_cnn",
+      "keras_eval": "../reports/static_cnn_regularized_3x3_i96_e70_hagrid6_sample_keras_eval.json",
+      "tflite_eval": "../reports/static_cnn_regularized_3x3_i96_e70_hagrid6_sample_tflite_eval.json",
+      "tflite_ops": "../reports/static_cnn_regularized_3x3_i96_e70_hagrid6_sample_tflite_ops.json",
+      "npucycles": "../reports/static_cnn_regularized_3x3_i96_e70_hagrid6_sample_npucycles.json",
+      "notes": "当前精度与功能保底线；周期文件属于项目侧估算，不能当作官方模拟器实测加速。"
+    },
+    {
+      "name": "static_cnn_regularized_plain_k4_i96_e40_hagrid6_sample_20260730",
+      "type": "measured_tflite",
+      "task": "static_image",
+      "family": "plain_spatial_cnn",
+      "keras_eval": "../reports/static_cnn_regularized_plain_k4_i96_e40_hagrid6_sample_20260730_keras_eval.json",
+      "tflite_eval": "../reports/static_cnn_regularized_plain_k4_i96_e40_hagrid6_sample_20260730_tflite_eval.json",
+      "tflite_ops": "../reports/static_cnn_regularized_plain_k4_i96_e40_hagrid6_sample_20260730_tflite_ops.json",
+      "fit_profile": {
+        "conv2d_4x4": 0.92,
+        "conv2d_1x1": 0.08
+      },
+      "align16_ratio": 0.92,
+      "align8_ratio": 1.0,
+      "notes": "4x4 主体结构已实测，但当前静态手势精度过低，只保留为负样本和结构对照，不建议升格为主线。"
+    },
+    {
+      "name": "mobilenet_v2_a050_96_imagenet_frozen_finetune_hagrid6_sample",
+      "type": "measured_tflite",
+      "task": "static_image",
+      "family": "mobilenetv2",
+      "keras_eval": "../reports/mobilenet_v2_a050_96_imagenet_frozen_finetune_hagrid6_sample_keras_eval.json",
+      "tflite_eval": "../reports/mobilenet_v2_a050_96_imagenet_frozen_finetune_hagrid6_sample_tflite_eval.json",
+      "tflite_ops": "../reports/mobilenet_v2_a050_96_imagenet_frozen_finetune_hagrid6_sample_tflite_ops.json",
+      "npucycles": "../reports/mobilenet_v2_a050_96_imagenet_frozen_finetune_hagrid6_sample_npucycles.json",
+      "notes": "公开常见轻量结构对照线；适配深度可分离路径，但当前任务精度显著偏低。"
+    },
+    {
+      "name": "landmark_static_mlp_mp21_full_20260728",
+      "type": "measured_accuracy_only",
+      "task": "static_landmark",
+      "family": "landmark_mlp",
+      "accuracy_report": "../reports/landmark_static_mlp_mp21_full_20260728_eval.json",
+      "fit_profile": {
+        "dense": 1.0
+      },
+      "notes": "关键点单独分类线；不依赖大卷积，适合做低算力与动态路线前置参考。"
+    },
+    {
+      "name": "static_cnn_landmark_fusion_20260728",
+      "type": "measured_accuracy_only",
+      "task": "static_fusion",
+      "family": "late_fusion",
+      "accuracy_report": "../reports/static_cnn_landmark_fusion_20260728.json",
+      "fit_profile": {
+        "host_fusion": 1.0
+      },
+      "notes": "当前最高精度参考线，但不是纯 CoralNPU 直跑结构。"
+    },
+    {
+      "name": "prospective_plain_4x4_cnn_i96",
+      "type": "prospective",
+      "task": "static_image",
+      "family": "plain_spatial_cnn",
+      "fit_profile": {
+        "conv2d_4x4": 0.92,
+        "conv2d_1x1": 0.08
+      },
+      "align16_ratio": 0.92,
+      "align8_ratio": 1.0,
+      "notes": "直接对准当前官方源码已明确存在的 4x4 Conv2D 优化路径，优先探查任务精度是否可接受。"
+    },
+    {
+      "name": "prospective_hybrid_3x3_stem_4x4_body_i96",
+      "type": "prospective",
+      "task": "static_image",
+      "family": "hybrid_spatial_cnn",
+      "fit_profile": {
+        "conv2d_4x4": 0.72,
+        "conv2d_3x3": 0.18,
+        "conv2d_1x1": 0.10
+      },
+      "align16_ratio": 0.88,
+      "align8_ratio": 1.0,
+      "notes": "保留 3x3 局部纹理入口，同时把主体 MAC 压到 4x4 路径，更适合做中间折中。"
+    },
+    {
+      "name": "prospective_dynamic_landmark_gru_16f",
+      "type": "prospective",
+      "task": "dynamic_landmark",
+      "family": "landmark_sequence",
+      "fit_profile": {
+        "recurrent": 0.70,
+        "dense": 0.30
+      },
+      "notes": "动态手势优先候选之一，先追求时序判别力和低算力部署。"
+    },
+    {
+      "name": "prospective_dynamic_landmark_tcn_16f",
+      "type": "prospective",
+      "task": "dynamic_landmark",
+      "family": "landmark_sequence",
+      "fit_profile": {
+        "conv1d_3": 0.70,
+        "dense": 0.30
+      },
+      "notes": "动态手势另一条候选，卷积时序路径更规则，后续更方便和 NPU 卷积思路对照。"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "image_model": "/home/steveguo/coralnpu-gesture/gesture_project/models/repvgg_3x3_i96_hagrid6_tuned_20260731/model.keras",
+  "landmark_model": "/home/steveguo/coralnpu-gesture/gesture_project/models/landmark_static_mlp_mp21_geom_tuned_20260731/model.keras",
+  "landmark_feature_mode": "coords_bones_geom_detect",
+  "image_weight": 0.26,
+  "landmark_weight": 0.74,
+  "val_accuracy": 0.9426666666666667,
+  "test_accuracy": 0.9462222222222222,
+  "image_val_accuracy": 0.8928888888888888,
+  "image_test_accuracy": 0.8946666666666667,
+  "landmark_val_accuracy": 0.8782222222222222,
+  "landmark_test_accuracy": 0.8724444444444445
+}

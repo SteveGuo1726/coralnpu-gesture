@@ -1,0 +1,34 @@
+{
+  "candidates": [
+    {
+      "hidden": 0,
+      "val_accuracy": 0.9266666769981384,
+      "test_accuracy": 0.9346666932106018
+    },
+    {
+      "hidden": 8,
+      "val_accuracy": 0.9315555691719055,
+      "test_accuracy": 0.9386666417121887
+    },
+    {
+      "hidden": 16,
+      "val_accuracy": 0.9311110973358154,
+      "test_accuracy": 0.9359999895095825
+    },
+    {
+      "hidden": 32,
+      "val_accuracy": 0.9297778010368347,
+      "test_accuracy": 0.9377777576446533
+    },
+    {
+      "hidden": 64,
+      "val_accuracy": 0.9324444532394409,
+      "test_accuracy": 0.9386666417121887
+    }
+  ],
+  "best": {
+    "hidden": 64,
+    "val_accuracy": 0.9324444532394409,
+    "test_accuracy": 0.9386666417121887
+  }
+}

@@ -1,0 +1,127 @@
+{
+  "data_dir": "/home/steveguo/coralnpu-gesture/gesture_project/datasets/processed/hagrid_sample_static_6cls",
+  "max_per_class": 0,
+  "min_detection_confidence": 0.5,
+  "min_tracking_confidence": 0.5,
+  "splits": {
+    "train": {
+      "num_samples": 10500,
+      "num_detected": 9575,
+      "detection_rate": 0.9119047619047619,
+      "per_class": {
+        "fist": {
+          "total": 1750,
+          "detected": 1581,
+          "detection_rate": 0.9034285714285715
+        },
+        "like": {
+          "total": 1750,
+          "detected": 1542,
+          "detection_rate": 0.8811428571428571
+        },
+        "ok": {
+          "total": 1750,
+          "detected": 1626,
+          "detection_rate": 0.9291428571428572
+        },
+        "palm": {
+          "total": 1750,
+          "detected": 1634,
+          "detection_rate": 0.9337142857142857
+        },
+        "peace": {
+          "total": 1750,
+          "detected": 1588,
+          "detection_rate": 0.9074285714285715
+        },
+        "stop": {
+          "total": 1750,
+          "detected": 1604,
+          "detection_rate": 0.9165714285714286
+        }
+      }
+    },
+    "val": {
+      "num_samples": 2250,
+      "num_detected": 2062,
+      "detection_rate": 0.9164444444444444,
+      "per_class": {
+        "fist": {
+          "total": 375,
+          "detected": 339,
+          "detection_rate": 0.904
+        },
+        "like": {
+          "total": 375,
+          "detected": 331,
+          "detection_rate": 0.8826666666666667
+        },
+        "ok": {
+          "total": 375,
+          "detected": 343,
+          "detection_rate": 0.9146666666666666
+        },
+        "palm": {
+          "total": 375,
+          "detected": 354,
+          "detection_rate": 0.944
+        },
+        "peace": {
+          "total": 375,
+          "detected": 344,
+          "detection_rate": 0.9173333333333333
+        },
+        "stop": {
+          "total": 375,
+          "detected": 351,
+          "detection_rate": 0.936
+        }
+      }
+    },
+    "test": {
+      "num_samples": 2250,
+      "num_detected": 2054,
+      "detection_rate": 0.9128888888888889,
+      "per_class": {
+        "fist": {
+          "total": 375,
+          "detected": 332,
+          "detection_rate": 0.8853333333333333
+        },
+        "like": {
+          "total": 375,
+          "detected": 327,
+          "detection_rate": 0.872
+        },
+        "ok": {
+          "total": 375,
+          "detected": 346,
+          "detection_rate": 0.9226666666666666
+        },
+        "palm": {
+          "total": 375,
+          "detected": 354,
+          "detection_rate": 0.944
+        },
+        "peace": {
+          "total": 375,
+          "detected": 340,
+          "detection_rate": 0.9066666666666666
+        },
+        "stop": {
+          "total": 375,
+          "detected": 355,
+          "detection_rate": 0.9466666666666667
+        }
+      }
+    }
+  },
+  "class_names": [
+    "fist",
+    "like",
+    "ok",
+    "palm",
+    "peace",
+    "stop"
+  ]
+}

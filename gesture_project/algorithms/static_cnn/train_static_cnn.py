@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 import numpy as np
@@ -21,6 +22,63 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--learning_rate", type=float, default=1e-3)
+    parser.add_argument(
+        "--optimizer",
+        choices=["adam", "adamw"],
+        default="adam",
+        help="Training optimizer. AdamW uses decoupled weight decay instead of kernel L2.",
+    )
+    parser.add_argument(
+        "--lr_schedule",
+        choices=["constant", "cosine"],
+        default="constant",
+        help="Learning-rate schedule. cosine enables epoch-wise warmup + cosine decay.",
+    )
+    parser.add_argument(
+        "--warmup_epochs",
+        type=int,
+        default=0,
+        help="Warmup epochs used by the cosine schedule.",
+    )
+    parser.add_argument(
+        "--min_learning_rate",
+        type=float,
+        default=1e-5,
+        help="Minimum learning rate reached by the cosine schedule.",
+    )
+    parser.add_argument(
+        "--grad_clipnorm",
+        type=float,
+        default=0.0,
+        help="Global gradient clip norm. Set 0 to disable clipping.",
+    )
+    parser.add_argument(
+        "--early_stop_patience",
+        type=int,
+        default=8,
+        help="Early-stopping patience measured in epochs.",
+    )
+    parser.add_argument(
+        "--cache_mode",
+        choices=["none", "eval", "all"],
+        default="eval",
+        help=(
+            "Dataset caching mode. 'eval' caches validation/test only, "
+            "'all' caches train/val/test."
+        ),
+    )
+    parser.add_argument(
+        "--mixup_alpha",
+        type=float,
+        default=0.0,
+        help="MixUp beta distribution alpha. Set 0 to disable MixUp.",
+    )
+    parser.add_argument(
+        "--mixup_probability",
+        type=float,
+        default=1.0,
+        help="Probability of applying MixUp to a training batch.",
+    )
     parser.add_argument("--seed", type=int, default=20260601)
     parser.add_argument(
         "--require_gpu",
@@ -29,12 +87,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--variant",
-        choices=["v1", "regularized_3x3", "residual_3x3", "repvgg_3x3"],
+        choices=["v1", "regularized_3x3", "regularized_plain", "residual_3x3", "repvgg_3x3"],
         default="v1",
         help=(
             "v1 keeps the original baseline. regularized_3x3 adds training-only augmentation "
-            "and L2. residual_3x3 keeps a plain 3x3-heavy residual trunk. repvgg_3x3 uses "
-            "training-time multi-branch blocks intended to export back to plain 3x3 convs."
+            "and L2. regularized_plain keeps the same plain CNN training path but allows "
+            "kernel-size sweeps through --body_kernel_size. residual_3x3 keeps a plain "
+            "3x3-heavy residual trunk. repvgg_3x3 uses training-time multi-branch blocks "
+            "intended to export back to plain 3x3 convs."
         ),
     )
     parser.add_argument("--dropout", type=float, default=0.2)
@@ -50,6 +110,34 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=96,
         help="Channels used by the tail stage or 1x1 head depending on variant.",
+    )
+    parser.add_argument(
+        "--body_kernel_size",
+        type=int,
+        choices=[3, 4],
+        default=3,
+        help=(
+            "Kernel size used by the plain CNN body blocks. "
+            "Set to 4 to probe official Conv2D 4x4-friendly candidates."
+        ),
+    )
+    parser.add_argument(
+        "--body_kernel_schedule",
+        default="",
+        help=(
+            "Optional comma-separated kernel schedule for the three body blocks. "
+            "Example: 3,4,4 keeps the first block at 3x3 and the later blocks at 4x4."
+        ),
+    )
+    parser.add_argument(
+        "--head_kernel_size",
+        type=int,
+        choices=[1, 3, 4],
+        default=1,
+        help=(
+            "Kernel size used by the plain static CNN head conv. "
+            "Use 3 or 4 to keep the deployed network spatial-conv-heavy."
+        ),
     )
     parser.add_argument(
         "--label_smoothing",
@@ -113,8 +201,8 @@ def configure_runtime(tf, require_gpu: bool):
     return gpus
 
 
-def kernel_regularizer(tf, weight_decay: float):
-    if weight_decay <= 0:
+def kernel_regularizer(tf, weight_decay: float, optimizer_name: str):
+    if weight_decay <= 0 or optimizer_name == "adamw":
         return None
     return tf.keras.regularizers.L2(weight_decay)
 
@@ -123,8 +211,8 @@ def scaled_channels(value: int, width_multiplier: float) -> int:
     return max(8, int(round(value * width_multiplier / 8.0) * 8))
 
 
-def build_loss(tf, label_smoothing: float):
-    if label_smoothing <= 0:
+def build_loss(tf, *, use_soft_labels: bool, label_smoothing: float):
+    if not use_soft_labels:
         return tf.keras.losses.SparseCategoricalCrossentropy()
     return tf.keras.losses.CategoricalCrossentropy(label_smoothing=label_smoothing)
 
@@ -136,6 +224,65 @@ def maybe_one_hot(tf, dataset, num_classes: int, enabled: bool):
         lambda image, label: (image, tf.one_hot(label, depth=num_classes)),
         num_parallel_calls=tf.data.AUTOTUNE,
     )
+
+
+def apply_mixup(tf, dataset, alpha: float, probability: float):
+    if alpha <= 0 or probability <= 0:
+        return dataset
+
+    def mix_batch(images, labels):
+        def do_mix():
+            batch_size = tf.shape(images)[0]
+            shuffled_indices = tf.random.shuffle(tf.range(batch_size))
+            mixed_images_b = tf.gather(images, shuffled_indices)
+            mixed_labels_b = tf.gather(labels, shuffled_indices)
+
+            gamma_a = tf.random.gamma([batch_size], alpha=alpha)
+            gamma_b = tf.random.gamma([batch_size], alpha=alpha)
+            lam = gamma_a / (gamma_a + gamma_b)
+            lam_images = tf.reshape(lam, (-1, 1, 1, 1))
+            lam_labels = tf.reshape(lam, (-1, 1))
+            images_f = tf.cast(images, tf.float32)
+            labels_f = tf.cast(labels, tf.float32)
+            return (
+                lam_images * images_f + (1.0 - lam_images) * tf.cast(mixed_images_b, tf.float32),
+                lam_labels * labels_f + (1.0 - lam_labels) * tf.cast(mixed_labels_b, tf.float32),
+            )
+
+        if probability >= 1.0:
+            return do_mix()
+        return tf.cond(tf.random.uniform([]) <= probability, do_mix, lambda: (images, labels))
+
+    return dataset.map(mix_batch, num_parallel_calls=tf.data.AUTOTUNE)
+
+
+def maybe_cache_dataset(dataset, enabled: bool):
+    if dataset is None or not enabled:
+        return dataset
+    return dataset.cache()
+
+
+def cosine_epoch_lr(epoch: int, total_epochs: int, base_lr: float, min_lr: float, warmup_epochs: int) -> float:
+    if warmup_epochs > 0 and epoch < warmup_epochs:
+        return base_lr * float(epoch + 1) / float(max(1, warmup_epochs))
+    if total_epochs <= warmup_epochs:
+        return base_lr
+    progress = float(epoch - warmup_epochs) / float(max(1, total_epochs - warmup_epochs - 1))
+    progress = min(max(progress, 0.0), 1.0)
+    cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+    return min_lr + (base_lr - min_lr) * cosine
+
+
+def build_optimizer(tf, args: argparse.Namespace):
+    optimizer_kwargs = {
+        "learning_rate": args.learning_rate,
+    }
+    if args.grad_clipnorm > 0:
+        optimizer_kwargs["global_clipnorm"] = args.grad_clipnorm
+    if args.optimizer == "adamw":
+        optimizer_kwargs["weight_decay"] = args.weight_decay
+        return tf.keras.optimizers.AdamW(**optimizer_kwargs)
+    return tf.keras.optimizers.Adam(**optimizer_kwargs)
 
 
 def add_training_augmentation(tf, x, mode: str):
@@ -192,6 +339,36 @@ def conv_bn_relu(
     )(x)
     x = tf.keras.layers.BatchNormalization(name=f"{name}_bn")(x)
     return tf.keras.layers.ReLU(name=f"{name}_relu")(x)
+
+
+def kernel_label(kernel_size: int) -> str:
+    return f"{kernel_size}x{kernel_size}"
+
+
+def parse_body_kernel_schedule(args: argparse.Namespace) -> list[int]:
+    if not args.body_kernel_schedule.strip():
+        return [args.body_kernel_size] * 3
+
+    parts = [part.strip() for part in args.body_kernel_schedule.split(",") if part.strip()]
+    if len(parts) != 3:
+        raise SystemExit(
+            "--body_kernel_schedule must contain exactly three comma-separated values, "
+            "one for each body block."
+        )
+
+    schedule: list[int] = []
+    for part in parts:
+        try:
+            kernel_size = int(part)
+        except ValueError as exc:
+            raise SystemExit(f"Invalid kernel size in --body_kernel_schedule: {part}") from exc
+        if kernel_size not in {3, 4}:
+            raise SystemExit(
+                "--body_kernel_schedule currently only supports 3 and 4 so the mixed "
+                "candidate stays inside the same official-fit search space."
+            )
+        schedule.append(kernel_size)
+    return schedule
 
 
 def residual_3x3_unit(tf, x, filters: int, regularizer, stage: int, unit: int):
@@ -287,7 +464,7 @@ def build_residual_3x3_model(tf, args: argparse.Namespace, num_classes: int):
     inputs = tf.keras.Input(shape=(image_size, image_size, 3), name="image")
     x = add_training_augmentation(tf, inputs, args.augmentation_mode)
     x = tf.keras.layers.Rescaling(1.0 / 255.0, name="rescale")(x)
-    regularizer = kernel_regularizer(tf, args.weight_decay)
+    regularizer = kernel_regularizer(tf, args.weight_decay, args.optimizer)
 
     stem_filters = scaled_channels(16, args.width_multiplier)
     x = conv_bn_relu(tf, x, stem_filters, 3, regularizer, "stem")
@@ -315,7 +492,7 @@ def build_repvgg_3x3_model(tf, args: argparse.Namespace, num_classes: int):
     inputs = tf.keras.Input(shape=(image_size, image_size, 3), name="image")
     x = add_training_augmentation(tf, inputs, args.augmentation_mode)
     x = tf.keras.layers.Rescaling(1.0 / 255.0, name="rescale")(x)
-    regularizer = kernel_regularizer(tf, args.weight_decay)
+    regularizer = kernel_regularizer(tf, args.weight_decay, args.optimizer)
 
     stem_filters = scaled_channels(16, args.width_multiplier)
     x = conv_bn_relu(tf, x, stem_filters, 3, regularizer, "stem")
@@ -346,32 +523,35 @@ def build_model(tf, args: argparse.Namespace, num_classes: int):
     image_size = args.image_size
     inputs = tf.keras.Input(shape=(image_size, image_size, 3), name="image")
     x = inputs
-    if args.variant in {"regularized_3x3", "residual_3x3", "repvgg_3x3"}:
+    if args.variant in {"regularized_3x3", "regularized_plain", "residual_3x3", "repvgg_3x3"}:
         x = add_training_augmentation(tf, x, args.augmentation_mode)
     x = tf.keras.layers.Rescaling(1.0 / 255.0, name="rescale")(x)
-    regularizer = kernel_regularizer(tf, args.weight_decay)
+    regularizer = kernel_regularizer(tf, args.weight_decay, args.optimizer)
+    body_kernel_sizes = parse_body_kernel_schedule(args)
 
-    # Keep the network intentionally 3x3-heavy so hardware optimization impact
-    # can be estimated from Conv2D layer shapes.
+    # Keep the network intentionally plain-conv-heavy so kernel sweeps can be
+    # compared with the same training recipe and channel schedule.
     for block, base_filters in enumerate([16, 32, 64], start=1):
         filters = scaled_channels(base_filters, args.width_multiplier)
+        kernel_size = body_kernel_sizes[block - 1]
+        body_kernel_label = kernel_label(kernel_size)
         x = tf.keras.layers.Conv2D(
             filters,
-            kernel_size=3,
+            kernel_size=kernel_size,
             padding="same",
             use_bias=False,
             kernel_regularizer=regularizer,
-            name=f"conv{block}_3x3_a",
+            name=f"conv{block}_{body_kernel_label}_a",
         )(x)
         x = tf.keras.layers.BatchNormalization(name=f"bn{block}_a")(x)
         x = tf.keras.layers.ReLU(name=f"relu{block}_a")(x)
         x = tf.keras.layers.Conv2D(
             filters,
-            kernel_size=3,
+            kernel_size=kernel_size,
             padding="same",
             use_bias=False,
             kernel_regularizer=regularizer,
-            name=f"conv{block}_3x3_b",
+            name=f"conv{block}_{body_kernel_label}_b",
         )(x)
         x = tf.keras.layers.BatchNormalization(name=f"bn{block}_b")(x)
         x = tf.keras.layers.ReLU(name=f"relu{block}_b")(x)
@@ -379,11 +559,11 @@ def build_model(tf, args: argparse.Namespace, num_classes: int):
 
     x = tf.keras.layers.Conv2D(
         args.head_channels,
-        kernel_size=1,
+        kernel_size=args.head_kernel_size,
         padding="same",
         activation="relu",
         kernel_regularizer=regularizer,
-        name="conv_head_1x1",
+        name=f"conv_head_{args.head_kernel_size}x{args.head_kernel_size}",
     )(x)
     x = tf.keras.layers.GlobalAveragePooling2D(name="global_avg_pool")(x)
     x = tf.keras.layers.Dropout(args.dropout, name="dropout")(x)
@@ -426,11 +606,6 @@ def load_datasets(tf, data_dir: Path, image_size: int, batch_size: int, seed: in
             shuffle=False,
         )
 
-    autotune = tf.data.AUTOTUNE
-    train_ds = train_ds.prefetch(autotune)
-    val_ds = val_ds.prefetch(autotune)
-    if test_ds is not None:
-        test_ds = test_ds.prefetch(autotune)
     return train_ds, val_ds, test_ds, class_names
 
 
@@ -477,6 +652,12 @@ def main() -> None:
     tf = require_tensorflow()
     configure_runtime(tf, args.require_gpu)
     tf.keras.utils.set_random_seed(args.seed)
+    if args.lr_schedule != "constant" and args.reduce_lr_on_plateau:
+        raise SystemExit("Cannot combine --lr_schedule cosine with --reduce_lr_on_plateau.")
+    if args.min_learning_rate > args.learning_rate:
+        raise SystemExit("--min_learning_rate must be <= --learning_rate.")
+    if not 0.0 <= args.mixup_probability <= 1.0:
+        raise SystemExit("--mixup_probability must be between 0 and 1.")
 
     data_dir = Path(args.data_dir).resolve()
     out_dir = Path(args.out_dir).resolve()
@@ -485,25 +666,54 @@ def main() -> None:
     train_ds, val_ds, test_ds, class_names = load_datasets(
         tf, data_dir, args.image_size, args.batch_size, args.seed
     )
-    use_one_hot = args.label_smoothing > 0
-    train_ds = maybe_one_hot(tf, train_ds, len(class_names), use_one_hot)
-    val_ds = maybe_one_hot(tf, val_ds, len(class_names), use_one_hot)
+    train_ds = maybe_cache_dataset(train_ds, args.cache_mode == "all")
+    val_ds = maybe_cache_dataset(val_ds, args.cache_mode in {"eval", "all"})
     if test_ds is not None:
-        test_ds = maybe_one_hot(tf, test_ds, len(class_names), use_one_hot)
+        test_ds = maybe_cache_dataset(test_ds, args.cache_mode in {"eval", "all"})
+
+    use_soft_labels = args.label_smoothing > 0 or args.mixup_alpha > 0
+    train_ds = maybe_one_hot(tf, train_ds, len(class_names), use_soft_labels)
+    val_ds = maybe_one_hot(tf, val_ds, len(class_names), use_soft_labels)
+    if test_ds is not None:
+        test_ds = maybe_one_hot(tf, test_ds, len(class_names), use_soft_labels)
+    train_ds = apply_mixup(tf, train_ds, args.mixup_alpha, args.mixup_probability)
+
+    autotune = tf.data.AUTOTUNE
+    train_ds = train_ds.prefetch(autotune)
+    val_ds = val_ds.prefetch(autotune)
+    if test_ds is not None:
+        test_ds = test_ds.prefetch(autotune)
+
     model = build_model(tf, args, len(class_names))
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=args.learning_rate),
-        loss=build_loss(tf, args.label_smoothing),
+        optimizer=build_optimizer(tf, args),
+        loss=build_loss(tf, use_soft_labels=use_soft_labels, label_smoothing=args.label_smoothing),
         metrics=["accuracy"],
     )
 
-    callbacks = [
+    callbacks = []
+    if args.lr_schedule == "cosine":
+        callbacks.append(
+            tf.keras.callbacks.LearningRateScheduler(
+                lambda epoch, _lr: cosine_epoch_lr(
+                    epoch=epoch,
+                    total_epochs=args.epochs,
+                    base_lr=args.learning_rate,
+                    min_lr=args.min_learning_rate,
+                    warmup_epochs=args.warmup_epochs,
+                ),
+                verbose=1,
+            )
+        )
+    callbacks += [
         tf.keras.callbacks.ModelCheckpoint(
             out_dir / "model.keras", monitor="val_accuracy", save_best_only=True
         ),
         tf.keras.callbacks.CSVLogger(out_dir / "history.csv"),
         tf.keras.callbacks.EarlyStopping(
-            monitor="val_accuracy", patience=8, restore_best_weights=True
+            monitor="val_accuracy",
+            patience=args.early_stop_patience,
+            restore_best_weights=True,
         ),
     ]
     if args.reduce_lr_on_plateau:
@@ -537,16 +747,31 @@ def main() -> None:
         "batch_size": args.batch_size,
         "epochs_requested": args.epochs,
         "epochs_ran": len(history.history.get("loss", [])),
+        "best_epoch": int(np.argmax(history.history["val_accuracy"]) + 1),
+        "best_val_accuracy": float(np.max(history.history["val_accuracy"])),
         "learning_rate": args.learning_rate,
+        "optimizer": args.optimizer,
+        "lr_schedule": args.lr_schedule,
+        "warmup_epochs": args.warmup_epochs,
+        "min_learning_rate": args.min_learning_rate,
+        "grad_clipnorm": args.grad_clipnorm,
+        "early_stop_patience": args.early_stop_patience,
+        "cache_mode": args.cache_mode,
         "dropout": args.dropout,
         "weight_decay": args.weight_decay,
         "width_multiplier": args.width_multiplier,
+        "body_kernel_size": args.body_kernel_size,
+        "body_kernel_schedule": parse_body_kernel_schedule(args),
         "head_channels": args.head_channels,
+        "head_kernel_size": args.head_kernel_size,
         "label_smoothing": args.label_smoothing,
+        "mixup_alpha": args.mixup_alpha,
+        "mixup_probability": args.mixup_probability,
         "reduce_lr_on_plateau": args.reduce_lr_on_plateau,
         "augmentation_mode": args.augmentation_mode,
         "repvgg_branch_scale": args.repvgg_branch_scale,
         "repvgg_disable_identity": args.repvgg_disable_identity,
+        "params": int(model.count_params()),
         "classes": class_names,
         "final_train_accuracy": float(history.history["accuracy"][-1]),
         "final_val_accuracy": float(history.history["val_accuracy"][-1]),

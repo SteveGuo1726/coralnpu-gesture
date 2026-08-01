@@ -1,0 +1,10 @@
+{
+  "alpha_cnn": 0.42,
+  "alpha_landmark": 0.5800000000000001,
+  "val_accuracy": 0.9177777777777778,
+  "test_accuracy": 0.9222222222222223,
+  "cnn_val_accuracy": 0.7902222222222223,
+  "cnn_test_accuracy": 0.7924444444444444,
+  "landmark_val_accuracy": 0.8751111111111111,
+  "landmark_test_accuracy": 0.8724444444444445
+}

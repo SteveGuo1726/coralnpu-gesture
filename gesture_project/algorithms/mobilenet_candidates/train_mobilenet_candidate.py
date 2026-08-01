@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 import numpy as np
@@ -21,7 +22,60 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--learning_rate", type=float, default=1e-3)
+    parser.add_argument(
+        "--optimizer",
+        choices=["adam", "adamw"],
+        default="adam",
+        help="Optimizer used in both frozen and fine-tune stages.",
+    )
+    parser.add_argument(
+        "--lr_schedule",
+        choices=["constant", "cosine"],
+        default="constant",
+        help="Learning-rate schedule. cosine enables warmup plus cosine decay per stage.",
+    )
+    parser.add_argument(
+        "--warmup_epochs",
+        type=int,
+        default=0,
+        help="Warmup epochs applied when --lr_schedule=cosine.",
+    )
+    parser.add_argument(
+        "--min_learning_rate",
+        type=float,
+        default=1e-5,
+        help="Minimum learning rate reached by cosine decay or plateau decay.",
+    )
+    parser.add_argument(
+        "--weight_decay",
+        type=float,
+        default=0.0,
+        help="Decoupled weight decay used when optimizer=adamw.",
+    )
+    parser.add_argument(
+        "--grad_clipnorm",
+        type=float,
+        default=0.0,
+        help="Global gradient clip norm. Set 0 to disable.",
+    )
+    parser.add_argument(
+        "--early_stop_patience",
+        type=int,
+        default=8,
+        help="Early-stopping patience measured in epochs.",
+    )
+    parser.add_argument(
+        "--cache_mode",
+        choices=["none", "eval", "all"],
+        default="eval",
+        help="Dataset caching mode. eval caches validation/test only, all caches train/val/test.",
+    )
     parser.add_argument("--seed", type=int, default=20260601)
+    parser.add_argument(
+        "--require_gpu",
+        action="store_true",
+        help="Exit if TensorFlow cannot see a GPU device.",
+    )
     parser.add_argument(
         "--arch",
         choices=[
@@ -34,7 +88,15 @@ def parse_args() -> argparse.Namespace:
         ],
         default="mobilenet_v1_small",
     )
-    parser.add_argument("--alpha", type=float, default=0.25)
+    parser.add_argument(
+        "--alpha",
+        type=float,
+        default=1.0,
+        help=(
+            "Width multiplier used by MobileNet-family backbones. "
+            "For pretrained Keras MobileNetV3, valid imagenet values are typically 0.75 or 1.0."
+        ),
+    )
     parser.add_argument(
         "--weights",
         choices=["none", "imagenet"],
@@ -71,9 +133,22 @@ def parse_args() -> argparse.Namespace:
         help="Enable ReduceLROnPlateau during training.",
     )
     parser.add_argument(
-        "--augment",
-        action="store_true",
-        help="Add training-only image augmentation before preprocessing.",
+        "--augmentation_mode",
+        choices=["full", "light", "none"],
+        default="full",
+        help="Training-time image augmentation intensity.",
+    )
+    parser.add_argument(
+        "--mixup_alpha",
+        type=float,
+        default=0.0,
+        help="MixUp beta distribution alpha. Set 0 to disable MixUp.",
+    )
+    parser.add_argument(
+        "--mixup_probability",
+        type=float,
+        default=1.0,
+        help="Probability of applying MixUp to a training batch.",
     )
     return parser.parse_args()
 
@@ -87,6 +162,31 @@ def require_tensorflow():
             "gesture_project/algorithms and run: pip install -r requirements.txt"
         ) from exc
     return tf
+
+
+def validate_args(args: argparse.Namespace) -> None:
+    if args.weights == "imagenet" and args.arch in {
+        "keras_mobilenet_v3_small",
+        "keras_mobilenet_v3_large",
+    }:
+        if args.alpha not in {0.75, 1.0}:
+            raise SystemExit(
+                "--arch keras_mobilenet_v3_* with --weights imagenet requires "
+                "--alpha 0.75 or 1.0."
+            )
+
+
+def configure_runtime(tf, require_gpu: bool):
+    gpus = tf.config.list_physical_devices("GPU")
+    for gpu in gpus:
+        try:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        except RuntimeError:
+            pass
+    print(f"TensorFlow GPUs: {gpus}")
+    if require_gpu and not gpus:
+        raise SystemExit("TensorFlow GPU is required for this run, but no GPU was detected.")
+    return gpus
 
 
 def scaled_channels(value: int, alpha: float) -> int:
@@ -114,7 +214,9 @@ def depthwise_block(tf, x, out_channels: int, stride: int, name: str):
     return tf.keras.layers.ReLU(max_value=6.0, name=f"{name}_pw_relu6")(x)
 
 
-def build_mobilenet_v1_small(tf, image_size: int, num_classes: int, alpha: float):
+def build_mobilenet_v1_small(
+    tf, image_size: int, num_classes: int, alpha: float, dropout: float
+):
     inputs = tf.keras.Input(shape=(image_size, image_size, 3), name="image")
     x = tf.keras.layers.Rescaling(1.0 / 255.0, name="rescale")(inputs)
     x = tf.keras.layers.Conv2D(
@@ -148,7 +250,7 @@ def build_mobilenet_v1_small(tf, image_size: int, num_classes: int, alpha: float
         )
 
     x = tf.keras.layers.GlobalAveragePooling2D(name="global_avg_pool")(x)
-    x = tf.keras.layers.Dropout(0.2, name="dropout")(x)
+    x = tf.keras.layers.Dropout(dropout, name="dropout")(x)
     outputs = tf.keras.layers.Dense(num_classes, activation="softmax", name="class")(x)
     return tf.keras.Model(
         inputs=inputs,
@@ -157,7 +259,25 @@ def build_mobilenet_v1_small(tf, image_size: int, num_classes: int, alpha: float
     )
 
 
-def add_training_augmentation(tf, x):
+def add_training_augmentation(tf, x, mode: str):
+    if mode == "none":
+        return x
+    if mode == "light":
+        x = tf.keras.layers.RandomTranslation(
+            height_factor=0.04,
+            width_factor=0.04,
+            fill_mode="nearest",
+            name="aug_translate",
+        )(x)
+        x = tf.keras.layers.RandomRotation(0.04, fill_mode="nearest", name="aug_rotate")(x)
+        x = tf.keras.layers.RandomZoom(
+            height_factor=(-0.06, 0.04),
+            width_factor=(-0.06, 0.04),
+            fill_mode="nearest",
+            name="aug_zoom",
+        )(x)
+        return tf.keras.layers.RandomContrast(0.08, name="aug_contrast")(x)
+
     x = tf.keras.layers.RandomTranslation(
         height_factor=0.08,
         width_factor=0.08,
@@ -174,8 +294,8 @@ def add_training_augmentation(tf, x):
     return tf.keras.layers.RandomContrast(0.15, name="aug_contrast")(x)
 
 
-def maybe_augment(tf, inputs, enabled: bool):
-    return add_training_augmentation(tf, inputs) if enabled else inputs
+def maybe_augment(tf, inputs, mode: str):
+    return add_training_augmentation(tf, inputs, mode)
 
 
 def weights_arg(weights: str):
@@ -193,7 +313,7 @@ def build_keras_mobilenet_v2(tf, args: argparse.Namespace, num_classes: int):
     )
     base_model.trainable = not args.freeze_backbone
     inputs = tf.keras.Input(shape=(image_size, image_size, 3), name="image")
-    x = maybe_augment(tf, inputs, args.augment)
+    x = maybe_augment(tf, inputs, args.augmentation_mode)
     x = tf.keras.layers.Rescaling(1.0 / 127.5, offset=-1.0, name="mobilenetv2_rescale")(x)
     # Keep BatchNorm in inference mode during transfer learning and fine-tuning.
     x = base_model(x, training=False)
@@ -215,7 +335,7 @@ def build_keras_mobilenet_v3(tf, args: argparse.Namespace, num_classes: int, *, 
     )
     base_model.trainable = not args.freeze_backbone
     inputs = tf.keras.Input(shape=(image_size, image_size, 3), name="image")
-    x = maybe_augment(tf, inputs, args.augment)
+    x = maybe_augment(tf, inputs, args.augmentation_mode)
     x = base_model(x, training=False)
     x = tf.keras.layers.Dropout(args.dropout, name="dropout")(x)
     outputs = tf.keras.layers.Dense(num_classes, activation="softmax", name="class")(x)
@@ -237,7 +357,7 @@ def build_keras_efficientnet(tf, args: argparse.Namespace, num_classes: int, *, 
     base_model = application(**kwargs)
     base_model.trainable = not args.freeze_backbone
     inputs = tf.keras.Input(shape=(image_size, image_size, 3), name="image")
-    x = maybe_augment(tf, inputs, args.augment)
+    x = maybe_augment(tf, inputs, args.augmentation_mode)
     x = base_model(x, training=False)
     x = tf.keras.layers.Dropout(args.dropout, name="dropout")(x)
     outputs = tf.keras.layers.Dense(num_classes, activation="softmax", name="class")(x)
@@ -289,6 +409,42 @@ def load_datasets(tf, data_dir: Path, image_size: int, batch_size: int, seed: in
     )
 
 
+def maybe_cache_dataset(dataset, enabled: bool):
+    if dataset is None or not enabled:
+        return dataset
+    return dataset.cache()
+
+
+def apply_mixup(tf, dataset, alpha: float, probability: float):
+    if alpha <= 0 or probability <= 0:
+        return dataset
+
+    def mix_batch(images, labels):
+        def do_mix():
+            batch_size = tf.shape(images)[0]
+            shuffled_indices = tf.random.shuffle(tf.range(batch_size))
+            mixed_images_b = tf.gather(images, shuffled_indices)
+            mixed_labels_b = tf.gather(labels, shuffled_indices)
+
+            gamma_a = tf.random.gamma([batch_size], alpha=alpha)
+            gamma_b = tf.random.gamma([batch_size], alpha=alpha)
+            lam = gamma_a / (gamma_a + gamma_b)
+            lam_images = tf.reshape(lam, (-1, 1, 1, 1))
+            lam_labels = tf.reshape(lam, (-1, 1))
+            images_f = tf.cast(images, tf.float32)
+            labels_f = tf.cast(labels, tf.float32)
+            return (
+                lam_images * images_f + (1.0 - lam_images) * tf.cast(mixed_images_b, tf.float32),
+                lam_labels * labels_f + (1.0 - lam_labels) * tf.cast(mixed_labels_b, tf.float32),
+            )
+
+        if probability >= 1.0:
+            return do_mix()
+        return tf.cond(tf.random.uniform([]) <= probability, do_mix, lambda: (images, labels))
+
+    return dataset.map(mix_batch, num_parallel_calls=tf.data.AUTOTUNE)
+
+
 def evaluate_model_per_image(model, data_dir: Path, labels: list[str]) -> dict | None:
     test_dir = data_dir / "test"
     if not test_dir.is_dir():
@@ -329,7 +485,9 @@ def evaluate_model_per_image(model, data_dir: Path, labels: list[str]) -> dict |
 
 def build_model(tf, args: argparse.Namespace, num_classes: int):
     if args.arch == "mobilenet_v1_small":
-        return build_mobilenet_v1_small(tf, args.image_size, num_classes, args.alpha), None
+        return build_mobilenet_v1_small(
+            tf, args.image_size, num_classes, args.alpha, args.dropout
+        ), None
     if args.arch == "keras_mobilenet_v2":
         return build_keras_mobilenet_v2(tf, args, num_classes)
     if args.arch == "keras_mobilenet_v3_small":
@@ -359,19 +517,87 @@ def maybe_one_hot(tf, dataset, num_classes: int, enabled: bool):
         num_parallel_calls=tf.data.AUTOTUNE,
     )
 
+def cosine_epoch_lr(epoch: int, total_epochs: int, base_lr: float, min_lr: float, warmup_epochs: int) -> float:
+    if warmup_epochs > 0 and epoch < warmup_epochs:
+        return base_lr * float(epoch + 1) / float(max(1, warmup_epochs))
+    if total_epochs <= warmup_epochs:
+        return base_lr
+    progress = float(epoch - warmup_epochs) / float(max(1, total_epochs - warmup_epochs - 1))
+    progress = min(max(progress, 0.0), 1.0)
+    cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+    return min_lr + (base_lr - min_lr) * cosine
 
-def compile_model(tf, model, learning_rate: float, label_smoothing: float) -> None:
+
+def build_optimizer(tf, args: argparse.Namespace, learning_rate: float):
+    optimizer_kwargs = {"learning_rate": learning_rate}
+    if args.grad_clipnorm > 0:
+        optimizer_kwargs["global_clipnorm"] = args.grad_clipnorm
+    if args.optimizer == "adamw":
+        optimizer_kwargs["weight_decay"] = args.weight_decay
+        return tf.keras.optimizers.AdamW(**optimizer_kwargs)
+    return tf.keras.optimizers.Adam(**optimizer_kwargs)
+
+
+def compile_model(tf, model, args: argparse.Namespace, learning_rate: float) -> None:
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
-        loss=build_loss(tf, label_smoothing),
+        optimizer=build_optimizer(tf, args, learning_rate),
+        loss=build_loss(tf, args.label_smoothing),
         metrics=["accuracy"],
     )
 
 
+def stage_callbacks(
+    tf,
+    args: argparse.Namespace,
+    out_dir: Path,
+    *,
+    append_history: bool,
+    patience: int,
+    stage_epochs: int,
+    base_learning_rate: float,
+):
+    callbacks = [
+        tf.keras.callbacks.ModelCheckpoint(
+            out_dir / "model.keras", monitor="val_accuracy", save_best_only=True
+        ),
+        tf.keras.callbacks.CSVLogger(out_dir / "history.csv", append=append_history),
+        tf.keras.callbacks.EarlyStopping(
+            monitor="val_accuracy",
+            patience=patience,
+            restore_best_weights=True,
+        ),
+    ]
+    if args.reduce_lr_on_plateau:
+        callbacks.append(
+            tf.keras.callbacks.ReduceLROnPlateau(
+                monitor="val_loss",
+                factor=0.5,
+                patience=max(2, patience // 3),
+                min_lr=args.min_learning_rate,
+            )
+        )
+    if args.lr_schedule == "cosine":
+        callbacks.append(
+            tf.keras.callbacks.LearningRateScheduler(
+                lambda epoch, _lr: cosine_epoch_lr(
+                    epoch,
+                    stage_epochs,
+                    base_learning_rate,
+                    args.min_learning_rate,
+                    args.warmup_epochs,
+                ),
+                verbose=0,
+            )
+        )
+    return callbacks
+
+
 def main() -> None:
     args = parse_args()
+    validate_args(args)
     tf = require_tensorflow()
     tf.keras.utils.set_random_seed(args.seed)
+    configure_runtime(tf, args.require_gpu)
 
     data_dir = Path(args.data_dir).resolve()
     out_dir = Path(args.out_dir).resolve()
@@ -380,32 +606,31 @@ def main() -> None:
     train_ds, val_ds, test_ds, class_names = load_datasets(
         tf, data_dir, args.image_size, args.batch_size, args.seed
     )
-    use_one_hot = args.label_smoothing > 0
+    cache_train = args.cache_mode == "all"
+    cache_eval = args.cache_mode in {"all", "eval"}
+    train_ds = maybe_cache_dataset(train_ds, cache_train)
+    val_ds = maybe_cache_dataset(val_ds, cache_eval)
+    if test_ds is not None:
+        test_ds = maybe_cache_dataset(test_ds, cache_eval)
+
+    use_one_hot = args.label_smoothing > 0 or args.mixup_alpha > 0
     train_ds = maybe_one_hot(tf, train_ds, len(class_names), use_one_hot)
     val_ds = maybe_one_hot(tf, val_ds, len(class_names), use_one_hot)
     if test_ds is not None:
         test_ds = maybe_one_hot(tf, test_ds, len(class_names), use_one_hot)
+    train_ds = apply_mixup(tf, train_ds, args.mixup_alpha, args.mixup_probability)
     model, base_model = build_model(tf, args, len(class_names))
-    compile_model(tf, model, args.learning_rate, args.label_smoothing)
+    compile_model(tf, model, args, args.learning_rate)
 
-    callbacks = [
-        tf.keras.callbacks.ModelCheckpoint(
-            out_dir / "model.keras", monitor="val_accuracy", save_best_only=True
-        ),
-        tf.keras.callbacks.CSVLogger(out_dir / "history.csv"),
-        tf.keras.callbacks.EarlyStopping(
-            monitor="val_accuracy", patience=8, restore_best_weights=True
-        ),
-    ]
-    if args.reduce_lr_on_plateau:
-        callbacks.append(
-            tf.keras.callbacks.ReduceLROnPlateau(
-                monitor="val_loss",
-                factor=0.5,
-                patience=3,
-                min_lr=1e-5,
-            )
-        )
+    callbacks = stage_callbacks(
+        tf,
+        args,
+        out_dir,
+        append_history=False,
+        patience=args.early_stop_patience,
+        stage_epochs=args.epochs,
+        base_learning_rate=args.learning_rate,
+    )
     history = model.fit(
         train_ds,
         validation_data=val_ds,
@@ -423,25 +648,16 @@ def main() -> None:
 
     if args.finetune_epochs > 0 and base_model is not None:
         base_model.trainable = True
-        compile_model(tf, model, args.finetune_learning_rate, args.label_smoothing)
-        finetune_callbacks = [
-            tf.keras.callbacks.ModelCheckpoint(
-                out_dir / "model.keras", monitor="val_accuracy", save_best_only=True
-            ),
-            tf.keras.callbacks.CSVLogger(out_dir / "history.csv", append=True),
-            tf.keras.callbacks.EarlyStopping(
-                monitor="val_accuracy", patience=6, restore_best_weights=True
-            ),
-        ]
-        if args.reduce_lr_on_plateau:
-            finetune_callbacks.append(
-                tf.keras.callbacks.ReduceLROnPlateau(
-                    monitor="val_loss",
-                    factor=0.5,
-                    patience=2,
-                    min_lr=1e-5,
-                )
-            )
+        compile_model(tf, model, args, args.finetune_learning_rate)
+        finetune_callbacks = stage_callbacks(
+            tf,
+            args,
+            out_dir,
+            append_history=True,
+            patience=max(4, args.early_stop_patience - 2),
+            stage_epochs=args.finetune_epochs,
+            base_learning_rate=args.finetune_learning_rate,
+        )
         finetune_history = model.fit(
             train_ds,
             validation_data=val_ds,
@@ -469,6 +685,7 @@ def main() -> None:
         test_values = model.evaluate(test_ds, verbose=1)
         test_metrics = dict(zip(model.metrics_names, [float(v) for v in test_values]))
     test_inference = evaluate_model_per_image(model, data_dir, class_names)
+    best_epoch = int(np.argmax(history.history["val_accuracy"])) + 1
 
     summary = {
         "arch": args.arch,
@@ -477,7 +694,17 @@ def main() -> None:
         "freeze_backbone": args.freeze_backbone,
         "finetune_epochs": args.finetune_epochs,
         "finetune_learning_rate": args.finetune_learning_rate,
-        "augment": args.augment,
+        "optimizer": args.optimizer,
+        "lr_schedule": args.lr_schedule,
+        "warmup_epochs": args.warmup_epochs,
+        "min_learning_rate": args.min_learning_rate,
+        "weight_decay": args.weight_decay,
+        "grad_clipnorm": args.grad_clipnorm,
+        "early_stop_patience": args.early_stop_patience,
+        "cache_mode": args.cache_mode,
+        "augmentation_mode": args.augmentation_mode,
+        "mixup_alpha": args.mixup_alpha,
+        "mixup_probability": args.mixup_probability,
         "dropout": args.dropout,
         "label_smoothing": args.label_smoothing,
         "reduce_lr_on_plateau": args.reduce_lr_on_plateau,
@@ -486,6 +713,8 @@ def main() -> None:
         "batch_size": args.batch_size,
         "epochs_requested": args.epochs,
         "epochs_ran": len(history.history.get("loss", [])),
+        "best_epoch": best_epoch,
+        "best_val_accuracy": float(np.max(history.history["val_accuracy"])),
         "learning_rate": args.learning_rate,
         "total_params": int(model.count_params()),
         "trainable_params": trainable_params(model),
