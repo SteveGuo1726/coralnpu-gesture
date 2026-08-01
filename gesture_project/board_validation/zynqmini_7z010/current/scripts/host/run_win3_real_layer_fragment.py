@@ -11,6 +11,7 @@ software golden computed from the same quantized tensors.
 from __future__ import annotations
 
 import argparse
+import math
 import re
 import subprocess
 import tempfile
@@ -113,8 +114,42 @@ def relu8_sat(value: int) -> int:
     return value
 
 
+def _quantize_multiplier(real_multiplier: float) -> tuple[int, int]:
+    if real_multiplier == 0.0:
+        return 0, 0
+    significand, shift = math.frexp(real_multiplier)
+    quantized = int(round(significand * (1 << 31)))
+    if quantized == (1 << 31):
+        quantized //= 2
+        shift += 1
+    return quantized, shift
+
+
+def _saturating_rounding_doubling_high_mul(a: int, b: int) -> int:
+    ab = int(a) * int(b)
+    nudge = (1 << 30) if ab >= 0 else (1 - (1 << 30))
+    return int((ab + nudge) // (1 << 31))
+
+
+def _rounding_divide_by_pot(value: int, exponent: int) -> int:
+    mask = (1 << exponent) - 1
+    remainder = value & mask
+    threshold = (mask >> 1) + (1 if value < 0 else 0)
+    return (value >> exponent) + (1 if remainder > threshold else 0)
+
+
+def _multiply_by_quantized_multiplier(value: int, quantized_multiplier: int, shift: int) -> int:
+    left_shift = shift if shift > 0 else 0
+    right_shift = -shift if shift < 0 else 0
+    shifted = int(value) * (1 << left_shift)
+    product = _saturating_rounding_doubling_high_mul(shifted, quantized_multiplier)
+    return _rounding_divide_by_pot(product, right_shift)
+
+
 def requantize_to_int8(raw_value: int, input_scale: float, weight_scale: float, output_scale: float, output_zero_point: int) -> int:
-    scaled = np.rint(raw_value * (input_scale * weight_scale / output_scale))
+    real_multiplier = input_scale * weight_scale / output_scale
+    quantized_multiplier, shift = _quantize_multiplier(real_multiplier)
+    scaled = _multiply_by_quantized_multiplier(raw_value, quantized_multiplier, shift)
     return int(np.clip(scaled + output_zero_point, -128, 127))
 
 
