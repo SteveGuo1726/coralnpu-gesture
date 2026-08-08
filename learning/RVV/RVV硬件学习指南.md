@@ -2,11 +2,11 @@
 
 ## 0. 本资料的边界、来源与阅读方式
 
-本目录用于系统学习 Google CoralNPU 中除标量 RISC-V 核心以外的 **RVV（RISC-V Vector，RISC-V 向量扩展）硬件**。资料源码来自只读官方参考仓库 [`coralnpu`](../../coralnpu)，固定核对版本为提交 `7318dfc2 Add generic TFLite model profiling support`。本目录的 `hdl/` 是逐文件复制的学习副本，**不参与项目实际构建，也不是项目侧修改后的 RTL（寄存器传输级电路）**。任何实验性修改必须放在 `gesture_project/worktrees/...`，绝不可回写官方目录或把学习副本误称为官方的生效工程。
+本目录用于系统学习 Google CoralNPU 中除标量 RISC-V 核心以外的 **RVV（RISC-V Vector，RISC-V 向量扩展）硬件**。资料源码来自只读官方参考仓库 [google-coral/coralnpu](https://github.com/google-coral/coralnpu)，固定核对版本为提交 `7318dfc2 Add generic TFLite model profiling support`。本目录的 `hdl/` 是逐文件复制的学习副本，**不参与项目实际构建，也不是项目侧修改后的 RTL（寄存器传输级电路）**。任何实验性修改必须放在 `gesture_project/worktrees/...`，绝不可回写官方目录或把学习副本误称为官方的生效工程。
 
 本指南的范围是官方仓库中用于 `coralnpu_rvv` 构建目标的 Chisel（Scala 硬件生成语言）和 SystemVerilog（硬件描述语言）源码。复制了：
 
-- 8 个 Scala 文件：RVV 的参数、接口、指令压缩/译码、生成包装和 SoC 接入关系；
+- 9 个 Scala 文件：RVV 的参数、接口、指令压缩/译码、生成包装、与标量核心的接入点和 SoC 接入关系；
 - 103 个生产 `.sv` / `.svh` 文件：普通 RVV 后端、向量寄存器文件、访存重映射、可选 Zvt/VME 路径、公共组合/时序电路；
 - 未复制 `hdl/verilog/rvv/sve/`：它是官方 SystemVerilog/UVM 验证环境，不是生产硬件本体；
 - 未复制 `Aligner_tb.sv`、`MultiFifo_tb.sv`：它们是单元测试顶层；
@@ -272,15 +272,16 @@ Chisel Core.scala
 | 顺序 | 文件 | 模块/类型与具体原理、整体作用 | 主要上下游 |
 |---:|---|---|---|
 | 1 | [`Parameters.scala`](hdl/scala/coralnpu/Parameters.scala) | 全芯片参数对象。定义 `enableRvv`、`rvvVlen`、32 个向量寄存器、LSU/取指宽度、ITCM/DTCM 等。生成配置通过修改该对象决定是否例化 RVV。 | 被 `Core.scala`、SoC 配置和 RVV 接口引用。 |
-| 2 | [`RvvInterface.scala`](hdl/scala/coralnpu/rvv/RvvInterface.scala) | 定义 Chisel 与 Verilog 边界的 Bundle：压缩指令、向量配置状态、两路 RVV-to-LSU/LSU-to-RVV、CSR、异步写回和 ROB 退休信息。其原理是以强类型 Bundle 固化跨模块协议。 | `RvvCore.scala`、标量核心 `SCore.scala`、`Core.scala` 使用。 |
-| 3 | [`RvvAlu.scala`](hdl/scala/coralnpu/rvv/RvvAlu.scala) | 定义 `RvvAluOp` 枚举和一级译码结果类型，如加减、逻辑、比较、移位、饱和、浮点/归约操作。它是“指令语义名称表”，不是实际乘法器实现。 | 由 `RvvDecode.scala` 产生，送给 `RvvCore`/后端。 |
-| 4 | [`RvvDecode.scala`](hdl/scala/coralnpu/rvv/RvvDecode.scala) | 把 32 位原始编码压缩，按 opcode/funct 字段识别 RVV 加载、存储和算术指令；做不依赖当前 CSR 的一级合法性判断，并构造二级译码输入。含 `mset*` 的识别逻辑。 | 上游标量取指；下游 `RvvCore.scala`、Verilog前端/后端。 |
-| 5 | [`RvvCore.scala`](hdl/scala/coralnpu/rvv/RvvCore.scala) | `RvvCoreShim` 与 `RvvCoreWrapper` 生成参数化 Verilog 包装，把 Chisel 的 `RvvCoreIO` 拆成 Verilog 位线、实例化实际 `RvvCore`，再接回 CSR、LSU、寄存器和 ROB 接口。 | 上游 `Core.scala`；下游 [`RvvCore.sv`](hdl/verilog/rvv/design/RvvCore.sv)。 |
-| 6 | [`RvvDecodeTest.scala`](hdl/scala/coralnpu/rvv/RvvDecodeTest.scala) | 官方 Scala 级译码测试。它不是生产硬件，但应在学习一级译码后阅读，理解合法/非法编码预期。 | 测试 `RvvDecode.scala`。 |
-| 7 | [`SoCChiselConfig.scala`](hdl/scala/soc/SoCChiselConfig.scala) | SoC 配置的单一来源之一。示例 `rvv_core` 使用 `CoreTlul`，明确 RVV、取指和 LSU 宽度配置，并通过 TileLink 连接系统总线。 | 由 `CoralNPUChiselSubsystem.scala` 消费。 |
-| 8 | [`CoralNPUChiselSubsystem.scala`](hdl/scala/soc/CoralNPUChiselSubsystem.scala) | 根据配置创建 Core、交叉开关、DMA、SRAM 等，并连接时钟、复位、TileLink 主从端口。它解释 RVV 所在核心怎样嵌入完整 SoC。 | 实例化 `CoreTlul`，间接到 `Core.scala` 和 RVV。 |
+| 2 | [`Core.scala`](hdl/scala/coralnpu/Core.scala) | 标量核心的 RVV 集成点。它以 `Option.when(p.enableRvv)(RvvCore(p))` 条件例化 RVV，并连接标量流水线的取指、寄存器、LSU、trap 和退休接口。该文件含标量核其他逻辑，保留它是为了学习 RVV 如何接入系统，不应当作“RVV 后端本体”。 | 上游 `CoreTlul/CoreMini`；下游 `RvvCore.scala`。 |
+| 3 | [`RvvInterface.scala`](hdl/scala/coralnpu/rvv/RvvInterface.scala) | 定义 Chisel 与 Verilog 边界的 Bundle：压缩指令、向量配置状态、两路 RVV-to-LSU/LSU-to-RVV、CSR、异步写回和 ROB 退休信息。其原理是以强类型 Bundle 固化跨模块协议。 | `RvvCore.scala`、标量核心 `SCore.scala`、`Core.scala` 使用。 |
+| 4 | [`RvvAlu.scala`](hdl/scala/coralnpu/rvv/RvvAlu.scala) | 定义 `RvvAluOp` 枚举和一级译码结果类型，如加减、逻辑、比较、移位、饱和、浮点/归约操作。它是“指令语义名称表”，不是实际乘法器实现。 | 由 `RvvDecode.scala` 产生，送给 `RvvCore`/后端。 |
+| 5 | [`RvvDecode.scala`](hdl/scala/coralnpu/rvv/RvvDecode.scala) | 把 32 位原始编码压缩，按 opcode/funct 字段识别 RVV 加载、存储和算术指令；做不依赖当前 CSR 的一级合法性判断，并构造二级译码输入。含 `mset*` 的识别逻辑。 | 上游标量取指；下游 `RvvCore.scala`、Verilog前端/后端。 |
+| 6 | [`RvvCore.scala`](hdl/scala/coralnpu/rvv/RvvCore.scala) | `RvvCoreShim` 与 `RvvCoreWrapper` 生成参数化 Verilog 包装，把 Chisel 的 `RvvCoreIO` 拆成 Verilog 位线、实例化实际 `RvvCore`，再接回 CSR、LSU、寄存器和 ROB 接口。 | 上游 `Core.scala`；下游 [`RvvCore.sv`](hdl/verilog/rvv/design/RvvCore.sv)。 |
+| 7 | [`RvvDecodeTest.scala`](hdl/scala/coralnpu/rvv/RvvDecodeTest.scala) | 官方 Scala 级译码测试。它不是生产硬件，但应在学习一级译码后阅读，理解合法/非法编码预期。 | 测试 `RvvDecode.scala`。 |
+| 8 | [`SoCChiselConfig.scala`](hdl/scala/soc/SoCChiselConfig.scala) | SoC 配置的单一来源之一。示例 `rvv_core` 使用 `CoreTlul`，明确 RVV、取指和 LSU 宽度配置，并通过 TileLink 连接系统总线。 | 由 `CoralNPUChiselSubsystem.scala` 消费。 |
+| 9 | [`CoralNPUChiselSubsystem.scala`](hdl/scala/soc/CoralNPUChiselSubsystem.scala) | 根据配置创建 Core、交叉开关、DMA、SRAM 等，并连接时钟、复位、TileLink 主从端口。它解释 RVV 所在核心怎样嵌入完整 SoC。 | 实例化 `CoreTlul`，间接到 `Core.scala` 和 RVV。 |
 
-补充的关键例化不在本副本中：官方 [`Core.scala`](../../coralnpu/hdl/chisel/src/coralnpu/Core.scala) 以 `Option.when(p.enableRvv)(RvvCore(p))` 例化 RVV；它属于标量核集成层，用户本次要求聚焦标量核心之外，因此保留外部直达链接而不复制整套标量源码。
+`Core.scala` 仅作为 RVV 的标量侧接入上下文复制到学习区。它不是本指南要求学习的标量流水线主体；本组应把重点放在其中的 `enableRvv` 条件例化和 RVV 接口连接，再返回 `rvv/` 目录继续阅读。
 
 ## 5. SystemVerilog：顶层、前端与后端骨架
 
@@ -445,4 +446,4 @@ Chisel Core.scala
 
 ## 13. 本次副本的可复核性
 
-副本建立后应满足：Scala 8 个文件、生产 Verilog/头文件 103 个；每个副本与官方对应文件字节一致；官方仓库 `git status --short` 仍为空。本指南中的所有链接均指向 `learning/RVV/hdl` 内的副本，唯一例外是第 4 节的 `Core.scala`，它用相对链接直达官方只读参考文件并明确未复制原因。
+副本建立后应满足：Scala 9 个文件、生产 Verilog/头文件 103 个；每个副本与官方对应文件字节一致；官方仓库 `git status --short` 仍为空。本指南中的源码链接全部指向 `learning/RVV/hdl` 内已提交的副本。

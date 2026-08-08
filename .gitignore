@@ -7,6 +7,15 @@ local_env/
 # Upstream dependency: clone locally when needed, do not duplicate upload
 coralnpu/
 
+# Exception: the RVV learning guide contains a small, immutable source snapshot.
+# The directory name mirrors the official Scala package and must remain trackable.
+!learning/
+!learning/RVV/
+!learning/RVV/hdl/
+!learning/RVV/hdl/scala/
+!learning/RVV/hdl/scala/coralnpu/
+!learning/RVV/hdl/scala/coralnpu/**
+
 # Python caches and local environments
 __pycache__/
 *.py[cod]
