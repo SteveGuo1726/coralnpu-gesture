@@ -32,6 +32,7 @@ gesture_project/worktrees/
 gesture_project/board_validation/**/*.o
 gesture_project/board_validation/**/*.bin
 gesture_project/board_validation/**/*.elf
+gesture_project/board_validation/**/*.zip
 gesture_project/board_validation/**/*.bit
 gesture_project/board_validation/**/*.xsa
 gesture_project/board_validation/**/*.dcp

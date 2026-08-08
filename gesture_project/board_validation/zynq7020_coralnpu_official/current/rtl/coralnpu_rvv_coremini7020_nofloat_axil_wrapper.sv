@@ -1,0 +1,1 @@
+`include "coralnpu_rvv_coremini7020_nofloat_axil_wrapper.v"
