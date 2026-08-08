@@ -9,6 +9,7 @@
 #include "static_cnn_fc_real_sample_int8.h"
 #include "static_cnn_fc_real_batch6_int8.h"
 #include "static_cnn_convhead_gap_fc_real_batch6_int8.h"
+#include "static_cnn_stage3b_real_fist_int8.h"
 
 /*
  * PROJECT_LOCAL_MOD:
@@ -47,6 +48,12 @@
 #define REG_LSU_EVT4      0x094U
 #define REG_LSU_EVT5      0x098U
 #define REG_LSU_EVT6      0x09CU
+#define REG_TENSOR_CTRL      0x0A0U
+#define REG_TENSOR_STATUS    0x0A4U
+#define REG_TENSOR_MEM_ADDR  0x0A8U
+#define REG_TENSOR_MEM_DATA  0x0ACU
+#define REG_TENSOR_MEM_KIND  0x0B0U
+#define REG_TENSOR_MEM_READ  0x0B4U
 #define REG_DEBUG0        0x080U
 
 #define RESULT_SIGNATURE       0x47535450U
@@ -85,6 +92,10 @@
 #define FAIL_REAL_FC_Q29       0x00060006U
 #define FAIL_REAL_PRED         0x00060007U
 #define FAIL_REAL_CONV_STORE   0x00060008U
+#define FAIL_STAGE3B_STAGE     0x00070001U
+#define FAIL_STAGE3B_TIMEOUT   0x00070002U
+#define FAIL_STAGE3B_FAULT     0x00070003U
+#define FAIL_STAGE3B_OUTPUT    0x00070004U
 
 #define CTRL_CLEAR_STICKY      0x00000002U
 #define CTRL_ISSUE             0x00000003U
@@ -224,6 +235,103 @@ static void init_probe_area(void)
 static inline void clear_sticky(void)
 {
     Xil_Out32(WRAPPER_BASE + REG_CONTROL, CTRL_CLEAR_STICKY);
+}
+
+/* PROJECT_LOCAL_MOD: stage a 32-bit word into the tensor engine. The final
+ * write is an explicit commit; the hardware then synchronizes the command
+ * before allowing it to drive a BRAM address or enable. */
+static inline void stage3b_write_word(u32 kind, u32 word_addr, u32 value)
+{
+    Xil_Out32(WRAPPER_BASE + REG_TENSOR_MEM_ADDR, word_addr);
+    Xil_Out32(WRAPPER_BASE + REG_TENSOR_MEM_DATA, value);
+    Xil_Out32(WRAPPER_BASE + REG_TENSOR_MEM_KIND, kind);
+    Xil_Out32(WRAPPER_BASE + REG_TENSOR_MEM_READ, 1U);
+}
+
+static inline u32 pack_stage3b_i8x4(const s8 *values)
+{
+    return ((u32)(u8)values[0]) |
+           ((u32)(u8)values[1] << 8) |
+           ((u32)(u8)values[2] << 16) |
+           ((u32)(u8)values[3] << 24);
+}
+
+static u32 stage3b_read_word(u32 word_addr)
+{
+    Xil_Out32(WRAPPER_BASE + REG_TENSOR_MEM_ADDR, word_addr);
+    Xil_Out32(WRAPPER_BASE + REG_TENSOR_MEM_KIND, 5U);
+    /* The BRAM-safe request/address pipeline has two PL clock stages. */
+    usleep(1U);
+    return Xil_In32(WRAPPER_BASE + REG_TENSOR_MEM_READ);
+}
+
+static int run_stage3b_tensor_engine(void)
+{
+    u32 word;
+    u32 channel;
+    u32 polls;
+    u32 status;
+
+    set_stage(0xA00U);
+    for (word = 0U; word < (STAGE3B_INPUT_BYTES / 4U); ++word) {
+        stage3b_write_word(0U, word,
+                           pack_stage3b_i8x4(&kStage3bTensor24[word * 4U]));
+    }
+    probe_store(8U, word);
+
+    for (word = 0U; word < (STAGE3B_WEIGHT_BYTES / 4U); ++word) {
+        stage3b_write_word(1U, word,
+                           pack_stage3b_i8x4(&kStage3bWeights[word * 4U]));
+    }
+    probe_store(9U, word);
+
+    for (channel = 0U; channel < STAGE3B_C; ++channel) {
+        stage3b_write_word(2U, channel, (u32)kStage3bBias[channel]);
+        stage3b_write_word(3U, channel, (u32)kStage3bMultiplier[channel]);
+        stage3b_write_word(4U, channel, (u32)kStage3bShift[channel]);
+    }
+    __asm__ volatile ("dsb sy" : : : "memory");
+
+    set_stage(0xA10U);
+    Xil_Out32(WRAPPER_BASE + REG_TENSOR_CTRL, 1U);
+    status = 0U;
+    for (polls = 0U; polls < 5000000U; ++polls) {
+        status = Xil_In32(WRAPPER_BASE + REG_TENSOR_STATUS);
+        if ((status & 0x2U) != 0U) {
+            probe_store(10U, status);
+            probe_store(11U, polls);
+            return FAIL_STAGE3B_FAULT;
+        }
+        if ((status & 0x4U) != 0U) {
+            break;
+        }
+    }
+    probe_store(10U, status);
+    probe_store(11U, polls);
+    if ((status & 0x4U) == 0U) {
+        return FAIL_STAGE3B_TIMEOUT;
+    }
+
+    set_stage(0xA20U);
+    for (word = 0U; word < (STAGE3B_OUTPUT_BYTES / 4U); ++word) {
+        u32 actual_word = stage3b_read_word(word);
+        u32 byte_index;
+        for (byte_index = 0U; byte_index < 4U; ++byte_index) {
+            u32 output_index = word * 4U + byte_index;
+            s8 actual = (s8)(actual_word >> (byte_index * 8U));
+            if (actual != kStage3bTensor25Expected[output_index]) {
+                probe_store(54U, output_index);
+                probe_store(55U, actual_word);
+                probe_store(56U, (u32)(s32)actual);
+                probe_store(57U, (u32)(s32)kStage3bTensor25Expected[output_index]);
+                probe_store(58U, status);
+                return FAIL_STAGE3B_OUTPUT;
+            }
+        }
+    }
+    probe_store(54U, STAGE3B_OUTPUT_BYTES);
+    probe_store(55U, kStage3bTensor26Expected[0]);
+    return 0;
 }
 
 static inline void issue_inst(u32 pc, u32 inst_enc, u32 rs0, u32 rs1, u32 frs0)
@@ -1157,10 +1265,10 @@ int main(void)
 
     xil_printf("RVV accel PS gesture postprocess start\r\n");
 
-    rc = run_real_convhead_gap_fc_batch6();
+    rc = run_stage3b_tensor_engine();
     if (rc != 0) {
         set_failure((u32)rc);
-        xil_printf("real convhead gap fc batch6 failed: 0x%08x\r\n", (unsigned)rc);
+        xil_printf("stage3b tensor engine failed: 0x%08x\r\n", (unsigned)rc);
         while (1) {
             usleep(100000U);
         }

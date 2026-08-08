@@ -4,6 +4,7 @@
 // registers.
 `timescale 1ns / 1ps
 `include "rvv_lsu_axi_bridge_unit_stride_e32.sv"
+`include "coralnpu_stage3b_tensor_engine.sv"
 
 module coralnpu_rvv_accel_lane1_axil_wrapper (
     (* X_INTERFACE_PARAMETER = "XIL_INTERFACENAME CLK.ACLK, ASSOCIATED_BUSIF S_AXI:M_AXI, ASSOCIATED_RESET aresetn, FREQ_HZ 25000000" *)
@@ -177,6 +178,14 @@ module coralnpu_rvv_accel_lane1_axil_wrapper (
   // existing diagnostic CSR distinguishes an issue-context problem from a
   // bridge-capture problem without changing the data path.
   localparam [11:0] REG_LSU_EVT6        = 12'h09C;
+  // PROJECT_LOCAL_MOD: isolated tensor-engine register window. It does not
+  // alter the proven RVV instruction or LSU interfaces.
+  localparam [11:0] REG_TENSOR_CTRL      = 12'h0A0;
+  localparam [11:0] REG_TENSOR_STATUS    = 12'h0A4;
+  localparam [11:0] REG_TENSOR_MEM_ADDR  = 12'h0A8;
+  localparam [11:0] REG_TENSOR_MEM_DATA  = 12'h0AC;
+  localparam [11:0] REG_TENSOR_MEM_KIND  = 12'h0B0;
+  localparam [11:0] REG_TENSOR_MEM_READ  = 12'h0B4;
 
   localparam [31:0] MAGIC_VALUE        = 32'h4352_5656;  // "CRVV"
   localparam [31:0] VERSION_VALUE      = 32'h0001_0000;
@@ -211,6 +220,12 @@ module coralnpu_rvv_accel_lane1_axil_wrapper (
   reg        lsu_ctx_supported;
   reg [1:0]  lsu_ctx_elem_count;
   reg [31:0] lsu_ctx_base_addr;
+  reg [15:0] tensor_mem_addr_reg;
+  reg [31:0] tensor_mem_data_reg;
+  reg [2:0]  tensor_mem_kind_reg;
+  reg        tensor_start_reg;
+  reg        tensor_mem_we_reg;
+  reg        tensor_done_sticky;
 
   reg        sticky_rd0_valid;
   reg [4:0]  sticky_rd0_addr;
@@ -278,6 +293,10 @@ module coralnpu_rvv_accel_lane1_axil_wrapper (
   wire [1:0] lsu_debug_req_word_count;
   wire [15:0] lsu_debug_req_mask;
   wire       lsu_fault_sticky;
+  wire       tensor_busy;
+  wire       tensor_done;
+  wire       tensor_fault;
+  wire [31:0] tensor_mem_rdata;
   wire       rvv2lsu_0_valid;
   wire       rvv2lsu_0_bits_idx_valid;
   wire [4:0] rvv2lsu_0_bits_idx_bits_addr;
@@ -444,6 +463,14 @@ module coralnpu_rvv_accel_lane1_axil_wrapper (
       inst_0_ready
   };
 
+  coralnpu_stage3b_tensor_engine u_stage3b_tensor_engine (
+      .clk(aclk), .rstn(aresetn), .start(tensor_start_reg),
+      .busy(tensor_busy), .done(tensor_done), .fault(tensor_fault),
+      .mem_we(tensor_mem_we_reg), .mem_kind(tensor_mem_kind_reg),
+      .mem_addr(tensor_mem_addr_reg), .mem_wdata(tensor_mem_data_reg),
+      .mem_rdata(tensor_mem_rdata)
+  );
+
   function automatic [31:0] decode_read_data(input [11:0] addr);
     begin
       case (addr)
@@ -513,6 +540,12 @@ module coralnpu_rvv_accel_lane1_axil_wrapper (
           12'd0, lsu_ctx_elem_count, lsu_debug_req_word_count,
           lsu_debug_req_mask
       };
+      REG_TENSOR_CTRL: decode_read_data = {31'd0, tensor_start_reg};
+      REG_TENSOR_STATUS: decode_read_data = {29'd0, tensor_done_sticky, tensor_fault, tensor_busy};
+      REG_TENSOR_MEM_ADDR: decode_read_data = {16'd0, tensor_mem_addr_reg};
+      REG_TENSOR_MEM_DATA: decode_read_data = tensor_mem_data_reg;
+      REG_TENSOR_MEM_KIND: decode_read_data = {29'd0, tensor_mem_kind_reg};
+      REG_TENSOR_MEM_READ: decode_read_data = tensor_mem_rdata;
       default:       decode_read_data = 32'hDEAD_BEEF;
       endcase
     end
@@ -555,6 +588,12 @@ module coralnpu_rvv_accel_lane1_axil_wrapper (
       lsu_ctx_supported <= 1'b0;
       lsu_ctx_elem_count <= 2'd0;
       lsu_ctx_base_addr <= 32'd0;
+      tensor_mem_addr_reg <= 16'd0;
+      tensor_mem_data_reg <= 32'd0;
+      tensor_mem_kind_reg <= 3'd0;
+      tensor_start_reg <= 1'b0;
+      tensor_mem_we_reg <= 1'b0;
+      tensor_done_sticky <= 1'b0;
       inst_0_valid_reg <= 1'b0;
       sticky_rd0_valid <= 1'b0;
       sticky_rd0_addr <= 5'd0;
@@ -616,6 +655,11 @@ module coralnpu_rvv_accel_lane1_axil_wrapper (
       // window so the RVV front-end can eventually raise inst_ready and
       // consume the instruction.
       inst_0_valid_reg <= issue_pending;
+      tensor_start_reg <= 1'b0;
+      tensor_mem_we_reg <= 1'b0;
+      if (tensor_done) begin
+        tensor_done_sticky <= 1'b1;
+      end
 
       if ((write_state == WR_IDLE) && s_axi_awvalid && s_axi_awready) begin
         wr_addr_reg <= s_axi_awaddr;
@@ -676,6 +720,26 @@ module coralnpu_rvv_accel_lane1_axil_wrapper (
               end
               REG_FRS0: begin
                 frs0_reg <= wr_data_reg;
+              end
+              REG_TENSOR_CTRL: begin
+                if (wr_data_reg[0] && !tensor_busy) begin
+                  tensor_start_reg <= 1'b1;
+                  tensor_done_sticky <= 1'b0;
+                end
+              end
+              REG_TENSOR_MEM_ADDR: begin
+                tensor_mem_addr_reg <= wr_data_reg[15:0];
+              end
+              REG_TENSOR_MEM_DATA: begin
+                tensor_mem_data_reg <= wr_data_reg;
+              end
+              REG_TENSOR_MEM_KIND: begin
+                tensor_mem_kind_reg <= wr_data_reg[2:0];
+              end
+              REG_TENSOR_MEM_READ: begin
+                if (!tensor_busy) begin
+                  tensor_mem_we_reg <= 1'b1;
+                end
               end
               default: begin
               end

@@ -142,6 +142,7 @@ proc generate_combined_rtl {rtl_dir out_dir top_name} {
     [file join $rtl_dir "cf_math_pkg.sv"] \
     [file join $rtl_dir "registers.svh"] \
     [file join $rtl_dir "rvv_lsu_axi_bridge_unit_stride_e32.sv"] \
+    [file join $rtl_dir "coralnpu_stage3b_tensor_engine.sv"] \
     [file join $rtl_dir "rvv_backend_define.svh"] \
     [file join $rtl_dir "rvv_backend_opcode.svh"] \
     [file join $rtl_dir "rvv_backend.svh"] \
@@ -192,6 +193,8 @@ proc generate_combined_rtl {rtl_dir out_dir top_name} {
       set src_data [string map [list \
         "`include \"rvv_lsu_axi_bridge_unit_stride_e32.sv\"\r\n" "" \
         "`include \"rvv_lsu_axi_bridge_unit_stride_e32.sv\"\n" "" \
+        "`include \"coralnpu_stage3b_tensor_engine.sv\"\r\n" "" \
+        "`include \"coralnpu_stage3b_tensor_engine.sv\"\n" "" \
       ] $src_data]
     }
     puts -nonewline $out_fh $src_data
