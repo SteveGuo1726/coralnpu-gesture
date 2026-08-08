@@ -134,6 +134,9 @@
 
 static volatile u32 *const probe = (volatile u32 *)PROBE_RESULT_BASE;
 static volatile u32 g_stage = 0U;
+// PROJECT_LOCAL_MOD: populated only from the verified PL maxpool readback,
+// then consumed by the existing RVV conv_head path for the runtime handoff.
+static s32 g_stage3b_runtime_pool3[STAGE3B_POOL_BYTES];
 
 static const s32 kGestureAccum[6] = {
     0x00001234, -0x00000020, 0x00000180,
@@ -347,6 +350,7 @@ static int run_stage3b_tensor_engine(void)
                 probe_store(58U, status);
                 return FAIL_STAGE3B_POOL;
             }
+            g_stage3b_runtime_pool3[output_index] = (s32)actual;
         }
     }
     probe_store(54U, STAGE3B_OUTPUT_BYTES);
@@ -979,7 +983,17 @@ static void stage_conv_head_pair_parameters(void)
     __asm__ volatile ("dsb sy" : : : "memory");
 }
 
-static int run_real_convhead_gap_fc_batch6(void)
+static inline s32 select_pool3_feature(const s32 *runtime_pool3,
+                                       u32 sample_idx, u32 y, u32 x, u32 in_ch)
+{
+    if (runtime_pool3 != 0) {
+        return runtime_pool3[((y * REAL_POOL3_W + x) * REAL_POOL3_C) + in_ch];
+    }
+    return kRealBatch6Pool3Input[sample_idx][y][x][in_ch];
+}
+
+static int run_real_convhead_gap_fc_batch6(const s32 *runtime_pool3,
+                                           u32 num_samples)
 {
     volatile s32 *const ddr_features = (volatile s32 *)DDR_FEATURE_BASE;
     volatile s32 *const ddr_scores = (volatile s32 *)DDR_SCORE_BASE;
@@ -996,9 +1010,13 @@ static int run_real_convhead_gap_fc_batch6(void)
     u32 out_ch;
     u32 cls;
 
+    if ((num_samples == 0U) || (num_samples > REAL_BATCH6_NUM_SAMPLES)) {
+        return FAIL_REAL_CONV_CFG;
+    }
+
     stage_conv_head_pair_parameters();
 
-    for (sample_idx = 0U; sample_idx < REAL_BATCH6_NUM_SAMPLES; ++sample_idx) {
+    for (sample_idx = 0U; sample_idx < num_samples; ++sample_idx) {
         s32 best_score = -2147483647 - 1;
         int best_index = 0;
 
@@ -1024,7 +1042,8 @@ static int run_real_convhead_gap_fc_batch6(void)
             for (x = 0U; x < REAL_POOL3_W; ++x) {
                 probe_store(10U, x);
                 for (in_ch = 0U; in_ch < REAL_POOL3_C; ++in_ch) {
-                    ddr_features[in_ch] = kRealBatch6Pool3Input[sample_idx][y][x][in_ch];
+                    ddr_features[in_ch] = select_pool3_feature(runtime_pool3,
+                                                                sample_idx, y, x, in_ch);
                 }
                 __asm__ volatile ("dsb sy" : : : "memory");
 
@@ -1089,7 +1108,8 @@ static int run_real_convhead_gap_fc_batch6(void)
                     for (in_ch = 0U; in_ch < REAL_POOL3_C; ++in_ch) {
                         u32 weight_addr = DDR_CONV_WEIGHT_BASE +
                             (((pair * REAL_POOL3_C) + in_ch) * 8U);
-                        s32 feature = kRealBatch6Pool3Input[sample_idx][y][x][in_ch];
+                        s32 feature = select_pool3_feature(runtime_pool3,
+                                                           sample_idx, y, x, in_ch);
 
                         raw_acc0 += (s64)feature * (s64)kRealConvHeadWeights[out_ch][in_ch];
                         raw_acc1 += (s64)feature * (s64)kRealConvHeadWeights[out_ch + 1U][in_ch];
@@ -1257,8 +1277,8 @@ static int run_real_convhead_gap_fc_batch6(void)
             return FAIL_REAL_PRED;
         }
         probe_store(54U + sample_idx, (u32)best_index);
-        if (sample_idx == (REAL_BATCH6_NUM_SAMPLES - 1U)) {
-            probe_store(60U, REAL_BATCH6_NUM_SAMPLES);
+        if (sample_idx == (num_samples - 1U)) {
+            probe_store(60U, num_samples);
             probe_store(61U, (u32)kRealBatch6FcExpectedQuant[0][0]);
             probe_store(62U, (u32)kRealBatch6FcExpectedQuant[2][2]);
             probe_store(63U, (u32)best_score);
@@ -1290,6 +1310,18 @@ int main(void)
     if (rc != 0) {
         set_failure((u32)rc);
         xil_printf("stage3b tensor engine failed: 0x%08x\r\n", (unsigned)rc);
+        while (1) {
+            usleep(100000U);
+        }
+    }
+
+    /* The PL tensor is the same fist sample as static batch sample 0. Keep
+     * the established RVV instructions and q29 golden values unchanged while
+     * replacing their pool3 source with this just-verified runtime tensor. */
+    rc = run_real_convhead_gap_fc_batch6(g_stage3b_runtime_pool3, 1U);
+    if (rc != 0) {
+        set_failure((u32)rc);
+        xil_printf("runtime pool3 RVV chain failed: 0x%08x\r\n", (unsigned)rc);
         while (1) {
             usleep(100000U);
         }
