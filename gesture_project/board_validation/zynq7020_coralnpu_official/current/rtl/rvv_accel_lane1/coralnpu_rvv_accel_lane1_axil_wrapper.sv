@@ -225,6 +225,7 @@ module coralnpu_rvv_accel_lane1_axil_wrapper (
   reg [2:0]  tensor_mem_kind_reg;
   reg        tensor_start_reg;
   reg        tensor_mem_we_reg;
+  reg        tensor_mem_re_reg;
   reg        tensor_done_sticky;
 
   reg        sticky_rd0_valid;
@@ -466,7 +467,8 @@ module coralnpu_rvv_accel_lane1_axil_wrapper (
   coralnpu_stage3b_tensor_engine u_stage3b_tensor_engine (
       .clk(aclk), .rstn(aresetn), .start(tensor_start_reg),
       .busy(tensor_busy), .done(tensor_done), .fault(tensor_fault),
-      .mem_we(tensor_mem_we_reg), .mem_kind(tensor_mem_kind_reg),
+      .mem_we(tensor_mem_we_reg), .mem_re(tensor_mem_re_reg),
+      .mem_kind(tensor_mem_kind_reg),
       .mem_addr(tensor_mem_addr_reg), .mem_wdata(tensor_mem_data_reg),
       .mem_rdata(tensor_mem_rdata)
   );
@@ -593,6 +595,7 @@ module coralnpu_rvv_accel_lane1_axil_wrapper (
       tensor_mem_kind_reg <= 3'd0;
       tensor_start_reg <= 1'b0;
       tensor_mem_we_reg <= 1'b0;
+      tensor_mem_re_reg <= 1'b0;
       tensor_done_sticky <= 1'b0;
       inst_0_valid_reg <= 1'b0;
       sticky_rd0_valid <= 1'b0;
@@ -657,6 +660,7 @@ module coralnpu_rvv_accel_lane1_axil_wrapper (
       inst_0_valid_reg <= issue_pending;
       tensor_start_reg <= 1'b0;
       tensor_mem_we_reg <= 1'b0;
+      tensor_mem_re_reg <= 1'b0;
       if (tensor_done) begin
         tensor_done_sticky <= 1'b1;
       end
@@ -735,6 +739,12 @@ module coralnpu_rvv_accel_lane1_axil_wrapper (
               end
               REG_TENSOR_MEM_KIND: begin
                 tensor_mem_kind_reg <= wr_data_reg[2:0];
+                // PROJECT_LOCAL_MOD: explicit read command. The engine uses
+                // this pulse to keep tensor BRAM reads independent of a
+                // continuously held memory-kind register value.
+                if ((wr_data_reg[2:0] == 3'd5) || (wr_data_reg[2:0] == 3'd6)) begin
+                  tensor_mem_re_reg <= 1'b1;
+                end
               end
               REG_TENSOR_MEM_READ: begin
                 if (!tensor_busy) begin

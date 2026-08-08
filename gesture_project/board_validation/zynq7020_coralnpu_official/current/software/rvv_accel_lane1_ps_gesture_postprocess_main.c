@@ -96,6 +96,7 @@
 #define FAIL_STAGE3B_TIMEOUT   0x00070002U
 #define FAIL_STAGE3B_FAULT     0x00070003U
 #define FAIL_STAGE3B_OUTPUT    0x00070004U
+#define FAIL_STAGE3B_POOL      0x00070005U
 
 #define CTRL_CLEAR_STICKY      0x00000002U
 #define CTRL_ISSUE             0x00000003U
@@ -256,10 +257,10 @@ static inline u32 pack_stage3b_i8x4(const s8 *values)
            ((u32)(u8)values[3] << 24);
 }
 
-static u32 stage3b_read_word(u32 word_addr)
+static u32 stage3b_read_word(u32 kind, u32 word_addr)
 {
     Xil_Out32(WRAPPER_BASE + REG_TENSOR_MEM_ADDR, word_addr);
-    Xil_Out32(WRAPPER_BASE + REG_TENSOR_MEM_KIND, 5U);
+    Xil_Out32(WRAPPER_BASE + REG_TENSOR_MEM_KIND, kind);
     /* The BRAM-safe request/address pipeline has two PL clock stages. */
     usleep(1U);
     return Xil_In32(WRAPPER_BASE + REG_TENSOR_MEM_READ);
@@ -314,7 +315,7 @@ static int run_stage3b_tensor_engine(void)
 
     set_stage(0xA20U);
     for (word = 0U; word < (STAGE3B_OUTPUT_BYTES / 4U); ++word) {
-        u32 actual_word = stage3b_read_word(word);
+        u32 actual_word = stage3b_read_word(5U, word);
         u32 byte_index;
         for (byte_index = 0U; byte_index < 4U; ++byte_index) {
             u32 output_index = word * 4U + byte_index;
@@ -330,7 +331,27 @@ static int run_stage3b_tensor_engine(void)
         }
     }
     probe_store(54U, STAGE3B_OUTPUT_BYTES);
-    probe_store(55U, kStage3bTensor26Expected[0]);
+
+    set_stage(0xA30U);
+    for (word = 0U; word < (STAGE3B_POOL_BYTES / 4U); ++word) {
+        u32 actual_word = stage3b_read_word(6U, word);
+        u32 byte_index;
+        for (byte_index = 0U; byte_index < 4U; ++byte_index) {
+            u32 output_index = word * 4U + byte_index;
+            s8 actual = (s8)(actual_word >> (byte_index * 8U));
+            if (actual != kStage3bTensor26Expected[output_index]) {
+                probe_store(54U, output_index);
+                probe_store(55U, actual_word);
+                probe_store(56U, (u32)(s32)actual);
+                probe_store(57U, (u32)(s32)kStage3bTensor26Expected[output_index]);
+                probe_store(58U, status);
+                return FAIL_STAGE3B_POOL;
+            }
+        }
+    }
+    probe_store(54U, STAGE3B_OUTPUT_BYTES);
+    probe_store(55U, STAGE3B_POOL_BYTES);
+    probe_store(56U, (u32)(s32)kStage3bTensor26Expected[0]);
     return 0;
 }
 

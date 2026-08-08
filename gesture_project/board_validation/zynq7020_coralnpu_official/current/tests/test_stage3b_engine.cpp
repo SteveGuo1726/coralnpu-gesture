@@ -28,12 +28,16 @@ static void write_word(Vcoralnpu_stage3b_tensor_engine& dut, unsigned kind,
 }
 
 static uint32_t read_word(Vcoralnpu_stage3b_tensor_engine& dut,
-                          unsigned address) {
+                          unsigned kind, unsigned address) {
   dut.mem_we = 0;
-  dut.mem_kind = 5;
+  dut.mem_re = 1;
+  dut.mem_kind = kind;
   dut.mem_addr = address;
-  tick(dut);  // Capture the AXI-Lite-derived address into the BRAM-safe port.
-  tick(dut);  // Synchronous BRAM output is valid after the following edge.
+  tick(dut);  // Explicit read command reaches the engine.
+  dut.mem_re = 0;
+  tick(dut);  // Engine issues one full-width synchronous BRAM read.
+  tick(dut);  // The selected 64-bit RAM word reaches the response pipeline.
+  tick(dut);  // The requested 32-bit half is now visible on mem_rdata.
   return dut.mem_rdata;
 }
 
@@ -49,6 +53,7 @@ int main() {
   dut.rstn = 0;
   dut.start = 0;
   dut.mem_we = 0;
+  dut.mem_re = 0;
   dut.mem_kind = 0;
   dut.mem_addr = 0;
   dut.mem_wdata = 0;
@@ -81,8 +86,8 @@ int main() {
   }
 
   for (unsigned word = 0; word < STAGE3B_OUTPUT_BYTES / 8; ++word) {
-    uint32_t low = read_word(dut, word * 2);
-    uint32_t high = read_word(dut, word * 2 + 1);
+    uint32_t low = read_word(dut, 5, word * 2);
+    uint32_t high = read_word(dut, 5, word * 2 + 1);
     uint32_t actual[2] = {low, high};
     for (unsigned half = 0; half < 2; ++half) {
       const unsigned byte_base = word * 8 + half * 4;
@@ -98,7 +103,20 @@ int main() {
       }
     }
   }
-  std::printf("PASS stage3b tensor engine cycles=%llu tensor26_checksum=%d\n",
-              cycles, static_cast<int>(kStage3bTensor26Expected[0]));
+  for (unsigned word = 0; word < STAGE3B_POOL_BYTES / 4; ++word) {
+    uint32_t actual_word = read_word(dut, 6, word);
+    for (unsigned byte = 0; byte < 4; ++byte) {
+      const unsigned index = word * 4 + byte;
+      const int got = static_cast<int8_t>((actual_word >> (byte * 8)) & 0xff);
+      const int expected = kStage3bTensor26Expected[index];
+      if (got != expected) {
+        std::fprintf(stderr, "POOL_MISMATCH index=%u got=%d expected=%d cycles=%llu\n",
+                     index, got, expected, cycles);
+        return 4;
+      }
+    }
+  }
+  std::printf("PASS stage3b tensor engine cycles=%llu tensor25=%u tensor26=%u\n",
+              cycles, STAGE3B_OUTPUT_BYTES, STAGE3B_POOL_BYTES);
   return 0;
 }
