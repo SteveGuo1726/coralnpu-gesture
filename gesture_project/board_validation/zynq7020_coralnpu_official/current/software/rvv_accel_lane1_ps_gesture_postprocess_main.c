@@ -142,15 +142,13 @@
 #define DDR_SCORE_BASE         0x01000200U
 #define DDR_CONV_BIAS_BASE     0x01010000U
 #define DDR_CONV_WEIGHT_BASE   0x01011000U
-// PROJECT_LOCAL_MOD: pool3 lives in DDR after the stage3b burst writeback.
-// This range is disjoint from the proven RVV feature/bias/weight scratch.
+// PROJECT_LOCAL_MOD: pool3 lives in DDR after the stage3b burst writeback as
+// signed e32 words.  This matches the proven VLEN=64 e32 LSU path directly
+// and removes the ARM-side INT8-to-INT32 feature rewrite.
 #define DDR_STAGE3B_POOL_BASE  0x01030000U
 
 static volatile u32 *const probe = (volatile u32 *)PROBE_RESULT_BASE;
 static volatile u32 g_stage = 0U;
-// PROJECT_LOCAL_MOD: populated only from the verified PL maxpool readback,
-// then consumed by the existing RVV conv_head path for the runtime handoff.
-static s32 g_stage3b_runtime_pool3[STAGE3B_POOL_BYTES];
 
 static const s32 kGestureAccum[6] = {
     0x00001234, -0x00000020, 0x00000180,
@@ -324,7 +322,7 @@ static int run_stage3b_tensor_engine(void)
     u32 bias_addr;
     u32 multiplier_addr;
     u32 shift_addr;
-    volatile s8 *const ddr_pool = (volatile s8 *)DDR_STAGE3B_POOL_BASE;
+    volatile s32 *const ddr_pool = (volatile s32 *)DDR_STAGE3B_POOL_BASE;
 
     set_stage(0xA00U);
     input_addr = stage3b_dma_addr(kStage3bTensor24);
@@ -387,10 +385,11 @@ static int run_stage3b_tensor_engine(void)
         return FAIL_STAGE3B_DMA_STORE;
     }
 
-    // Full pool3 comparison remains mandatory, but it now reads ordinary PS
-    // DDR instead of issuing 2,304 AXI-Lite BRAM reads with microsecond gaps.
+    // Full pool3 comparison remains mandatory. The PL DMA has already
+    // sign-extended each INT8 value to the RVV e32 DDR layout, so this loop
+    // verifies and then reuses the same storage without an ARM copy.
     for (word = 0U; word < STAGE3B_POOL_BYTES; ++word) {
-        s8 actual = ddr_pool[word];
+        s32 actual = ddr_pool[word];
         if (actual != kStage3bTensor26Expected[word]) {
             probe_store(54U, word);
             probe_store(55U, (u32)(s32)actual);
@@ -398,7 +397,6 @@ static int run_stage3b_tensor_engine(void)
             probe_store(57U, status);
             return FAIL_STAGE3B_POOL;
         }
-        g_stage3b_runtime_pool3[word] = (s32)actual;
     }
     probe_store(54U, STAGE3B_POOL_BYTES);
     probe_store(55U, STAGE3B_POOL_BYTES);
@@ -1366,7 +1364,7 @@ int main(void)
     /* The PL tensor is the same fist sample as static batch sample 0. Keep
      * the established RVV instructions and q29 golden values unchanged while
      * replacing their pool3 source with this just-verified runtime tensor. */
-    rc = run_real_convhead_gap_fc_batch6(g_stage3b_runtime_pool3, 1U);
+    rc = run_real_convhead_gap_fc_batch6((const s32 *)DDR_STAGE3B_POOL_BASE, 1U);
     if (rc != 0) {
         set_failure((u32)rc);
         xil_printf("runtime pool3 RVV chain failed: 0x%08x\r\n", (unsigned)rc);

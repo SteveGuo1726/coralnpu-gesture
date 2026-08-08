@@ -88,7 +88,11 @@ module coralnpu_stage3b_axi_dma (
   localparam [13:0] INPUT_WORDS      = 14'd9216;
   localparam [13:0] WEIGHT_WORDS     = 14'd9216;
   localparam [13:0] CHANNEL_WORDS    = 14'd64;
-  localparam [13:0] POOL_WORDS       = 14'd2304;
+  // PROJECT_LOCAL_MOD: expand every signed pool3 byte to one signed e32
+  // DDR word.  The RVV LSU already proves e32 unit-stride loads on the board;
+  // this removes the PS-side 9,216-word expansion loop without requiring an
+  // unverified e8 unpack instruction sequence in the VLEN=64 configuration.
+  localparam [13:0] POOL_WORDS       = 14'd9216;
   localparam [8:0]  MAX_BURST_WORDS  = 9'd256;
 
   reg [4:0]  state;
@@ -125,41 +129,46 @@ module coralnpu_stage3b_axi_dma (
 
   wire load_r_fire = (state == ST_LOAD_R) && m_axi_rvalid;
   wire load_last_beat = (burst_index_q + 9'd1) == burst_words_q;
-  // pool_rdata is 64 bits while HP0 is 32 bits.  burst_index_q therefore
-  // counts AXI words and advances by two only after the low and high halves
-  // of one BRAM word have both handshaken.
-  wire store_last_beat = (burst_index_q + 9'd2) == burst_words_q;
+  wire [13:0] load_remaining = segment_words(load_kind_q) - segment_offset_q;
+  wire [13:0] store_remaining = POOL_WORDS - store_offset_q;
+  wire [13:0] store_element_index = store_offset_q +
+      {{5{1'b0}}, burst_index_q};
+  wire [2:0] pool_byte_index = store_element_index[2:0];
+  wire signed [7:0] pool_selected_i8 =
+      pool_rdata[(pool_byte_index * 8) +: 8];
+  wire store_last_beat = (burst_index_q + 9'd1) == burst_words_q;
 
   assign busy = (state != ST_IDLE);
   assign stage_we = load_r_fire;
   assign stage_kind = load_kind_q;
-  assign stage_addr = segment_offset_q + burst_index_q;
+  assign stage_addr = {{2{1'b0}}, segment_offset_q} +
+      {{7{1'b0}}, burst_index_q};
   assign stage_wdata = m_axi_rdata;
   assign pool_re = (state == ST_STORE_FETCH);
-  assign pool_addr = (store_offset_q + burst_index_q) >> 1;
+  assign pool_addr = store_element_index[13:3];
 
   assign m_axi_awvalid = (state == ST_STORE_AW);
   assign m_axi_awaddr = burst_addr_q;
   assign m_axi_awprot = 3'b000;
   assign m_axi_awid = 6'd1;
-  assign m_axi_awlen = burst_words_q - 9'd1;
+  assign m_axi_awlen = burst_words_q[7:0] - 8'd1;
   assign m_axi_awsize = 3'd2;
   assign m_axi_awburst = 2'b01;
   assign m_axi_awlock = 1'b0;
   assign m_axi_awcache = 4'b0011;
   assign m_axi_awqos = 4'b0000;
   assign m_axi_awregion = 4'b0000;
-  assign m_axi_wvalid = (state == ST_STORE_W_LO) || (state == ST_STORE_W_HI);
-  assign m_axi_wdata = (state == ST_STORE_W_LO) ? pool_rdata[31:0] : pool_rdata[63:32];
+  assign m_axi_wvalid = (state == ST_STORE_W_LO);
+  assign m_axi_wdata = {{24{pool_selected_i8[7]}}, pool_selected_i8};
   assign m_axi_wstrb = 4'hf;
-  assign m_axi_wlast = (state == ST_STORE_W_HI) && store_last_beat;
+  assign m_axi_wlast = (state == ST_STORE_W_LO) && store_last_beat;
   assign m_axi_bready = (state == ST_STORE_B);
 
   assign m_axi_arvalid = (state == ST_LOAD_AR);
   assign m_axi_araddr = burst_addr_q;
   assign m_axi_arprot = 3'b000;
   assign m_axi_arid = 6'd1;
-  assign m_axi_arlen = burst_words_q - 9'd1;
+  assign m_axi_arlen = burst_words_q[7:0] - 8'd1;
   assign m_axi_arsize = 3'd2;
   assign m_axi_arburst = 2'b01;
   assign m_axi_arlock = 1'b0;
@@ -198,12 +207,13 @@ module coralnpu_stage3b_axi_dma (
         end
 
         ST_LOAD_PREP: begin
-          if ((segment_words(load_kind_q) - segment_offset_q) > MAX_BURST_WORDS)
+          if ((segment_words(load_kind_q) - segment_offset_q) > 14'd256)
             burst_words_q <= MAX_BURST_WORDS;
           else
-            burst_words_q <= segment_words(load_kind_q) - segment_offset_q;
+            burst_words_q <= load_remaining[8:0];
           burst_index_q <= 9'd0;
-          burst_addr_q <= segment_base(load_kind_q) + {segment_offset_q, 2'b00};
+          burst_addr_q <= segment_base(load_kind_q) +
+              {{16{1'b0}}, segment_offset_q, 2'b00};
           state <= ST_LOAD_AR;
         end
 
@@ -216,7 +226,8 @@ module coralnpu_stage3b_axi_dma (
             if (m_axi_rresp != 2'b00) fault <= 1'b1;
             if (load_last_beat) begin
               if (!m_axi_rlast) fault <= 1'b1;
-              if ((segment_offset_q + burst_words_q) == segment_words(load_kind_q)) begin
+              if ((segment_offset_q + {{5{1'b0}}, burst_words_q}) ==
+                  segment_words(load_kind_q)) begin
                 if (load_kind_q == 3'd4) begin
                   done <= 1'b1;
                   state <= ST_IDLE;
@@ -226,7 +237,8 @@ module coralnpu_stage3b_axi_dma (
                   state <= ST_LOAD_PREP;
                 end
               end else begin
-                segment_offset_q <= segment_offset_q + burst_words_q;
+                segment_offset_q <= segment_offset_q +
+                    {{5{1'b0}}, burst_words_q};
                 state <= ST_LOAD_PREP;
               end
             end else begin
@@ -237,12 +249,13 @@ module coralnpu_stage3b_axi_dma (
         end
 
         ST_STORE_PREP: begin
-          if ((POOL_WORDS - store_offset_q) > MAX_BURST_WORDS)
+          if ((POOL_WORDS - store_offset_q) > 14'd256)
             burst_words_q <= MAX_BURST_WORDS;
           else
-            burst_words_q <= POOL_WORDS - store_offset_q;
+            burst_words_q <= store_remaining[8:0];
           burst_index_q <= 9'd0;
-          burst_addr_q <= pool_base_addr + {store_offset_q, 2'b00};
+          burst_addr_q <= pool_base_addr +
+              {{16{1'b0}}, store_offset_q, 2'b00};
           state <= ST_STORE_AW;
         end
 
@@ -254,14 +267,10 @@ module coralnpu_stage3b_axi_dma (
         ST_STORE_WAIT: state <= ST_STORE_W_LO;
 
         ST_STORE_W_LO: begin
-          if (m_axi_wvalid && m_axi_wready) state <= ST_STORE_W_HI;
-        end
-
-        ST_STORE_W_HI: begin
           if (m_axi_wvalid && m_axi_wready) begin
             if (store_last_beat) state <= ST_STORE_B;
             else begin
-              burst_index_q <= burst_index_q + 9'd2;
+              burst_index_q <= burst_index_q + 9'd1;
               state <= ST_STORE_FETCH;
             end
           end
@@ -270,11 +279,12 @@ module coralnpu_stage3b_axi_dma (
         ST_STORE_B: begin
           if (m_axi_bvalid && m_axi_bready) begin
             if (m_axi_bresp != 2'b00) fault <= 1'b1;
-            if ((store_offset_q + burst_words_q) == POOL_WORDS) begin
+            if ((store_offset_q + {{5{1'b0}}, burst_words_q}) == POOL_WORDS) begin
               done <= 1'b1;
               state <= ST_IDLE;
             end else begin
-              store_offset_q <= store_offset_q + burst_words_q;
+              store_offset_q <= store_offset_q +
+                  {{5{1'b0}}, burst_words_q};
               state <= ST_STORE_PREP;
             end
           end

@@ -8,7 +8,7 @@ namespace {
 constexpr unsigned kInputWords = 9216;
 constexpr unsigned kWeightWords = 9216;
 constexpr unsigned kChannelWords = 64;
-constexpr unsigned kPoolWords = 2304;
+constexpr unsigned kPoolElements = 9216;
 
 void tick(Vcoralnpu_stage3b_axi_dma& dut) {
   dut.clk = 0;
@@ -121,11 +121,15 @@ int main() {
     }
   }
 
-  std::vector<uint64_t> pool64(kPoolWords / 2);
-  std::vector<uint32_t> stored(kPoolWords, 0);
+  std::vector<uint64_t> pool64(kPoolElements / 8);
+  std::vector<uint32_t> stored(kPoolElements, 0);
   for (unsigned i = 0; i < pool64.size(); ++i) {
-    pool64[i] = (static_cast<uint64_t>(0xa7000000u | (i * 2 + 1)) << 32) |
-                static_cast<uint64_t>(0xa7000000u | (i * 2));
+    uint64_t packed = 0;
+    for (unsigned byte = 0; byte < 8; ++byte) {
+      const uint8_t value = static_cast<uint8_t>((i * 8 + byte) * 37U);
+      packed |= static_cast<uint64_t>(value) << (byte * 8);
+    }
+    pool64[i] = packed;
   }
   bool write_response_pending = false;
   uint32_t write_addr = 0;
@@ -162,13 +166,14 @@ int main() {
     tick(dut);
     if (b_fire) write_response_pending = false;
   }
-  if (dut.busy || dut.fault || store_bursts != 9) {
+  if (dut.busy || dut.fault || store_bursts != 36) {
     std::fprintf(stderr, "STORE_FAILED busy=%u fault=%u bursts=%u\n",
                  dut.busy, dut.fault, store_bursts);
     return 8;
   }
   for (unsigned i = 0; i < stored.size(); ++i) {
-    const uint32_t expected = 0xa7000000u | i;
+    const int8_t source = static_cast<int8_t>(static_cast<uint8_t>(i * 37U));
+    const uint32_t expected = static_cast<uint32_t>(static_cast<int32_t>(source));
     if (stored[i] != expected) {
       std::fprintf(stderr, "STORE_MISMATCH addr=%u got=%08x expected=%08x\n",
                    i, stored[i], expected);
@@ -176,6 +181,6 @@ int main() {
     }
   }
   std::printf("PASS stage3b AXI DMA load_bursts=%u store_bursts=%u words=%u\n",
-              burst_count, store_bursts, kInputWords + kWeightWords + 3 * kChannelWords + kPoolWords);
+              burst_count, store_bursts, kInputWords + kWeightWords + 3 * kChannelWords + kPoolElements);
   return 0;
 }

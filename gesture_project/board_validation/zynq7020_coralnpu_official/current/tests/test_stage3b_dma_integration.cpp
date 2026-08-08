@@ -124,7 +124,7 @@ int main() {
     return 4;
   }
 
-  std::vector<uint32_t> ddr_pool(STAGE3B_POOL_BYTES / 4, 0);
+  std::vector<uint32_t> ddr_pool(STAGE3B_POOL_BYTES, 0);
   bool b_pending = false;
   uint32_t write_addr = 0;
   unsigned write_bursts = 0;
@@ -155,20 +155,17 @@ int main() {
     }
     if (b_fire) b_pending = false;
   }
-  if (dut.dma_busy || dut.dma_fault || write_bursts != 9) {
+  if (dut.dma_busy || dut.dma_fault || write_bursts != 36) {
     std::fprintf(stderr, "DMA_STORE_FAILED busy=%u fault=%u bursts=%u\n",
                  dut.dma_busy, dut.dma_fault, write_bursts);
     return 7;
   }
-  for (unsigned word = 0; word < ddr_pool.size(); ++word) {
-    for (unsigned byte = 0; byte < 4; ++byte) {
-      const unsigned index = word * 4 + byte;
-      const s8 actual = static_cast<s8>((ddr_pool[word] >> (byte * 8)) & 0xff);
-      if (actual != kStage3bTensor26Expected[index]) {
-        std::fprintf(stderr, "POOL_MISMATCH index=%u got=%d expected=%d\n",
-                     index, actual, kStage3bTensor26Expected[index]);
-        return 8;
-      }
+  for (unsigned index = 0; index < ddr_pool.size(); ++index) {
+    const s32 actual = static_cast<s32>(ddr_pool[index]);
+    if (actual != kStage3bTensor26Expected[index]) {
+      std::fprintf(stderr, "POOL_MISMATCH index=%u got=%d expected=%d\n",
+                   index, actual, kStage3bTensor26Expected[index]);
+      return 8;
     }
   }
   std::printf("PASS stage3b DMA integration load_bursts=%u engine_cycles=%llu store_bursts=%u pool_bytes=%u\n",
