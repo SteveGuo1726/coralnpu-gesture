@@ -5,6 +5,7 @@
 `timescale 1ns / 1ps
 `include "rvv_lsu_axi_bridge_unit_stride_e32.sv"
 `include "coralnpu_stage3b_tensor_engine.sv"
+`include "coralnpu_stage3b_axi_dma.sv"
 
 module coralnpu_rvv_accel_lane1_axil_wrapper (
     (* X_INTERFACE_PARAMETER = "XIL_INTERFACENAME CLK.ACLK, ASSOCIATED_BUSIF S_AXI:M_AXI, ASSOCIATED_RESET aresetn, FREQ_HZ 25000000" *)
@@ -186,6 +187,17 @@ module coralnpu_rvv_accel_lane1_axil_wrapper (
   localparam [11:0] REG_TENSOR_MEM_DATA  = 12'h0AC;
   localparam [11:0] REG_TENSOR_MEM_KIND  = 12'h0B0;
   localparam [11:0] REG_TENSOR_MEM_READ  = 12'h0B4;
+  // PROJECT_LOCAL_MOD: DDR burst-DMA controls.  The six base addresses are
+  // physical DDR addresses supplied by the PS; CTRL bit0 loads all stage3b
+  // inputs/parameters, bit1 writes pool3 back to DDR.
+  localparam [11:0] REG_TENSOR_DMA_CTRL   = 12'h0B8;
+  localparam [11:0] REG_TENSOR_DMA_INPUT  = 12'h0BC;
+  localparam [11:0] REG_TENSOR_DMA_WEIGHT = 12'h0C0;
+  localparam [11:0] REG_TENSOR_DMA_BIAS   = 12'h0C4;
+  localparam [11:0] REG_TENSOR_DMA_MULT   = 12'h0C8;
+  localparam [11:0] REG_TENSOR_DMA_SHIFT  = 12'h0CC;
+  localparam [11:0] REG_TENSOR_DMA_POOL   = 12'h0D0;
+  localparam [11:0] REG_TENSOR_DMA_STATUS = 12'h0D4;
 
   localparam [31:0] MAGIC_VALUE        = 32'h4352_5656;  // "CRVV"
   localparam [31:0] VERSION_VALUE      = 32'h0001_0000;
@@ -227,6 +239,15 @@ module coralnpu_rvv_accel_lane1_axil_wrapper (
   reg        tensor_mem_we_reg;
   reg        tensor_mem_re_reg;
   reg        tensor_done_sticky;
+  reg [31:0] tensor_dma_input_base_reg;
+  reg [31:0] tensor_dma_weight_base_reg;
+  reg [31:0] tensor_dma_bias_base_reg;
+  reg [31:0] tensor_dma_mult_base_reg;
+  reg [31:0] tensor_dma_shift_base_reg;
+  reg [31:0] tensor_dma_pool_base_reg;
+  reg        tensor_dma_start_load_reg;
+  reg        tensor_dma_start_store_reg;
+  reg        tensor_dma_done_sticky;
 
   reg        sticky_rd0_valid;
   reg [4:0]  sticky_rd0_addr;
@@ -298,6 +319,43 @@ module coralnpu_rvv_accel_lane1_axil_wrapper (
   wire       tensor_done;
   wire       tensor_fault;
   wire [31:0] tensor_mem_rdata;
+  wire       tensor_dma_busy;
+  wire       tensor_dma_done;
+  wire       tensor_dma_fault;
+  wire       tensor_dma_stage_we;
+  wire [2:0] tensor_dma_stage_kind;
+  wire [15:0] tensor_dma_stage_addr;
+  wire [31:0] tensor_dma_stage_wdata;
+  wire       tensor_dma_pool_re;
+  wire [10:0] tensor_dma_pool_addr;
+  wire [63:0] tensor_dma_pool_rdata;
+
+  // PROJECT_LOCAL_MOD: the LSU and tensor DMA are deliberately not a
+  // throughput-sharing arbiter.  Software phases are mutually exclusive,
+  // which preserves the proven RVV LSU ordering while giving tensor traffic
+  // long, contiguous HP0 bursts.
+  wire lsu_m_axi_awvalid, lsu_m_axi_wvalid, lsu_m_axi_wlast, lsu_m_axi_bready;
+  wire lsu_m_axi_arvalid, lsu_m_axi_rready;
+  wire [31:0] lsu_m_axi_awaddr, lsu_m_axi_wdata, lsu_m_axi_araddr;
+  wire [2:0] lsu_m_axi_awprot, lsu_m_axi_awsize, lsu_m_axi_arprot, lsu_m_axi_arsize;
+  wire [5:0] lsu_m_axi_awid, lsu_m_axi_arid;
+  wire [7:0] lsu_m_axi_awlen, lsu_m_axi_arlen;
+  wire [1:0] lsu_m_axi_awburst, lsu_m_axi_arburst;
+  wire lsu_m_axi_awlock, lsu_m_axi_arlock;
+  wire [3:0] lsu_m_axi_awcache, lsu_m_axi_awqos, lsu_m_axi_awregion;
+  wire [3:0] lsu_m_axi_wstrb;
+  wire [3:0] lsu_m_axi_arcache, lsu_m_axi_arqos, lsu_m_axi_arregion;
+  wire dma_m_axi_awvalid, dma_m_axi_wvalid, dma_m_axi_wlast, dma_m_axi_bready;
+  wire dma_m_axi_arvalid, dma_m_axi_rready;
+  wire [31:0] dma_m_axi_awaddr, dma_m_axi_wdata, dma_m_axi_araddr;
+  wire [2:0] dma_m_axi_awprot, dma_m_axi_awsize, dma_m_axi_arprot, dma_m_axi_arsize;
+  wire [5:0] dma_m_axi_awid, dma_m_axi_arid;
+  wire [7:0] dma_m_axi_awlen, dma_m_axi_arlen;
+  wire [1:0] dma_m_axi_awburst, dma_m_axi_arburst;
+  wire dma_m_axi_awlock, dma_m_axi_arlock;
+  wire [3:0] dma_m_axi_awcache, dma_m_axi_awqos, dma_m_axi_awregion;
+  wire [3:0] dma_m_axi_wstrb;
+  wire [3:0] dma_m_axi_arcache, dma_m_axi_arqos, dma_m_axi_arregion;
   wire       rvv2lsu_0_valid;
   wire       rvv2lsu_0_bits_idx_valid;
   wire [4:0] rvv2lsu_0_bits_idx_bits_addr;
@@ -408,11 +466,11 @@ module coralnpu_rvv_accel_lane1_axil_wrapper (
   // means a transfer actually crossed that interface rather than merely being
   // requested combinationally.
   wire lsu_evt_rvv_req_fire = rvv2lsu_0_valid && rvv2lsu_0_ready;
-  wire lsu_evt_ar_fire = m_axi_arvalid && m_axi_arready;
-  wire lsu_evt_r_fire = m_axi_rvalid && m_axi_rready;
-  wire lsu_evt_aw_fire = m_axi_awvalid && m_axi_awready;
-  wire lsu_evt_w_fire = m_axi_wvalid && m_axi_wready;
-  wire lsu_evt_b_fire = m_axi_bvalid && m_axi_bready;
+  wire lsu_evt_ar_fire = lsu_m_axi_arvalid && m_axi_arready;
+  wire lsu_evt_r_fire = m_axi_rvalid && lsu_m_axi_rready;
+  wire lsu_evt_aw_fire = lsu_m_axi_awvalid && m_axi_awready;
+  wire lsu_evt_w_fire = lsu_m_axi_wvalid && m_axi_wready;
+  wire lsu_evt_b_fire = m_axi_bvalid && lsu_m_axi_bready;
   wire lsu_evt_rsp_fire = lsu2rvv_0_valid && lsu2rvv_0_ready;
 
   // PROJECT_LOCAL_MOD: observe the project-local RVV backend at named
@@ -470,8 +528,77 @@ module coralnpu_rvv_accel_lane1_axil_wrapper (
       .mem_we(tensor_mem_we_reg), .mem_re(tensor_mem_re_reg),
       .mem_kind(tensor_mem_kind_reg),
       .mem_addr(tensor_mem_addr_reg), .mem_wdata(tensor_mem_data_reg),
-      .mem_rdata(tensor_mem_rdata)
+      .mem_rdata(tensor_mem_rdata),
+      .dma_we(tensor_dma_stage_we), .dma_kind(tensor_dma_stage_kind),
+      .dma_addr(tensor_dma_stage_addr), .dma_wdata(tensor_dma_stage_wdata),
+      .dma_pool_re(tensor_dma_pool_re), .dma_pool_addr(tensor_dma_pool_addr),
+      .dma_pool_rdata(tensor_dma_pool_rdata)
   );
+
+  coralnpu_stage3b_axi_dma u_stage3b_axi_dma (
+      .clk(aclk), .rstn(aresetn),
+      .start_load(tensor_dma_start_load_reg),
+      .start_store(tensor_dma_start_store_reg),
+      .input_base_addr(tensor_dma_input_base_reg),
+      .weight_base_addr(tensor_dma_weight_base_reg),
+      .bias_base_addr(tensor_dma_bias_base_reg),
+      .multiplier_base_addr(tensor_dma_mult_base_reg),
+      .shift_base_addr(tensor_dma_shift_base_reg),
+      .pool_base_addr(tensor_dma_pool_base_reg),
+      .busy(tensor_dma_busy), .done(tensor_dma_done), .fault(tensor_dma_fault),
+      .stage_we(tensor_dma_stage_we), .stage_kind(tensor_dma_stage_kind),
+      .stage_addr(tensor_dma_stage_addr), .stage_wdata(tensor_dma_stage_wdata),
+      .pool_re(tensor_dma_pool_re), .pool_addr(tensor_dma_pool_addr),
+      .pool_rdata(tensor_dma_pool_rdata),
+      .m_axi_awvalid(dma_m_axi_awvalid), .m_axi_awready(m_axi_awready),
+      .m_axi_awaddr(dma_m_axi_awaddr), .m_axi_awprot(dma_m_axi_awprot),
+      .m_axi_awid(dma_m_axi_awid), .m_axi_awlen(dma_m_axi_awlen),
+      .m_axi_awsize(dma_m_axi_awsize), .m_axi_awburst(dma_m_axi_awburst),
+      .m_axi_awlock(dma_m_axi_awlock), .m_axi_awcache(dma_m_axi_awcache),
+      .m_axi_awqos(dma_m_axi_awqos), .m_axi_awregion(dma_m_axi_awregion),
+      .m_axi_wvalid(dma_m_axi_wvalid), .m_axi_wready(m_axi_wready),
+      .m_axi_wdata(dma_m_axi_wdata), .m_axi_wstrb(dma_m_axi_wstrb),
+      .m_axi_wlast(dma_m_axi_wlast), .m_axi_bready(dma_m_axi_bready),
+      .m_axi_bvalid(m_axi_bvalid), .m_axi_bid(m_axi_bid), .m_axi_bresp(m_axi_bresp),
+      .m_axi_arvalid(dma_m_axi_arvalid), .m_axi_arready(m_axi_arready),
+      .m_axi_araddr(dma_m_axi_araddr), .m_axi_arprot(dma_m_axi_arprot),
+      .m_axi_arid(dma_m_axi_arid), .m_axi_arlen(dma_m_axi_arlen),
+      .m_axi_arsize(dma_m_axi_arsize), .m_axi_arburst(dma_m_axi_arburst),
+      .m_axi_arlock(dma_m_axi_arlock), .m_axi_arcache(dma_m_axi_arcache),
+      .m_axi_arqos(dma_m_axi_arqos), .m_axi_arregion(dma_m_axi_arregion),
+      .m_axi_rready(dma_m_axi_rready), .m_axi_rvalid(m_axi_rvalid),
+      .m_axi_rdata(m_axi_rdata), .m_axi_rid(m_axi_rid), .m_axi_rresp(m_axi_rresp),
+      .m_axi_rlast(m_axi_rlast)
+  );
+
+  assign m_axi_awvalid = tensor_dma_busy ? dma_m_axi_awvalid : lsu_m_axi_awvalid;
+  assign m_axi_awaddr = tensor_dma_busy ? dma_m_axi_awaddr : lsu_m_axi_awaddr;
+  assign m_axi_awprot = tensor_dma_busy ? dma_m_axi_awprot : lsu_m_axi_awprot;
+  assign m_axi_awid = tensor_dma_busy ? dma_m_axi_awid : lsu_m_axi_awid;
+  assign m_axi_awlen = tensor_dma_busy ? dma_m_axi_awlen : lsu_m_axi_awlen;
+  assign m_axi_awsize = tensor_dma_busy ? dma_m_axi_awsize : lsu_m_axi_awsize;
+  assign m_axi_awburst = tensor_dma_busy ? dma_m_axi_awburst : lsu_m_axi_awburst;
+  assign m_axi_awlock = tensor_dma_busy ? dma_m_axi_awlock : lsu_m_axi_awlock;
+  assign m_axi_awcache = tensor_dma_busy ? dma_m_axi_awcache : lsu_m_axi_awcache;
+  assign m_axi_awqos = tensor_dma_busy ? dma_m_axi_awqos : lsu_m_axi_awqos;
+  assign m_axi_awregion = tensor_dma_busy ? dma_m_axi_awregion : lsu_m_axi_awregion;
+  assign m_axi_wvalid = tensor_dma_busy ? dma_m_axi_wvalid : lsu_m_axi_wvalid;
+  assign m_axi_wdata = tensor_dma_busy ? dma_m_axi_wdata : lsu_m_axi_wdata;
+  assign m_axi_wstrb = tensor_dma_busy ? dma_m_axi_wstrb : lsu_m_axi_wstrb;
+  assign m_axi_wlast = tensor_dma_busy ? dma_m_axi_wlast : lsu_m_axi_wlast;
+  assign m_axi_bready = tensor_dma_busy ? dma_m_axi_bready : lsu_m_axi_bready;
+  assign m_axi_arvalid = tensor_dma_busy ? dma_m_axi_arvalid : lsu_m_axi_arvalid;
+  assign m_axi_araddr = tensor_dma_busy ? dma_m_axi_araddr : lsu_m_axi_araddr;
+  assign m_axi_arprot = tensor_dma_busy ? dma_m_axi_arprot : lsu_m_axi_arprot;
+  assign m_axi_arid = tensor_dma_busy ? dma_m_axi_arid : lsu_m_axi_arid;
+  assign m_axi_arlen = tensor_dma_busy ? dma_m_axi_arlen : lsu_m_axi_arlen;
+  assign m_axi_arsize = tensor_dma_busy ? dma_m_axi_arsize : lsu_m_axi_arsize;
+  assign m_axi_arburst = tensor_dma_busy ? dma_m_axi_arburst : lsu_m_axi_arburst;
+  assign m_axi_arlock = tensor_dma_busy ? dma_m_axi_arlock : lsu_m_axi_arlock;
+  assign m_axi_arcache = tensor_dma_busy ? dma_m_axi_arcache : lsu_m_axi_arcache;
+  assign m_axi_arqos = tensor_dma_busy ? dma_m_axi_arqos : lsu_m_axi_arqos;
+  assign m_axi_arregion = tensor_dma_busy ? dma_m_axi_arregion : lsu_m_axi_arregion;
+  assign m_axi_rready = tensor_dma_busy ? dma_m_axi_rready : lsu_m_axi_rready;
 
   function automatic [31:0] decode_read_data(input [11:0] addr);
     begin
@@ -548,6 +675,14 @@ module coralnpu_rvv_accel_lane1_axil_wrapper (
       REG_TENSOR_MEM_DATA: decode_read_data = tensor_mem_data_reg;
       REG_TENSOR_MEM_KIND: decode_read_data = {29'd0, tensor_mem_kind_reg};
       REG_TENSOR_MEM_READ: decode_read_data = tensor_mem_rdata;
+      REG_TENSOR_DMA_CTRL: decode_read_data = {30'd0, tensor_dma_start_store_reg, tensor_dma_start_load_reg};
+      REG_TENSOR_DMA_INPUT: decode_read_data = tensor_dma_input_base_reg;
+      REG_TENSOR_DMA_WEIGHT: decode_read_data = tensor_dma_weight_base_reg;
+      REG_TENSOR_DMA_BIAS: decode_read_data = tensor_dma_bias_base_reg;
+      REG_TENSOR_DMA_MULT: decode_read_data = tensor_dma_mult_base_reg;
+      REG_TENSOR_DMA_SHIFT: decode_read_data = tensor_dma_shift_base_reg;
+      REG_TENSOR_DMA_POOL: decode_read_data = tensor_dma_pool_base_reg;
+      REG_TENSOR_DMA_STATUS: decode_read_data = {29'd0, tensor_dma_done_sticky, tensor_dma_fault, tensor_dma_busy};
       default:       decode_read_data = 32'hDEAD_BEEF;
       endcase
     end
@@ -597,6 +732,15 @@ module coralnpu_rvv_accel_lane1_axil_wrapper (
       tensor_mem_we_reg <= 1'b0;
       tensor_mem_re_reg <= 1'b0;
       tensor_done_sticky <= 1'b0;
+      tensor_dma_input_base_reg <= 32'd0;
+      tensor_dma_weight_base_reg <= 32'd0;
+      tensor_dma_bias_base_reg <= 32'd0;
+      tensor_dma_mult_base_reg <= 32'd0;
+      tensor_dma_shift_base_reg <= 32'd0;
+      tensor_dma_pool_base_reg <= 32'd0;
+      tensor_dma_start_load_reg <= 1'b0;
+      tensor_dma_start_store_reg <= 1'b0;
+      tensor_dma_done_sticky <= 1'b0;
       inst_0_valid_reg <= 1'b0;
       sticky_rd0_valid <= 1'b0;
       sticky_rd0_addr <= 5'd0;
@@ -661,8 +805,13 @@ module coralnpu_rvv_accel_lane1_axil_wrapper (
       tensor_start_reg <= 1'b0;
       tensor_mem_we_reg <= 1'b0;
       tensor_mem_re_reg <= 1'b0;
+      tensor_dma_start_load_reg <= 1'b0;
+      tensor_dma_start_store_reg <= 1'b0;
       if (tensor_done) begin
         tensor_done_sticky <= 1'b1;
+      end
+      if (tensor_dma_done) begin
+        tensor_dma_done_sticky <= 1'b1;
       end
 
       if ((write_state == WR_IDLE) && s_axi_awvalid && s_axi_awready) begin
@@ -726,7 +875,7 @@ module coralnpu_rvv_accel_lane1_axil_wrapper (
                 frs0_reg <= wr_data_reg;
               end
               REG_TENSOR_CTRL: begin
-                if (wr_data_reg[0] && !tensor_busy) begin
+                if (wr_data_reg[0] && !tensor_busy && !tensor_dma_busy) begin
                   tensor_start_reg <= 1'b1;
                   tensor_done_sticky <= 1'b0;
                 end
@@ -751,6 +900,26 @@ module coralnpu_rvv_accel_lane1_axil_wrapper (
                   tensor_mem_we_reg <= 1'b1;
                 end
               end
+              REG_TENSOR_DMA_CTRL: begin
+                // DMA and RVV LSU must not share an in-flight AXI response.
+                // Start requests are therefore rejected while either path is
+                // active; software observes the unchanged status and retries.
+                if (!tensor_dma_busy && !tensor_busy && !lsu_bridge_busy && !issue_pending) begin
+                  if (wr_data_reg[0]) begin
+                    tensor_dma_start_load_reg <= 1'b1;
+                    tensor_dma_done_sticky <= 1'b0;
+                  end else if (wr_data_reg[1]) begin
+                    tensor_dma_start_store_reg <= 1'b1;
+                    tensor_dma_done_sticky <= 1'b0;
+                  end
+                end
+              end
+              REG_TENSOR_DMA_INPUT: if (!tensor_dma_busy) tensor_dma_input_base_reg <= wr_data_reg;
+              REG_TENSOR_DMA_WEIGHT: if (!tensor_dma_busy) tensor_dma_weight_base_reg <= wr_data_reg;
+              REG_TENSOR_DMA_BIAS: if (!tensor_dma_busy) tensor_dma_bias_base_reg <= wr_data_reg;
+              REG_TENSOR_DMA_MULT: if (!tensor_dma_busy) tensor_dma_mult_base_reg <= wr_data_reg;
+              REG_TENSOR_DMA_SHIFT: if (!tensor_dma_busy) tensor_dma_shift_base_reg <= wr_data_reg;
+              REG_TENSOR_DMA_POOL: if (!tensor_dma_busy) tensor_dma_pool_base_reg <= wr_data_reg;
               default: begin
               end
             endcase
@@ -951,40 +1120,40 @@ module coralnpu_rvv_accel_lane1_axil_wrapper (
       .busy(lsu_bridge_busy),
       .debug_req_word_count(lsu_debug_req_word_count),
       .debug_req_mask(lsu_debug_req_mask),
-      .m_axi_awvalid(m_axi_awvalid),
+      .m_axi_awvalid(lsu_m_axi_awvalid),
       .m_axi_awready(m_axi_awready),
-      .m_axi_awaddr(m_axi_awaddr),
-      .m_axi_awprot(m_axi_awprot),
-      .m_axi_awid(m_axi_awid),
-      .m_axi_awlen(m_axi_awlen),
-      .m_axi_awsize(m_axi_awsize),
-      .m_axi_awburst(m_axi_awburst),
-      .m_axi_awlock(m_axi_awlock),
-      .m_axi_awcache(m_axi_awcache),
-      .m_axi_awqos(m_axi_awqos),
-      .m_axi_awregion(m_axi_awregion),
-      .m_axi_wvalid(m_axi_wvalid),
+      .m_axi_awaddr(lsu_m_axi_awaddr),
+      .m_axi_awprot(lsu_m_axi_awprot),
+      .m_axi_awid(lsu_m_axi_awid),
+      .m_axi_awlen(lsu_m_axi_awlen),
+      .m_axi_awsize(lsu_m_axi_awsize),
+      .m_axi_awburst(lsu_m_axi_awburst),
+      .m_axi_awlock(lsu_m_axi_awlock),
+      .m_axi_awcache(lsu_m_axi_awcache),
+      .m_axi_awqos(lsu_m_axi_awqos),
+      .m_axi_awregion(lsu_m_axi_awregion),
+      .m_axi_wvalid(lsu_m_axi_wvalid),
       .m_axi_wready(m_axi_wready),
-      .m_axi_wdata(m_axi_wdata),
-      .m_axi_wstrb(m_axi_wstrb),
-      .m_axi_wlast(m_axi_wlast),
-      .m_axi_bready(m_axi_bready),
+      .m_axi_wdata(lsu_m_axi_wdata),
+      .m_axi_wstrb(lsu_m_axi_wstrb),
+      .m_axi_wlast(lsu_m_axi_wlast),
+      .m_axi_bready(lsu_m_axi_bready),
       .m_axi_bvalid(m_axi_bvalid),
       .m_axi_bid(m_axi_bid),
       .m_axi_bresp(m_axi_bresp),
-      .m_axi_arvalid(m_axi_arvalid),
+      .m_axi_arvalid(lsu_m_axi_arvalid),
       .m_axi_arready(m_axi_arready),
-      .m_axi_araddr(m_axi_araddr),
-      .m_axi_arprot(m_axi_arprot),
-      .m_axi_arid(m_axi_arid),
-      .m_axi_arlen(m_axi_arlen),
-      .m_axi_arsize(m_axi_arsize),
-      .m_axi_arburst(m_axi_arburst),
-      .m_axi_arlock(m_axi_arlock),
-      .m_axi_arcache(m_axi_arcache),
-      .m_axi_arqos(m_axi_arqos),
-      .m_axi_arregion(m_axi_arregion),
-      .m_axi_rready(m_axi_rready),
+      .m_axi_araddr(lsu_m_axi_araddr),
+      .m_axi_arprot(lsu_m_axi_arprot),
+      .m_axi_arid(lsu_m_axi_arid),
+      .m_axi_arlen(lsu_m_axi_arlen),
+      .m_axi_arsize(lsu_m_axi_arsize),
+      .m_axi_arburst(lsu_m_axi_arburst),
+      .m_axi_arlock(lsu_m_axi_arlock),
+      .m_axi_arcache(lsu_m_axi_arcache),
+      .m_axi_arqos(lsu_m_axi_arqos),
+      .m_axi_arregion(lsu_m_axi_arregion),
+      .m_axi_rready(lsu_m_axi_rready),
       .m_axi_rvalid(m_axi_rvalid),
       .m_axi_rdata(m_axi_rdata),
       .m_axi_rid(m_axi_rid),

@@ -19,7 +19,19 @@ module coralnpu_stage3b_tensor_engine (
     input  wire [2:0]  mem_kind,
     input  wire [15:0] mem_addr,
     input  wire [31:0] mem_wdata,
-    output reg  [31:0] mem_rdata
+    output reg  [31:0] mem_rdata,
+
+    // PROJECT_LOCAL_MOD: phase-exclusive AXI burst DMA port.  It shares the
+    // staging write mapping only while IDLE, then owns a separate read port
+    // on pool_mem for DDR writeback.  The existing AXI-Lite port remains a
+    // rollback/debug path and never races this port.
+    input  wire        dma_we,
+    input  wire [2:0]  dma_kind,
+    input  wire [15:0] dma_addr,
+    input  wire [31:0] dma_wdata,
+    input  wire        dma_pool_re,
+    input  wire [10:0] dma_pool_addr,
+    output reg  [63:0] dma_pool_rdata
 );
   localparam [3:0] ST_IDLE  = 4'd0;
   localparam [3:0] ST_INIT  = 4'd1;
@@ -92,6 +104,13 @@ module coralnpu_stage3b_tensor_engine (
   reg [2:0]  mem_rsp_kind2_q;
   reg        mem_rsp_half1_q;
   reg        mem_rsp_half2_q;
+  reg        dma_pool_rd_en_q;
+  reg [10:0] dma_pool_rd_addr_q;
+
+  wire stage_write_active = stage_we_q || (dma_we && (state == ST_IDLE));
+  wire [2:0] stage_write_kind = stage_we_q ? stage_kind_q : dma_kind;
+  wire [15:0] stage_write_addr = stage_we_q ? stage_addr_q : dma_addr;
+  wire [31:0] stage_write_data = stage_we_q ? stage_wdata_q : dma_wdata;
 
   integer wi_out;
   integer wi_kernel;
@@ -181,31 +200,31 @@ module coralnpu_stage3b_tensor_engine (
   // (tensor25) or 6 (tensor26) initiates a registered read in IDLE. The extra
   // command register keeps asynchronous AXI-Lite state off BRAM pins.
   always @(posedge clk) begin
-    if (stage_we_q) begin
-      case (stage_kind_q)
+    if (stage_write_active) begin
+      case (stage_write_kind)
         3'd0: begin
-          if (stage_addr_q[0]) input_mem[stage_addr_q[13:1]][63:32] <= stage_wdata_q;
-          else input_mem[stage_addr_q[13:1]][31:0] <= stage_wdata_q;
+          if (stage_write_addr[0]) input_mem[stage_write_addr[13:1]][63:32] <= stage_write_data;
+          else input_mem[stage_write_addr[13:1]][31:0] <= stage_write_data;
         end
         3'd1: begin
-          wi_out = stage_addr_q / 16'd144;
-          wi_kernel = (stage_addr_q % 16'd144) / 16'd16;
-          wi_cin = (stage_addr_q % 16'd16) * 4;
+          wi_out = stage_write_addr / 16'd144;
+          wi_kernel = (stage_write_addr % 16'd144) / 16'd16;
+          wi_cin = (stage_write_addr % 16'd16) * 4;
           wi_bank_index = ((wi_out / 8) * 72) + (wi_kernel * 8) + (wi_cin / 8);
           case (wi_out[2:0])
-            3'd0: if (wi_cin[2]) weight_mem0[wi_bank_index][63:32] <= stage_wdata_q; else weight_mem0[wi_bank_index][31:0] <= stage_wdata_q;
-            3'd1: if (wi_cin[2]) weight_mem1[wi_bank_index][63:32] <= stage_wdata_q; else weight_mem1[wi_bank_index][31:0] <= stage_wdata_q;
-            3'd2: if (wi_cin[2]) weight_mem2[wi_bank_index][63:32] <= stage_wdata_q; else weight_mem2[wi_bank_index][31:0] <= stage_wdata_q;
-            3'd3: if (wi_cin[2]) weight_mem3[wi_bank_index][63:32] <= stage_wdata_q; else weight_mem3[wi_bank_index][31:0] <= stage_wdata_q;
-            3'd4: if (wi_cin[2]) weight_mem4[wi_bank_index][63:32] <= stage_wdata_q; else weight_mem4[wi_bank_index][31:0] <= stage_wdata_q;
-            3'd5: if (wi_cin[2]) weight_mem5[wi_bank_index][63:32] <= stage_wdata_q; else weight_mem5[wi_bank_index][31:0] <= stage_wdata_q;
-            3'd6: if (wi_cin[2]) weight_mem6[wi_bank_index][63:32] <= stage_wdata_q; else weight_mem6[wi_bank_index][31:0] <= stage_wdata_q;
-            default: if (wi_cin[2]) weight_mem7[wi_bank_index][63:32] <= stage_wdata_q; else weight_mem7[wi_bank_index][31:0] <= stage_wdata_q;
+            3'd0: if (wi_cin[2]) weight_mem0[wi_bank_index][63:32] <= stage_write_data; else weight_mem0[wi_bank_index][31:0] <= stage_write_data;
+            3'd1: if (wi_cin[2]) weight_mem1[wi_bank_index][63:32] <= stage_write_data; else weight_mem1[wi_bank_index][31:0] <= stage_write_data;
+            3'd2: if (wi_cin[2]) weight_mem2[wi_bank_index][63:32] <= stage_write_data; else weight_mem2[wi_bank_index][31:0] <= stage_write_data;
+            3'd3: if (wi_cin[2]) weight_mem3[wi_bank_index][63:32] <= stage_write_data; else weight_mem3[wi_bank_index][31:0] <= stage_write_data;
+            3'd4: if (wi_cin[2]) weight_mem4[wi_bank_index][63:32] <= stage_write_data; else weight_mem4[wi_bank_index][31:0] <= stage_write_data;
+            3'd5: if (wi_cin[2]) weight_mem5[wi_bank_index][63:32] <= stage_write_data; else weight_mem5[wi_bank_index][31:0] <= stage_write_data;
+            3'd6: if (wi_cin[2]) weight_mem6[wi_bank_index][63:32] <= stage_write_data; else weight_mem6[wi_bank_index][31:0] <= stage_write_data;
+            default: if (wi_cin[2]) weight_mem7[wi_bank_index][63:32] <= stage_write_data; else weight_mem7[wi_bank_index][31:0] <= stage_write_data;
           endcase
         end
-        3'd2: bias_mem[stage_addr_q[5:0]] <= stage_wdata_q;
-        3'd3: multiplier_mem[stage_addr_q[5:0]] <= stage_wdata_q;
-        3'd4: shift_mem[stage_addr_q[5:0]] <= stage_wdata_q;
+        3'd2: bias_mem[stage_write_addr[5:0]] <= stage_write_data;
+        3'd3: multiplier_mem[stage_write_addr[5:0]] <= stage_write_data;
+        3'd4: shift_mem[stage_write_addr[5:0]] <= stage_write_data;
       endcase
     end
 
@@ -253,6 +272,7 @@ module coralnpu_stage3b_tensor_engine (
 
     if (output_rd_en_q) output_rd_data_q <= output_mem[output_rd_addr_q];
     if (pool_rd_en_q) pool_rd_data_q <= pool_mem[pool_rd_addr_q];
+    if (dma_pool_rd_en_q) dma_pool_rdata <= pool_mem[dma_pool_rd_addr_q];
   end
 
   always @(posedge clk) begin
@@ -287,6 +307,8 @@ module coralnpu_stage3b_tensor_engine (
       mem_rsp_kind2_q <= 3'd0;
       mem_rsp_half1_q <= 1'b0;
       mem_rsp_half2_q <= 1'b0;
+      dma_pool_rd_en_q <= 1'b0;
+      dma_pool_rd_addr_q <= 11'd0;
     end else begin
       done <= 1'b0;
 
@@ -296,6 +318,8 @@ module coralnpu_stage3b_tensor_engine (
       stage_wdata_q <= mem_wdata;
       output_rd_en_q <= 1'b0;
       pool_rd_en_q <= 1'b0;
+      dma_pool_rd_en_q <= dma_pool_re && (state == ST_IDLE);
+      if (dma_pool_re && (state == ST_IDLE)) dma_pool_rd_addr_q <= dma_pool_addr;
       mem_rsp_pending1_q <= 1'b0;
       mem_rsp_pending2_q <= mem_rsp_pending1_q;
       mem_rsp_kind2_q <= mem_rsp_kind1_q;

@@ -57,6 +57,12 @@ int main() {
   dut.mem_kind = 0;
   dut.mem_addr = 0;
   dut.mem_wdata = 0;
+  dut.dma_we = 0;
+  dut.dma_kind = 0;
+  dut.dma_addr = 0;
+  dut.dma_wdata = 0;
+  dut.dma_pool_re = 0;
+  dut.dma_pool_addr = 0;
   for (int i = 0; i < 3; ++i) tick(dut);
   dut.rstn = 1;
 

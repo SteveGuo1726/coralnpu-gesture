@@ -54,6 +54,14 @@
 #define REG_TENSOR_MEM_DATA  0x0ACU
 #define REG_TENSOR_MEM_KIND  0x0B0U
 #define REG_TENSOR_MEM_READ  0x0B4U
+#define REG_TENSOR_DMA_CTRL   0x0B8U
+#define REG_TENSOR_DMA_INPUT  0x0BCU
+#define REG_TENSOR_DMA_WEIGHT 0x0C0U
+#define REG_TENSOR_DMA_BIAS   0x0C4U
+#define REG_TENSOR_DMA_MULT   0x0C8U
+#define REG_TENSOR_DMA_SHIFT  0x0CCU
+#define REG_TENSOR_DMA_POOL   0x0D0U
+#define REG_TENSOR_DMA_STATUS 0x0D4U
 #define REG_DEBUG0        0x080U
 
 #define RESULT_SIGNATURE       0x47535450U
@@ -97,6 +105,9 @@
 #define FAIL_STAGE3B_FAULT     0x00070003U
 #define FAIL_STAGE3B_OUTPUT    0x00070004U
 #define FAIL_STAGE3B_POOL      0x00070005U
+#define FAIL_STAGE3B_DMA_LOAD  0x00070006U
+#define FAIL_STAGE3B_DMA_STORE 0x00070007U
+#define FAIL_STAGE3B_DMA_ALIGN 0x00070008U
 
 #define CTRL_CLEAR_STICKY      0x00000002U
 #define CTRL_ISSUE             0x00000003U
@@ -131,6 +142,9 @@
 #define DDR_SCORE_BASE         0x01000200U
 #define DDR_CONV_BIAS_BASE     0x01010000U
 #define DDR_CONV_WEIGHT_BASE   0x01011000U
+// PROJECT_LOCAL_MOD: pool3 lives in DDR after the stage3b burst writeback.
+// This range is disjoint from the proven RVV feature/bias/weight scratch.
+#define DDR_STAGE3B_POOL_BASE  0x01030000U
 
 static volatile u32 *const probe = (volatile u32 *)PROBE_RESULT_BASE;
 static volatile u32 g_stage = 0U;
@@ -269,32 +283,81 @@ static u32 stage3b_read_word(u32 kind, u32 word_addr)
     return Xil_In32(WRAPPER_BASE + REG_TENSOR_MEM_READ);
 }
 
+/* PROJECT_LOCAL_MOD: wait for one complete phase of the strict DMA/RVV
+ * schedule.  Status bit0=busy, bit1=fault, bit2=done.  No LSU instruction is
+ * issued while this function is active, so HP0 responses cannot cross paths. */
+static int stage3b_wait_dma(u32 *status_out, u32 *polls_out)
+{
+    u32 polls;
+    u32 status = 0U;
+
+    for (polls = 0U; polls < 1000000U; ++polls) {
+        status = Xil_In32(WRAPPER_BASE + REG_TENSOR_DMA_STATUS);
+        if ((status & 0x2U) != 0U) {
+            if (status_out != 0) *status_out = status;
+            if (polls_out != 0) *polls_out = polls;
+            return -1;
+        }
+        if ((status & 0x4U) != 0U) {
+            if (status_out != 0) *status_out = status;
+            if (polls_out != 0) *polls_out = polls;
+            return 0;
+        }
+    }
+    if (status_out != 0) *status_out = status;
+    if (polls_out != 0) *polls_out = polls;
+    return -2;
+}
+
+static inline u32 stage3b_dma_addr(const void *ptr)
+{
+    return (u32)(UINTPTR)ptr;
+}
+
 static int run_stage3b_tensor_engine(void)
 {
     u32 word;
-    u32 channel;
     u32 polls;
     u32 status;
+    u32 input_addr;
+    u32 weight_addr;
+    u32 bias_addr;
+    u32 multiplier_addr;
+    u32 shift_addr;
+    volatile s8 *const ddr_pool = (volatile s8 *)DDR_STAGE3B_POOL_BASE;
 
     set_stage(0xA00U);
-    for (word = 0U; word < (STAGE3B_INPUT_BYTES / 4U); ++word) {
-        stage3b_write_word(0U, word,
-                           pack_stage3b_i8x4(&kStage3bTensor24[word * 4U]));
+    input_addr = stage3b_dma_addr(kStage3bTensor24);
+    weight_addr = stage3b_dma_addr(kStage3bWeights);
+    bias_addr = stage3b_dma_addr(kStage3bBias);
+    multiplier_addr = stage3b_dma_addr(kStage3bMultiplier);
+    shift_addr = stage3b_dma_addr(kStage3bShift);
+    if (((input_addr | weight_addr | bias_addr | multiplier_addr | shift_addr) & 0x3U) != 0U) {
+        probe_store(54U, input_addr);
+        probe_store(55U, weight_addr);
+        probe_store(56U, bias_addr);
+        probe_store(57U, multiplier_addr);
+        probe_store(58U, shift_addr);
+        return FAIL_STAGE3B_DMA_ALIGN;
     }
-    probe_store(8U, word);
 
-    for (word = 0U; word < (STAGE3B_WEIGHT_BYTES / 4U); ++word) {
-        stage3b_write_word(1U, word,
-                           pack_stage3b_i8x4(&kStage3bWeights[word * 4U]));
-    }
-    probe_store(9U, word);
-
-    for (channel = 0U; channel < STAGE3B_C; ++channel) {
-        stage3b_write_word(2U, channel, (u32)kStage3bBias[channel]);
-        stage3b_write_word(3U, channel, (u32)kStage3bMultiplier[channel]);
-        stage3b_write_word(4U, channel, (u32)kStage3bShift[channel]);
-    }
+    Xil_Out32(WRAPPER_BASE + REG_TENSOR_DMA_INPUT, input_addr);
+    Xil_Out32(WRAPPER_BASE + REG_TENSOR_DMA_WEIGHT, weight_addr);
+    Xil_Out32(WRAPPER_BASE + REG_TENSOR_DMA_BIAS, bias_addr);
+    Xil_Out32(WRAPPER_BASE + REG_TENSOR_DMA_MULT, multiplier_addr);
+    Xil_Out32(WRAPPER_BASE + REG_TENSOR_DMA_SHIFT, shift_addr);
+    Xil_Out32(WRAPPER_BASE + REG_TENSOR_DMA_POOL, DDR_STAGE3B_POOL_BASE);
     __asm__ volatile ("dsb sy" : : : "memory");
+
+    Xil_Out32(WRAPPER_BASE + REG_TENSOR_DMA_CTRL, 0x1U);
+    if (stage3b_wait_dma(&status, &polls) != 0) {
+        probe_store(8U, status);
+        probe_store(9U, polls);
+        return FAIL_STAGE3B_DMA_LOAD;
+    }
+    probe_store(8U, STAGE3B_INPUT_BYTES / 4U);
+    probe_store(9U, STAGE3B_WEIGHT_BYTES / 4U);
+    probe_store(12U, polls);
 
     set_stage(0xA10U);
     Xil_Out32(WRAPPER_BASE + REG_TENSOR_CTRL, 1U);
@@ -317,45 +380,30 @@ static int run_stage3b_tensor_engine(void)
     }
 
     set_stage(0xA20U);
-    for (word = 0U; word < (STAGE3B_OUTPUT_BYTES / 4U); ++word) {
-        u32 actual_word = stage3b_read_word(5U, word);
-        u32 byte_index;
-        for (byte_index = 0U; byte_index < 4U; ++byte_index) {
-            u32 output_index = word * 4U + byte_index;
-            s8 actual = (s8)(actual_word >> (byte_index * 8U));
-            if (actual != kStage3bTensor25Expected[output_index]) {
-                probe_store(54U, output_index);
-                probe_store(55U, actual_word);
-                probe_store(56U, (u32)(s32)actual);
-                probe_store(57U, (u32)(s32)kStage3bTensor25Expected[output_index]);
-                probe_store(58U, status);
-                return FAIL_STAGE3B_OUTPUT;
-            }
-        }
+    Xil_Out32(WRAPPER_BASE + REG_TENSOR_DMA_CTRL, 0x2U);
+    if (stage3b_wait_dma(&status, &polls) != 0) {
+        probe_store(8U, status);
+        probe_store(9U, polls);
+        return FAIL_STAGE3B_DMA_STORE;
     }
-    probe_store(54U, STAGE3B_OUTPUT_BYTES);
 
-    set_stage(0xA30U);
-    for (word = 0U; word < (STAGE3B_POOL_BYTES / 4U); ++word) {
-        u32 actual_word = stage3b_read_word(6U, word);
-        u32 byte_index;
-        for (byte_index = 0U; byte_index < 4U; ++byte_index) {
-            u32 output_index = word * 4U + byte_index;
-            s8 actual = (s8)(actual_word >> (byte_index * 8U));
-            if (actual != kStage3bTensor26Expected[output_index]) {
-                probe_store(54U, output_index);
-                probe_store(55U, actual_word);
-                probe_store(56U, (u32)(s32)actual);
-                probe_store(57U, (u32)(s32)kStage3bTensor26Expected[output_index]);
-                probe_store(58U, status);
-                return FAIL_STAGE3B_POOL;
-            }
-            g_stage3b_runtime_pool3[output_index] = (s32)actual;
+    // Full pool3 comparison remains mandatory, but it now reads ordinary PS
+    // DDR instead of issuing 2,304 AXI-Lite BRAM reads with microsecond gaps.
+    for (word = 0U; word < STAGE3B_POOL_BYTES; ++word) {
+        s8 actual = ddr_pool[word];
+        if (actual != kStage3bTensor26Expected[word]) {
+            probe_store(54U, word);
+            probe_store(55U, (u32)(s32)actual);
+            probe_store(56U, (u32)(s32)kStage3bTensor26Expected[word]);
+            probe_store(57U, status);
+            return FAIL_STAGE3B_POOL;
         }
+        g_stage3b_runtime_pool3[word] = (s32)actual;
     }
-    probe_store(54U, STAGE3B_OUTPUT_BYTES);
+    probe_store(54U, STAGE3B_POOL_BYTES);
     probe_store(55U, STAGE3B_POOL_BYTES);
     probe_store(56U, (u32)(s32)kStage3bTensor26Expected[0]);
+    probe_store(57U, polls);
     return 0;
 }
 

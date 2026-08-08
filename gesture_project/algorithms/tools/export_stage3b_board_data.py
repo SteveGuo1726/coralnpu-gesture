@@ -46,7 +46,7 @@ def format_values(values: np.ndarray, indent: str = "    ", width: int = 12) -> 
 
 def emit_array(name: str, ctype: str, values: np.ndarray) -> str:
     return (
-        f"static const {ctype} {name}[{values.size}] = {{\n"
+        f"static const {ctype} {name}[{values.size}] __attribute__((aligned(4))) = {{\n"
         f"{format_values(values)}\n"
         "};\n"
     )
