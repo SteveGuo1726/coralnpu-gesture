@@ -42,54 +42,139 @@ module gestureflow_mac_tile #(
   output logic protocol_error
 );
 
-  logic signed [7:0] weights [0:OUT_LANES-1][0:MAX_TAPS-1]
-                            [0:MAX_IC_GROUPS-1][0:INPUT_LANES-1];
+  localparam int WEIGHT_DEPTH = MAX_TAPS * MAX_IC_GROUPS;
+  localparam int WEIGHT_ADDR_W = $clog2(WEIGHT_DEPTH);
+
+  // One independently addressed bank per output lane provides all
+  // OUT_LANES x INPUT_LANES operands each cycle. The physical bank is a
+  // separate module because a variable-indexed two-dimensional array was
+  // expanded by XC7 synthesis into 131072 flip-flops instead of block RAM.
   logic signed [OUT_LANES-1:0][31:0] accum;
   logic [OUT_LANES-1:0] active_output_lanes;
 
-  // This pipeline stage isolates DSP products from the following short
-  // four-input add tree. It can accept one input-channel group each cycle.
-  (* use_dsp = "yes" *) logic signed [OUT_LANES-1:0][INPUT_LANES-1:0][17:0] product_pipe;
+  logic [WEIGHT_ADDR_W-1:0] weight_write_addr;
+  logic [WEIGHT_ADDR_W-1:0] mac_weight_addr;
+  logic [WEIGHT_ADDR_W-1:0] weight_addr_s0;
+  logic signed [INPUT_LANES-1:0][7:0] activation_s0;
+  logic signed [INPUT_LANES-1:0][7:0] activation_s1;
+  logic [INPUT_LANES-1:0] input_lane_enable_s0;
+  logic [INPUT_LANES-1:0] input_lane_enable_s1;
+  logic [OUT_LANES-1:0] output_lanes_s0;
+  logic [OUT_LANES-1:0] output_lanes_s1;
+  logic s0_valid, s0_last;
+  logic s1_valid, s1_last;
+  logic [INPUT_LANES*8-1:0] weight_pipe [0:OUT_LANES-1];
+
+  for (genvar oc = 0; oc < OUT_LANES; oc++) begin : output_weight_banks
+    gestureflow_weight_bank #(
+      .ADDR_W(WEIGHT_ADDR_W),
+      .DATA_W(INPUT_LANES * 8)
+    ) weight_bank (
+      .clk(clk),
+      .write_enable(weight_write_valid && !busy && (weight_write_oc == oc)),
+      .write_addr(weight_write_addr),
+      .write_data(weight_write_data),
+      .read_enable(s0_valid),
+      .read_addr(weight_addr_s0),
+      .read_data(weight_pipe[oc])
+    );
+  end
+
+  // The first stage is a synchronous banked weight-RAM read. The second holds
+  // four DSP products. Two registered add-tree stages then reduce four INT8
+  // products before the final local INT32 accumulation. Once full this still
+  // accepts one channel group per clock, while avoiding a long product-to-psum
+  // combinational path at the 100MHz XC7Z020 target.
+  (* use_dsp = "yes" *) logic signed [OUT_LANES-1:0][3:0][17:0] product_pipe;
   logic product_valid;
   logic product_last;
   logic [OUT_LANES-1:0] product_output_lanes;
 
-  logic signed [OUT_LANES-1:0][31:0] reduced_products;
+  logic signed [OUT_LANES-1:0][1:0][18:0] pair_sum_pipe;
+  logic pair_valid;
+  logic pair_last;
+  logic [OUT_LANES-1:0] pair_output_lanes;
+  logic signed [OUT_LANES-1:0][19:0] reduced_sum_pipe;
+  logic signed [OUT_LANES-1:0][31:0] reduced_sum_extended;
+  logic reduced_valid;
+  logic reduced_last;
+  logic [OUT_LANES-1:0] reduced_output_lanes;
+  logic signed [3:0][7:0] activation_s1_padded;
+  logic [3:0] input_lane_enable_s1_padded;
+  logic signed [OUT_LANES-1:0][3:0][7:0] weight_s1_padded;
 
+  assign weight_write_addr = WEIGHT_ADDR_W'(
+    int'(weight_write_tap) * MAX_IC_GROUPS + int'(weight_write_ic_group));
+  assign mac_weight_addr = WEIGHT_ADDR_W'(
+    int'(mac_tap) * MAX_IC_GROUPS + int'(mac_ic_group));
+
+  // The data path is physically four lanes wide. Narrow stems use explicit
+  // zero padding here, so RGB (three lanes), compatibility tests (one/two
+  // lanes), and the four-lane main body share exactly the same add tree.
   always_comb begin
-    reduced_products = '0;
-    for (int oc = 0; oc < OUT_LANES; oc++) begin
-      for (int ic = 0; ic < INPUT_LANES; ic++) begin
-        reduced_products[oc] = reduced_products[oc] +
-          {{14{product_pipe[oc][ic][17]}}, product_pipe[oc][ic]};
+    activation_s1_padded = '0;
+    input_lane_enable_s1_padded = '0;
+    weight_s1_padded = '0;
+    reduced_sum_extended = '0;
+    for (int ic = 0; ic < INPUT_LANES; ic++) begin
+      activation_s1_padded[ic] = activation_s1[ic];
+      input_lane_enable_s1_padded[ic] = input_lane_enable_s1[ic];
+      for (int oc = 0; oc < OUT_LANES; oc++) begin
+        weight_s1_padded[oc][ic] = weight_pipe[oc][ic*8 +: 8];
       end
+    end
+    for (int oc = 0; oc < OUT_LANES; oc++) begin
+      reduced_sum_extended[oc] = {
+        {12{reduced_sum_pipe[oc][19]}}, reduced_sum_pipe[oc]
+      };
     end
   end
 
-  assign start_ready = !busy && !product_valid && !result_valid;
-  // Do not accept a new vector in the cycle in which the previous vector is
-  // tagged as final. All non-final vectors sustain one group per cycle.
-  assign mac_ready = busy && !(product_valid && product_last) && !result_valid;
+  assign start_ready = !busy && !s0_valid && !s1_valid && !product_valid &&
+                       !pair_valid && !reduced_valid && !result_valid;
+  // A final input group may be in any pipeline stage. Once seen, no later
+  // group may enter until its result has retired, but all preceding groups
+  // still flow through at one group per cycle.
+  assign mac_ready = busy && !result_valid &&
+    !(s0_valid && s0_last) && !(s1_valid && s1_last) &&
+    !(product_valid && product_last) && !(pair_valid && pair_last) &&
+    !(reduced_valid && reduced_last);
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
       accum <= '0;
       active_output_lanes <= '0;
+      activation_s0 <= '0;
+      activation_s1 <= '0;
+      input_lane_enable_s0 <= '0;
+      input_lane_enable_s1 <= '0;
+      weight_addr_s0 <= '0;
+      output_lanes_s0 <= '0;
+      output_lanes_s1 <= '0;
+      s0_valid <= 1'b0;
+      s0_last <= 1'b0;
+      s1_valid <= 1'b0;
+      s1_last <= 1'b0;
       product_pipe <= '0;
       product_valid <= 1'b0;
       product_last <= 1'b0;
       product_output_lanes <= '0;
+      pair_sum_pipe <= '0;
+      pair_valid <= 1'b0;
+      pair_last <= 1'b0;
+      pair_output_lanes <= '0;
+      reduced_sum_pipe <= '0;
+      reduced_valid <= 1'b0;
+      reduced_last <= 1'b0;
+      reduced_output_lanes <= '0;
       result_valid <= 1'b0;
       result_psum <= '0;
       result_lane_enable <= '0;
       busy <= 1'b0;
       protocol_error <= 1'b0;
     end else begin
-      if (weight_write_valid) begin
-        for (int ic = 0; ic < INPUT_LANES; ic++) begin
-          weights[weight_write_oc][weight_write_tap][weight_write_ic_group][ic]
-            <= weight_write_data[ic];
-        end
+      if (weight_write_valid && busy) begin
+        protocol_error <= 1'b1;
       end
 
       if (result_valid && result_ready) begin
@@ -109,38 +194,82 @@ module gestureflow_mac_tile #(
         busy <= 1'b1;
       end
 
-      // Retire the prior DSP product group into the on-tile INT32 sums.
-      if (product_valid) begin
+      // Stage 0: capture a requested weight address and its activation group.
+      s0_valid <= 1'b0;
+      if (mac_valid && mac_ready) begin
+        activation_s0 <= activation;
+        input_lane_enable_s0 <= input_lane_enable;
+        weight_addr_s0 <= mac_weight_addr;
+        output_lanes_s0 <= active_output_lanes;
+        s0_last <= mac_last;
+        s0_valid <= 1'b1;
+      end
+
+      // Stage 1: every output-channel bank performs its synchronous read.
+      // weight_pipe is registered by gestureflow_weight_bank in this cycle.
+      s1_valid <= s0_valid;
+      s1_last <= s0_last;
+      activation_s1 <= activation_s0;
+      input_lane_enable_s1 <= input_lane_enable_s0;
+      output_lanes_s1 <= output_lanes_s0;
+      // Stage 5: retire one fully reduced group into on-tile INT32 sums.
+      if (reduced_valid) begin
         for (int oc = 0; oc < OUT_LANES; oc++) begin
-          if (product_output_lanes[oc]) begin
-            accum[oc] <= accum[oc] + reduced_products[oc];
+          if (reduced_output_lanes[oc]) begin
+            accum[oc] <= accum[oc] + reduced_sum_extended[oc];
           end
         end
-        product_valid <= 1'b0;
-        if (product_last) begin
-          result_psum <= accum + reduced_products;
-          result_lane_enable <= product_output_lanes;
+        if (reduced_last) begin
+          result_psum <= accum + reduced_sum_extended;
+          result_lane_enable <= reduced_output_lanes;
           result_valid <= 1'b1;
           busy <= 1'b0;
         end
       end
 
-      // Launch the next vector product. Disabled tail lanes are forced to
-      // zero so a three-channel RGB stem is numerically exact on four lanes.
-      if (mac_valid && mac_ready) begin
+      // Stage 4: complete the four-way add tree after the two pair sums.
+      reduced_valid <= pair_valid;
+      reduced_last <= pair_last;
+      reduced_output_lanes <= pair_output_lanes;
+      if (pair_valid) begin
         for (int oc = 0; oc < OUT_LANES; oc++) begin
-          for (int ic = 0; ic < INPUT_LANES; ic++) begin
-            if (active_output_lanes[oc] && input_lane_enable[ic]) begin
-              product_pipe[oc][ic] <= $signed(activation[ic]) *
-                $signed(weights[oc][mac_tap][mac_ic_group][ic]);
+          reduced_sum_pipe[oc] <=
+            $signed({pair_sum_pipe[oc][0][18], pair_sum_pipe[oc][0]}) +
+            $signed({pair_sum_pipe[oc][1][18], pair_sum_pipe[oc][1]});
+        end
+      end
+
+      // Stage 3: reduce four DSP products to two registered pair sums.
+      pair_valid <= product_valid;
+      pair_last <= product_last;
+      pair_output_lanes <= product_output_lanes;
+      if (product_valid) begin
+        for (int oc = 0; oc < OUT_LANES; oc++) begin
+          pair_sum_pipe[oc][0] <=
+            $signed({product_pipe[oc][0][17], product_pipe[oc][0]}) +
+            $signed({product_pipe[oc][1][17], product_pipe[oc][1]});
+          pair_sum_pipe[oc][1] <=
+            $signed({product_pipe[oc][2][17], product_pipe[oc][2]}) +
+            $signed({product_pipe[oc][3][17], product_pipe[oc][3]});
+        end
+      end
+
+      // Stage 2: product register. Disabled tail lanes are forced to zero so
+      // a three-channel RGB stem is numerically exact on four lanes.
+      product_valid <= s1_valid;
+      product_last <= s1_last;
+      product_output_lanes <= output_lanes_s1;
+      if (s1_valid) begin
+        for (int oc = 0; oc < OUT_LANES; oc++) begin
+          for (int ic = 0; ic < 4; ic++) begin
+            if (output_lanes_s1[oc] && input_lane_enable_s1_padded[ic]) begin
+              product_pipe[oc][ic] <= $signed(activation_s1_padded[ic]) *
+                $signed(weight_s1_padded[oc][ic]);
             end else begin
               product_pipe[oc][ic] <= '0;
             end
           end
         end
-        product_output_lanes <= active_output_lanes;
-        product_last <= mac_last;
-        product_valid <= 1'b1;
       end
     end
   end

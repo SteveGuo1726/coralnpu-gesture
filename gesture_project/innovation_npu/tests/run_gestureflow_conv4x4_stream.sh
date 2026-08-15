@@ -9,6 +9,7 @@ rm -rf "$build_dir"
 VERILATOR_ROOT="$verilator_root" verilator --binary --timing --sv --top-module tb_gestureflow_conv4x4_stream \
   --Mdir "$build_dir" \
   "$root/rtl/gestureflow_line_window.sv" \
+  "$root/rtl/gestureflow_weight_bank.sv" \
   "$root/rtl/gestureflow_mac_tile.sv" \
   "$root/rtl/gestureflow_conv4x4_stream.sv" \
   "$root/tests/tb_gestureflow_conv4x4_stream.sv"
