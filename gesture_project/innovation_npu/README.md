@@ -119,3 +119,25 @@ Windows 工程必须位于 `E:\coralnpu_vivado\projects\gestureflow_axil_baselin
 第四路显式掩码；下一步是跨输入通道累加与输出通道 tile 调度，再以真实 TFLite
 的量化激活、权重、bias 与 per-channel requant 做完整逐点比对；此后才加入命令
 描述符、DMA/AXI 和资源/时序验证。
+
+### `4x4 SAME` 空间调度已闭环的范围
+
+`rtl/gestureflow_same4x4_rgb_window.sv` 是首层真正的 TFLite `SAME` padding
+前端：对于偶数 `4x4`、stride 1，它固定使用 top/left 为 1，bottom/right 为 2
+的零填充，因此 `96x96` 输入产生完整 `96x96` 输出，而不是旧 valid-only 行缓存
+的 `93x93` 输出。`rtl/gestureflow_conv4x4_rgb_same_stream.sv` 将三个独立的行缓存
+接到已经验证的 `16x4` MAC tile，计算忙时通过 `window_ready` 反压输入，从而不会
+遗漏或覆盖边界窗口；它不依赖 ARM 的逐窗口命令。
+
+执行以下回归会在一个 `3x4` RGB 小帧上实际计算全部 12 个 SAME 输出。测试具有
+正负 INT8 权重、每通道不同输入和 bias，软件参考逐点覆盖四条边界和 RGB 尾 lane：
+
+```bash
+bash gesture_project/innovation_npu/tests/run_gestureflow_conv4x4_rgb_same_stream.sh
+```
+
+此阶段尚不是完整首层部署。它还没有连接当前 HP0 loader 的真实帧/行条带来源，
+也没有把每个输出向量写入 output bank 后经 AXI 写回 DDR。因此不能写成“完整
+96x96 首层已上板”或“模型已整网部署”。下一阶段将把 4 行输入条带的 HP0 装载、
+空间坐标到 output-bank 地址的映射及 output-tile 写回并入层级描述符；届时必须以
+真实 TFLite 首层全图 golden、Vivado 实现和 Zynq-7020 实板三重验证为准。

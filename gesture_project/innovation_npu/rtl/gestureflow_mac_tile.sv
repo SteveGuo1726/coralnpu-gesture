@@ -18,7 +18,7 @@ module gestureflow_mac_tile #(
   input  logic weight_write_valid,
   input  logic [$clog2(OUT_LANES)-1:0] weight_write_oc,
   input  logic [$clog2(MAX_TAPS)-1:0] weight_write_tap,
-  input  logic [$clog2(MAX_IC_GROUPS)-1:0] weight_write_ic_group,
+  input  logic [(MAX_IC_GROUPS <= 1 ? 1 : $clog2(MAX_IC_GROUPS))-1:0] weight_write_ic_group,
   input  logic signed [INPUT_LANES-1:0][7:0] weight_write_data,
 
   input  logic start_valid,
@@ -29,7 +29,7 @@ module gestureflow_mac_tile #(
   input  logic mac_valid,
   output logic mac_ready,
   input  logic [$clog2(MAX_TAPS)-1:0] mac_tap,
-  input  logic [$clog2(MAX_IC_GROUPS)-1:0] mac_ic_group,
+  input  logic [(MAX_IC_GROUPS <= 1 ? 1 : $clog2(MAX_IC_GROUPS))-1:0] mac_ic_group,
   input  logic signed [INPUT_LANES-1:0][7:0] activation,
   input  logic [INPUT_LANES-1:0] input_lane_enable,
   input  logic mac_last,

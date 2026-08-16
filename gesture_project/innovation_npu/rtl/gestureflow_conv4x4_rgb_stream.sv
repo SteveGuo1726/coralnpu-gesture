@@ -51,6 +51,7 @@ module gestureflow_conv4x4_rgb_stream #(
       .frame_start(frame_start),
       .pixel_valid(pixel_valid && pixel_ready),
       .pixel_data(pixel_rgb[channel]),
+      .window_ready(1'b1),
       .window_valid(line_window_valid[channel]),
       .window_data(line_window_data[channel])
     );

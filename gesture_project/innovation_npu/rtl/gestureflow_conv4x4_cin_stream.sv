@@ -35,6 +35,7 @@ module gestureflow_conv4x4_cin_stream #(
     gestureflow_line_window #(.IMAGE_WIDTH(IMAGE_WIDTH), .KERNEL_SIZE(4)) line_window (
       .clk(clk), .rst_n(rst_n), .frame_start(frame_start),
       .pixel_valid(pixel_valid && pixel_ready), .pixel_data(pixel_data[c]),
+      .window_ready(1'b1),
       .window_valid(window_valid[c]), .window_data(window_data[c])
     );
   end

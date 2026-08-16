@@ -8,6 +8,7 @@ module tb_gestureflow_line_window;
   logic rst_n = 1'b0;
   logic frame_start;
   logic pixel_valid;
+  logic window_ready = 1'b1;
   logic signed [7:0] pixel_data;
   logic window_valid;
   logic signed [KERNEL_SIZE*KERNEL_SIZE-1:0][7:0] window_data;
