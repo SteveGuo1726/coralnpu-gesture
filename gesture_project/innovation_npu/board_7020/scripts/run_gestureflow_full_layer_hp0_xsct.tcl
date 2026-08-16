@@ -37,7 +37,7 @@ for {set i 0} {$i < 4000} {incr i} {
   after 25
 }
 puts [format {GESTUREFLOW_FULL_LAYER_HP0_FINAL_RESULT = 0x%08X} $final]
-for {set i 0} {$i < 15} {incr i} {
+for {set i 0} {$i < 18} {incr i} {
   puts [format {GESTUREFLOW_FULL_LAYER_HP0_PROBE[%02d] = 0x%08X} $i [rd32 [expr {$probe_base + $i * 4}]]]
 }
 if {$final != 0x600D600D} { error "GestureFlow full-layer HP0 board run failed" }

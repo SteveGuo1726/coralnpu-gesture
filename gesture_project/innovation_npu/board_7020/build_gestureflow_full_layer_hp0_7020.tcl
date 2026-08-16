@@ -5,7 +5,7 @@ proc package_ip {src_dir project_root} {
   set pack [file join $project_root .tmp_gestureflow_full_hp0_pack]
   file delete -force $root; file delete -force $pack; file mkdir [file dirname $root]
   create_project -force gestureflow_full_hp0_pack $pack -part xc7z020clg400-2
-  foreach src {gestureflow_line_delay_bank.sv gestureflow_line_window.sv gestureflow_same4x4_rgb_window.sv gestureflow_weight_bank.sv gestureflow_mac_tile.sv gestureflow_conv4x4_rgb_same_stream.sv gestureflow_requant_relu.sv gestureflow_output_bank.sv gestureflow_conv4x4_rgb_same_layer.sv gestureflow_hp0_rgb_loader.sv gestureflow_full_layer_hp0_axil.sv} {
+  foreach src {gestureflow_line_delay_bank.sv gestureflow_line_window.sv gestureflow_same4x4_rgb_window.sv gestureflow_weight_bank.sv gestureflow_mac_tile.sv gestureflow_conv4x4_rgb_same_stream.sv gestureflow_requant_relu.sv gestureflow_output_bank.sv gestureflow_conv4x4_rgb_same_layer.sv gestureflow_hp0_rgb_loader.sv gestureflow_hp0_tensor_writer.sv gestureflow_full_layer_hp0_axil.sv} {
     set path [file join $src_dir $src]
     if {![file exists $path]} { error "Missing GestureFlow source: $path" }
     add_files -norecurse $path; set_property file_type SystemVerilog [get_files $path]
@@ -15,8 +15,8 @@ proc package_ip {src_dir project_root} {
   ipx::package_project -root_dir $root -vendor user.org -library user -taxonomy /UserIP -import_files -force
   set core [ipx::current_core]
   set_property name gestureflow_full_layer_hp0_axil $core
-  set_property display_name {GestureFlow full first-layer HP0 baseline} $core
-  set_property description {Project-local 96x96 RGB TFLite first layer with PS DDR ingress over HP0.} $core
+  set_property display_name {GestureFlow first-layer HP0 activation-store baseline} $core
+  set_property description {Project-local 96x96 RGB TFLite first layer with PS DDR ingress and optional HP0 activation writeback.} $core
   ipx::save_core $core
   close_project; file delete -force $pack
   return [file dirname $root]
