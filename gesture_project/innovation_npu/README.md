@@ -105,6 +105,15 @@ Windows 工程必须位于 `E:\coralnpu_vivado\projects\gestureflow_axil_baselin
 `E:\Xilinx\Vivado\2023.2\bin\hw_server.bat -s tcp::3333`，板测 Tcl 已固定连接
 `tcp:127.0.0.1:3333`。
 
+### 可配置层任务边界
+
+`JOB_CFG (0x03c)` 让 staged mode 覆盖模型层尾通道，而不把阵列限制为满 `16x16`
+微基准：`[3:0]` 为 `tap_count-1`，`[7:4]` 为 `Cin-group-count-1`，`[11:8]` 为
+最后输入组的有效 lane 掩码，`[31:16]` 为有效输出 lane 掩码。Zynq-7020 实板已验证
+`4x4 x RGB(Cin=3)`：16 个 tap、1 组、mask `0b0111`，连续执行为 23 个 25MHz
+周期且全部 16 路 INT32 输出精确通过。这是当前从“满载阵列”进入真实模型首层的
+硬件边界，但仍不含真实模型权重、重定标、池化、DMA 或整网调度。
+
 `gestureflow_conv4x4_stream.sv` 当前只用于单输入通道集成对账，不能误写为 RGB
 或整网已经完成。RGB 首层 wrapper 已验证三路输入占用 4-lane MAC 的前三路、
 第四路显式掩码；下一步是跨输入通道累加与输出通道 tile 调度，再以真实 TFLite

@@ -24,6 +24,7 @@
 #define GF_CYCLES           0x030U
 #define GF_ACT_STAGE_ADDR   0x034U
 #define GF_ACT_STAGE_DATA   0x038U
+#define GF_JOB_CFG          0x03CU
 
 #define RESULT_PASS         0x600D600DU
 #define RESULT_FAIL         0xBAD0BAD0U
@@ -86,7 +87,7 @@ int main(void)
     if (value != 0x47464E50U) { fail(0x1001U, value); }
     value = Xil_In32(GF_BASE + GF_VERSION);
     store_probe(5U, value);
-    if (value != 0x00010001U) { fail(0x1002U, value); }
+    if (value != 0x00010002U) { fail(0x1002U, value); }
 
     /* Complete deterministic 4x4 x 16-Cin-group tile transaction.
      * Every weight/activation is +1; lane N starts at bias N. */
@@ -136,9 +137,37 @@ int main(void)
     store_probe(24U, value);
     if (value != 0x0000FFFFU) { fail(0x1010U, value); }
 
+    /* Exercise the actual static-model stem shape: 4x4 x RGB(Cin=3).
+     * taps=16, groups=1, final input mask=0b0111, all 16 outputs active. */
+    stage = 0x60U;
+    Xil_Out32(GF_BASE + GF_JOB_CFG, 0xFFFF070FU);
+    for (tap = 0U; tap < 16U; ++tap) {
+        Xil_Out32(GF_BASE + GF_ACT_STAGE_ADDR, tap);
+        Xil_Out32(GF_BASE + GF_ACT_STAGE_DATA, 0x01010101U);
+    }
+    Xil_Out32(GF_BASE + GF_CONTROL, 0x2U);
+    Xil_Out32(GF_BASE + GF_CONTROL, 0x5U);
+    status = 0U;
+    for (poll = 0U; poll < 1000000U; ++poll) {
+        status = Xil_In32(GF_BASE + GF_STATUS);
+        if ((status & (1U << 3)) != 0U) { break; }
+    }
+    store_probe(25U, status);
+    if ((status & (1U << 4)) != 0U || (status & (1U << 3)) == 0U) { fail(0x1020U, status); }
+    cycles = Xil_In32(GF_BASE + GF_CYCLES);
+    store_probe(26U, cycles);
+    if (cycles == 0U || cycles >= 100U) { fail(0x1021U, cycles); }
+    for (oc = 0U; oc < 16U; ++oc) {
+        Xil_Out32(GF_BASE + GF_RESULT_IDX, oc);
+        value = Xil_In32(GF_BASE + GF_RESULT_DATA);
+        store_probe(8U + oc, value);
+        if (value != 48U + oc) { fail(0x1200U + oc, value); }
+    }
+
     store_probe(0U, RESULT_PASS);
-    xil_printf("GESTUREFLOW_AXIL_BASELINE_PASS cycles=%lu lane0=%lu lane15=%lu\r\n",
-               (unsigned long)cycles, (unsigned long)probe[8], (unsigned long)probe[23]);
+    xil_printf("GESTUREFLOW_AXIL_CONFIGURABLE_PASS full_cycles=%lu rgb_cycles=%lu lane0=%lu lane15=%lu\r\n",
+               (unsigned long)probe[7], (unsigned long)cycles,
+               (unsigned long)probe[8], (unsigned long)probe[23]);
     while (1) { usleep(100000U); }
     return 0;
 }

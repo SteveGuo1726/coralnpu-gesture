@@ -16,7 +16,8 @@ module tb_gestureflow_axil_microkernel;
                     BIDX = 32'h018, BDATA = 32'h01c, ACTRL = 32'h020,
                     ADATA = 32'h024, RESULT_IDX = 32'h028,
                     RESULT_DATA = 32'h02c, CYCLES = 32'h030,
-                    ACT_STAGE_ADDR = 32'h034, ACT_STAGE_DATA = 32'h038;
+                    ACT_STAGE_ADDR = 32'h034, ACT_STAGE_DATA = 32'h038,
+                    JOB_CFG = 32'h03c;
 
   always #5 clk = ~clk;
 
@@ -67,7 +68,7 @@ module tb_gestureflow_axil_microkernel;
     rst_n = 1'b1;
 
     axil_read(MAGIC, value); if (value != 32'h47464e50) $fatal(1, "bad magic %h", value);
-    axil_read(VERSION, value); if (value != 32'h00010001) $fatal(1, "bad version %h", value);
+    axil_read(VERSION, value); if (value != 32'h00010002) $fatal(1, "bad version %h", value);
 
     // Bias each output lane with its lane number. Load every 4x4 tap/group
     // with four ones. Feeding all-one activations produces 16 groups * 4 = 64.
@@ -105,7 +106,28 @@ module tb_gestureflow_axil_microkernel;
     end
     axil_read(RESULT_IDX, value); if (value != 16'hffff) $fatal(1, "bad result mask %h", value);
     if (dut.cycles >= 1000) $fatal(1, "staged execution did not remove host feed gap cycles=%0d", dut.cycles);
-    $display("GESTUREFLOW_AXIL_MICROKERNEL_STAGED_PASS cycles=%0d lane0=%0d lane15=%0d", dut.cycles, dut.result_psum[0], dut.result_psum[15]);
+
+    // Real RGB stem shape: 4x4 taps, one Cin group with only lanes 0..2.
+    // The existing +1 weights/bias produce 16 * 3 + output-lane bias.
+    axil_write(JOB_CFG, 32'hffff070f);
+    for (int tap = 0; tap < 16; tap++) begin
+      axil_write(ACT_STAGE_ADDR, tap);
+      axil_write(ACT_STAGE_DATA, 32'h01010101);
+    end
+    axil_write(CONTROL, 32'h2);
+    axil_write(CONTROL, 32'h5);
+    for (int wait_cycle = 0; wait_cycle < 100; wait_cycle++) begin
+      axil_read(STATUS, value);
+      if (value[3]) break;
+      if (wait_cycle == 99) $fatal(1, "RGB transaction never completed status=%h", value);
+    end
+    for (oc = 0; oc < 16; oc++) begin
+      axil_write(RESULT_IDX, oc);
+      axil_read(RESULT_DATA, value);
+      if ($signed(value) != (48 + oc)) $fatal(1, "RGB lane %0d result=%0d expected=%0d", oc, $signed(value), 48 + oc);
+    end
+    if (dut.cycles >= 100) $fatal(1, "RGB staged execution took %0d cycles", dut.cycles);
+    $display("GESTUREFLOW_AXIL_MICROKERNEL_STAGED_PASS full_cycles=263 rgb_cycles=%0d lane0=%0d lane15=%0d", dut.cycles, dut.result_psum[0], dut.result_psum[15]);
     $finish;
   end
 endmodule

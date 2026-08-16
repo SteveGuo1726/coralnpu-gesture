@@ -44,7 +44,7 @@ for {set i 0} {$i < 400} {incr i} {
   after 25
 }
 puts [format {GESTUREFLOW_FINAL_RESULT = 0x%08X} $final]
-for {set i 0} {$i < 25} {incr i} {
+for {set i 0} {$i < 27} {incr i} {
   puts [format {GESTUREFLOW_PROBE[%02d] = 0x%08X} $i [rd32 [expr {$probe_base + $i * 4}]]]
 }
 if {$final != 0x600D600D} { error "GestureFlow AXI baseline failed" }
