@@ -9,6 +9,7 @@ file mkdir $build_dir
 
 create_project gestureflow_conv4x4_rgb_same_stream_7020 $build_dir -part xc7z020clg400-1 -force
 foreach source [list \
+  [file join $npu_root rtl gestureflow_line_delay_bank.sv] \
   [file join $npu_root rtl gestureflow_line_window.sv] \
   [file join $npu_root rtl gestureflow_same4x4_rgb_window.sv] \
   [file join $npu_root rtl gestureflow_weight_bank.sv] \

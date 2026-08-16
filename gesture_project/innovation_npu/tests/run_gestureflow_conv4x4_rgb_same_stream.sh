@@ -6,6 +6,7 @@ verilator_bin="$(readlink -f "$(command -v verilator)")"
 rm -rf "$build_dir"
 VERILATOR_ROOT="$(cd "$(dirname "$verilator_bin")/.." && pwd)" verilator --binary --timing --sv \
   --top-module tb_gestureflow_conv4x4_rgb_same_stream --Mdir "$build_dir" \
+  "$root/rtl/gestureflow_line_delay_bank.sv" \
   "$root/rtl/gestureflow_line_window.sv" \
   "$root/rtl/gestureflow_same4x4_rgb_window.sv" \
   "$root/rtl/gestureflow_weight_bank.sv" \

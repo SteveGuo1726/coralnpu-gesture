@@ -35,6 +35,7 @@ module gestureflow_same4x4_rgb_window #(
   logic line_accept;
   logic line_pixel_valid;
   logic signed [CHANNELS-1:0][7:0] line_pixel_data;
+  logic [CHANNELS-1:0] channel_pixel_ready;
   logic [CHANNELS-1:0] channel_window_valid;
   logic signed [CHANNELS-1:0][15:0][7:0] channel_window_data;
 
@@ -42,7 +43,7 @@ module gestureflow_same4x4_rgb_window #(
     source_pixel_needed = active &&
       (virtual_row >= ROW_W'(1)) && (virtual_row <= ROW_W'(IMAGE_HEIGHT)) &&
       (virtual_column >= COL_W'(1)) && (virtual_column <= COL_W'(IMAGE_WIDTH));
-    line_accept = !channel_window_valid[0] || window_ready;
+    line_accept = channel_pixel_ready[0];
     line_pixel_valid = active && line_accept &&
       (!source_pixel_needed || pixel_valid);
     line_pixel_data = source_pixel_needed ? pixel_data : '0;
@@ -61,6 +62,7 @@ module gestureflow_same4x4_rgb_window #(
       .frame_start(frame_start),
       .pixel_valid(line_pixel_valid),
       .pixel_data(line_pixel_data[channel]),
+      .pixel_ready(channel_pixel_ready[channel]),
       .window_ready(window_ready),
       .window_valid(channel_window_valid[channel]),
       .window_data(channel_window_data[channel])

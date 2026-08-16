@@ -31,7 +31,8 @@ module gestureflow_conv4x4_stream #(
   output logic protocol_error
 );
 
-  logic line_window_valid;
+  logic line_window_valid, line_pixel_ready;
+  logic core_pixel_ready;
   logic signed [15:0][7:0] line_window_data;
   logic pending_window;
   logic signed [15:0][7:0] held_window;
@@ -57,8 +58,9 @@ module gestureflow_conv4x4_stream #(
     .clk(clk),
     .rst_n(rst_n),
     .frame_start(frame_start),
-    .pixel_valid(pixel_valid && pixel_ready),
+    .pixel_valid(pixel_valid && core_pixel_ready),
     .pixel_data(pixel_data),
+    .pixel_ready(line_pixel_ready),
     .window_ready(1'b1),
     .window_valid(line_window_valid),
     .window_data(line_window_data)
@@ -112,8 +114,9 @@ module gestureflow_conv4x4_stream #(
   // The input side pauses only after a complete window is emitted, not at
   // every pixel. That preserves the rolling-buffer reuse without an external
   // per-window command protocol.
-  assign pixel_ready = !pending_window && !mac_active && !busy &&
-                       !line_window_valid && !output_valid;
+  assign core_pixel_ready = !pending_window && !mac_active && !busy &&
+                            !line_window_valid && !output_valid;
+  assign pixel_ready = core_pixel_ready && line_pixel_ready;
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin

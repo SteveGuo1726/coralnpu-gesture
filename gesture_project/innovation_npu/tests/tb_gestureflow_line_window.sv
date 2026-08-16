@@ -8,6 +8,7 @@ module tb_gestureflow_line_window;
   logic rst_n = 1'b0;
   logic frame_start;
   logic pixel_valid;
+  logic pixel_ready;
   logic window_ready = 1'b1;
   logic signed [7:0] pixel_data;
   logic window_valid;
@@ -55,6 +56,7 @@ module tb_gestureflow_line_window;
 
     for (int row = 0; row < 5; row++) begin
       for (int column = 0; column < IMAGE_WIDTH; column++) begin
+        while (!pixel_ready) @(negedge clk);
         pixel_data = 8'(row * 10 + column);
         pixel_valid = 1'b1;
         @(negedge clk);

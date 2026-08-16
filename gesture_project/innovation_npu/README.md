@@ -141,3 +141,10 @@ bash gesture_project/innovation_npu/tests/run_gestureflow_conv4x4_rgb_same_strea
 96x96 首层已上板”或“模型已整网部署”。下一阶段将把 4 行输入条带的 HP0 装载、
 空间坐标到 output-bank 地址的映射及 output-tile 写回并入层级描述符；届时必须以
 真实 TFLite 首层全图 golden、Vivado 实现和 Zynq-7020 实板三重验证为准。
+
+`gestureflow_line_delay_bank.sv` 现将每个 RGB 通道的三条历史行实现为同步
+简单双口 BRAM，并携带读地址对应的像素、行列坐标和 valid 一拍。对 XC7Z020 的
+100MHz 独立综合，完整 SAME/RGB/16x4 前端使用 `1,453 LUT`、`2,357 FF`、`25`
+个 `RAMB18E1` 和 `80` 个 DSP，WNS 为 `+3.030ns`；其中 9 个 BRAM 是三路 RGB
+行延迟。由于当前输出端只有一个弹性窗口寄存器，窗口形成处保留安全 bubble，
+后续只有在加入有完整 full/empty 回归的窗口 FIFO 后才能消除，不能牺牲正确性。

@@ -24,7 +24,8 @@ module gestureflow_conv4x4_cin_stream #(
   output logic busy, output logic protocol_error
 );
   localparam int IC_GROUPS = INPUT_CHANNELS / 4;
-  logic [INPUT_CHANNELS-1:0] window_valid;
+  logic [INPUT_CHANNELS-1:0] window_valid, line_pixel_ready;
+  logic core_pixel_ready;
   logic signed [INPUT_CHANNELS-1:0][15:0][7:0] window_data, held_window;
   logic pending_window, mac_active, tile_start_ready, tile_mac_ready;
   logic [3:0] tap_index;
@@ -34,7 +35,8 @@ module gestureflow_conv4x4_cin_stream #(
   for (genvar c = 0; c < INPUT_CHANNELS; c++) begin : channel_windows
     gestureflow_line_window #(.IMAGE_WIDTH(IMAGE_WIDTH), .KERNEL_SIZE(4)) line_window (
       .clk(clk), .rst_n(rst_n), .frame_start(frame_start),
-      .pixel_valid(pixel_valid && pixel_ready), .pixel_data(pixel_data[c]),
+      .pixel_valid(pixel_valid && core_pixel_ready), .pixel_data(pixel_data[c]),
+      .pixel_ready(line_pixel_ready[c]),
       .window_ready(1'b1),
       .window_valid(window_valid[c]), .window_data(window_data[c])
     );
@@ -57,7 +59,8 @@ module gestureflow_conv4x4_cin_stream #(
     .result_valid(output_valid), .result_ready(output_ready), .result_psum(output_psum),
     .result_lane_enable(output_lane_enable_valid), .busy(busy), .protocol_error(protocol_error)
   );
-  assign pixel_ready = !pending_window && !mac_active && !busy && !window_valid[0] && !output_valid;
+  assign core_pixel_ready = !pending_window && !mac_active && !busy && !window_valid[0] && !output_valid;
+  assign pixel_ready = core_pixel_ready && line_pixel_ready[0];
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin pending_window <= 0; mac_active <= 0; tap_index <= 0; ic_group_index <= 0; held_window <= '0; end
     else begin

@@ -8,6 +8,7 @@ verilator_root="$(cd "$(dirname "$verilator_bin")/.." && pwd)"
 rm -rf "$build_dir"
 VERILATOR_ROOT="$verilator_root" verilator --binary --timing --sv --top-module tb_gestureflow_line_window \
   --Mdir "$build_dir" \
+  "$root/rtl/gestureflow_line_delay_bank.sv" \
   "$root/rtl/gestureflow_line_window.sv" \
   "$root/tests/tb_gestureflow_line_window.sv"
 "$build_dir/Vtb_gestureflow_line_window"

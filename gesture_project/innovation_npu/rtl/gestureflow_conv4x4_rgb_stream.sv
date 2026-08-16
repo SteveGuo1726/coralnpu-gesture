@@ -31,7 +31,8 @@ module gestureflow_conv4x4_rgb_stream #(
   output logic protocol_error
 );
 
-  logic [2:0] line_window_valid;
+  logic [2:0] line_window_valid, line_pixel_ready;
+  logic core_pixel_ready;
   logic signed [2:0][15:0][7:0] line_window_data;
   logic pending_window;
   logic signed [2:0][15:0][7:0] held_window;
@@ -49,8 +50,9 @@ module gestureflow_conv4x4_rgb_stream #(
       .clk(clk),
       .rst_n(rst_n),
       .frame_start(frame_start),
-      .pixel_valid(pixel_valid && pixel_ready),
+      .pixel_valid(pixel_valid && core_pixel_ready),
       .pixel_data(pixel_rgb[channel]),
+      .pixel_ready(line_pixel_ready[channel]),
       .window_ready(1'b1),
       .window_valid(line_window_valid[channel]),
       .window_data(line_window_data[channel])
@@ -96,8 +98,9 @@ module gestureflow_conv4x4_rgb_stream #(
     .protocol_error(protocol_error)
   );
 
-  assign pixel_ready = !pending_window && !mac_active && !busy &&
-                       !line_window_valid[0] && !output_valid;
+  assign core_pixel_ready = !pending_window && !mac_active && !busy &&
+                            !line_window_valid[0] && !output_valid;
+  assign pixel_ready = core_pixel_ready && line_pixel_ready[0];
 
   always_ff @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
