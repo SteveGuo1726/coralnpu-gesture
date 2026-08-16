@@ -20,7 +20,10 @@ module gestureflow_axil_microkernel (
   assign s_axi_awready=!aw_seen&&!s_axi_bvalid; assign s_axi_wready=!w_seen&&!s_axi_bvalid; assign s_axi_arready=!s_axi_rvalid;
   gestureflow_mac_tile #(.OUT_LANES(16),.INPUT_LANES(4),.MAX_TAPS(16),.MAX_IC_GROUPS(16)) tile(
     .clk(aclk),.rst_n(aresetn),.weight_write_valid(weight_we),.weight_write_oc(w_oc),.weight_write_tap(w_tap),.weight_write_ic_group(w_group),.weight_write_data(weight_data),.start_valid(start_v),.start_ready(tile_start_ready),.bias(bias),.output_lane_enable(16'hffff),.mac_valid(mac_v),.mac_ready(tile_mac_ready),.mac_tap(mac_tap),.mac_ic_group(mac_group),.activation(activation),.input_lane_enable(4'hf),.mac_last(mac_last),.result_valid(tile_result_valid),.result_ready(1'b1),.result_psum(tile_result),.result_lane_enable(tile_result_mask),.busy(tile_busy),.protocol_error(tile_fault));
-  always_ff @(posedge aclk or negedge aresetn) begin
+  // This shell feeds BRAM address/control signals through the tile. Use a
+  // synchronous reset so the PS7 reset cannot asynchronously disturb RAMB
+  // address/enable inputs during configuration.
+  always_ff @(posedge aclk) begin
     if(!aresetn) begin aw_seen<=0;w_seen<=0;s_axi_bvalid<=0;s_axi_bresp<=0;s_axi_rvalid<=0;s_axi_rresp<=0;s_axi_rdata<=0;weight_we<=0;start_v<=0;mac_v<=0;bias<='0;done<=0;fault<=0;cycles<=0;result_psum<='0;result_mask<=0;w_oc<=0;w_tap<=0;w_group<=0;b_index<=0;result_index<=0; end
     else begin
       weight_we<=0;start_v<=0;mac_v<=0;

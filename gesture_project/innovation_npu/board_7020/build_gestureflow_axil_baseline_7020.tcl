@@ -48,6 +48,14 @@ open_project $project_xpr
 upgrade_ip [get_ips *]
 set_property ip_repo_paths $ip_repo [current_project]
 update_ip_catalog
+
+# The copied tutorial constrains a GPIO port that GestureFlow deliberately
+# removes. Leaving that XDC behind creates critical warnings at implementation
+# and makes the baseline needlessly dependent on a non-existent board signal.
+set tutorial_xdc [file join $project_root axi_gpio.srcs constrs_1 new Navigator.xdc]
+set tutorial_xdc_files [get_files -quiet */Navigator.xdc]
+if {[llength $tutorial_xdc_files]} { remove_files $tutorial_xdc_files }
+if {[file exists $tutorial_xdc]} { file delete -force $tutorial_xdc }
 open_bd_design [get_files */system.bd]
 
 # The copied tutorial project may contain any one of these historical cells.

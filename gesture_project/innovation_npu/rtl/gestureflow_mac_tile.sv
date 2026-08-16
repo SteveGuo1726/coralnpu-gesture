@@ -140,7 +140,11 @@ module gestureflow_mac_tile #(
     !(product_valid && product_last) && !(pair_valid && pair_last) &&
     !(reduced_valid && reduced_last);
 
-  always_ff @(posedge clk or negedge rst_n) begin
+  // Keep every BRAM address/control source synchronously reset.  An async
+  // reset on a RAM address or enable can corrupt inferred RAMB18E1 contents
+  // and is not timing-analysed by Vivado.  Weights themselves remain
+  // intentionally unreset and must be loaded before each job.
+  always_ff @(posedge clk) begin
     if (!rst_n) begin
       accum <= '0;
       active_output_lanes <= '0;
