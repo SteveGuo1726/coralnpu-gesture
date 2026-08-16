@@ -5,6 +5,7 @@ module tb_gestureflow_conv4x4_rgb_same_stream;
   localparam int IMAGE_HEIGHT = 3;
   logic clk = 0, rst_n = 0, frame_start = 0, pixel_valid = 0, pixel_ready;
   logic signed [2:0][7:0] pixel_rgb;
+  logic signed [2:0][7:0] input_zero_point;
   logic weight_write_valid = 0;
   logic [0:0] weight_write_oc;
   logic [3:0] weight_write_tap;
@@ -85,6 +86,7 @@ module tb_gestureflow_conv4x4_rgb_same_stream;
 
   initial begin
     pixel_rgb = '0;
+    input_zero_point = '0;
     weight_write_oc = '0;
     weight_write_tap = '0;
     weight_write_data = '0;

@@ -9,6 +9,7 @@ module gestureflow_conv4x4_rgb_same_stream_7020_top (
   input logic pixel_valid,
   output logic pixel_ready,
   input logic signed [2:0][7:0] pixel_rgb,
+  input logic signed [2:0][7:0] input_zero_point,
   input logic weight_write_valid,
   input logic [3:0] weight_write_oc,
   input logic [3:0] weight_write_tap,

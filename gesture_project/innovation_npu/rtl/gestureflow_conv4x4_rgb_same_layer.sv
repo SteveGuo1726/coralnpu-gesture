@@ -11,6 +11,7 @@ module gestureflow_conv4x4_rgb_same_layer #(
   input logic clk, input logic rst_n, input logic frame_start,
   input logic pixel_valid, output logic pixel_ready,
   input logic signed [2:0][7:0] pixel_rgb,
+  input logic signed [2:0][7:0] input_zero_point,
   input logic weight_write_valid,
   input logic [$clog2(OUT_LANES)-1:0] weight_write_oc,
   input logic [3:0] weight_write_tap,
@@ -41,6 +42,7 @@ module gestureflow_conv4x4_rgb_same_layer #(
   ) stream (
     .clk(clk), .rst_n(rst_n), .frame_start(frame_start),
     .pixel_valid(pixel_valid), .pixel_ready(pixel_ready), .pixel_rgb(pixel_rgb),
+    .input_zero_point(input_zero_point),
     .weight_write_valid(weight_write_valid), .weight_write_oc(weight_write_oc),
     .weight_write_tap(weight_write_tap), .weight_write_data(weight_write_data),
     .bias(bias), .output_lane_enable(output_lane_enable), .output_valid(raw_valid),

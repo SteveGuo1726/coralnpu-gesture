@@ -16,6 +16,10 @@ module gestureflow_same4x4_rgb_window #(
   input  logic pixel_valid,
   output logic pixel_ready,
   input  logic signed [CHANNELS-1:0][7:0] pixel_data,
+  // TFLite pads quantized convolution inputs with the input zero point, not
+  // necessarily with the signed byte value zero. Keeping this explicit is
+  // required when an RGB camera tensor uses zero_point=-128.
+  input  logic signed [CHANNELS-1:0][7:0] padding_value,
   output logic window_valid,
   input  logic window_ready,
   output logic signed [CHANNELS-1:0][15:0][7:0] window_data,
@@ -46,7 +50,7 @@ module gestureflow_same4x4_rgb_window #(
     line_accept = channel_pixel_ready[0];
     line_pixel_valid = active && line_accept &&
       (!source_pixel_needed || pixel_valid);
-    line_pixel_data = source_pixel_needed ? pixel_data : '0;
+    line_pixel_data = source_pixel_needed ? pixel_data : padding_value;
     pixel_ready = source_pixel_needed && line_accept;
     window_valid = channel_window_valid[0];
     window_data = channel_window_data;

@@ -16,6 +16,7 @@ module gestureflow_conv4x4_rgb_same_stream #(
   input logic pixel_valid,
   output logic pixel_ready,
   input logic signed [2:0][7:0] pixel_rgb,
+  input logic signed [2:0][7:0] input_zero_point,
   input logic weight_write_valid,
   input logic [$clog2(OUT_LANES)-1:0] weight_write_oc,
   input logic [3:0] weight_write_tap,
@@ -47,6 +48,7 @@ module gestureflow_conv4x4_rgb_same_stream #(
   ) same_window (
     .clk(clk), .rst_n(rst_n), .frame_start(frame_start),
     .pixel_valid(pixel_valid), .pixel_ready(pixel_ready), .pixel_data(pixel_rgb),
+    .padding_value(input_zero_point),
     .window_valid(window_valid), .window_ready(window_ready), .window_data(window_data),
     .output_row(window_row), .output_column(window_column), .frame_done(frame_input_done)
   );

@@ -53,6 +53,32 @@ tile 指令路径当成现成卷积后端；本分支将只复用已验证的设
 
 ## 当前可运行证据
 
+### 真实全首层 TFLite 行为基准
+
+`tools/export_real_conv4x4_full_layer.py` 从当前硬件基准模型的真实第一个
+`CONV_2D` 张量导出 camera-domain RGB、权重和量化参数，并先证明零点折叠恒等式：
+
+```text
+sum((q - input_zero_point) * weight) + bias
+== sum(q * weight) + folded_bias
+folded_bias = bias - input_zero_point * sum(weight)
+```
+
+这不是可选优化，而是当前模型 `input_zero_point=-128` 与 signed INT8 MAC
+共存的必要条件。`SAME` 填充同样必须传入 `input_zero_point`，而不能用数值零。
+完整回归：
+
+```bash
+bash gesture_project/innovation_npu/tests/run_gestureflow_conv4x4_rgb_full_layer.sh
+```
+
+它以真实全范围 `96x96x3` RGB 输入验证整层 9,216 个空间输出、7 个边界/内部
+探针和所有 147,456 个量化结果的 FNV-1a 签名。当前预期是
+`0xF49B1B48`，实测 frame-start 到最后输出为 `221,488` 个 PL 周期。它是有
+180 秒硬超时的 Verilator 行为回归，不是 FPGA 帧率：25 MHz 仅作当前流水等价约
+`8.86 ms`，100 MHz 等价约 `2.21 ms`，两者都不含权重装载、DDR DMA 或后续层。
+完整板级性能必须在独立 layer IP 接入输入/输出 DMA 后重新测量。
+
 `configs/gestureflow_npu_v0.json` 固化了当前训练中 96x96、18 类学生模型的
 真实层形状。运行以下命令会生成确定性的周期、DDR 流量、尾部利用率和 SRAM
 容量报告：
