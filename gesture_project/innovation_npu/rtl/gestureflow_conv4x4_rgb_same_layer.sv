@@ -69,7 +69,9 @@ module gestureflow_conv4x4_rgb_same_layer #(
     .write_data(quant_data), .read_enable(output_read_enable), .read_addr(output_read_addr),
     .read_data(output_read_data)
   );
-  always_ff @(posedge clk or negedge rst_n) begin
+  // Quantized spatial coordinates feed output-bank addressing, so retain the
+  // synchronous-reset rule used by every inferred BRAM control path.
+  always_ff @(posedge clk) begin
     if (!rst_n) begin quant_row <= '0; quant_column <= '0; end
     else if (raw_valid && raw_ready) begin quant_row <= raw_row; quant_column <= raw_column; end
   end

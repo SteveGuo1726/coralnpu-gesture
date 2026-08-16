@@ -73,7 +73,9 @@ module gestureflow_same4x4_rgb_window #(
     );
   end
 
-  always_ff @(posedge clk or negedge rst_n) begin
+  // active and the virtual coordinates feed the line-buffer enable path.
+  // They must not carry asynchronous reset into an inferred RAMB18 control.
+  always_ff @(posedge clk) begin
     if (!rst_n) begin
       active <= 1'b0;
       virtual_row <= '0;

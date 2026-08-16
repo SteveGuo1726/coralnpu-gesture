@@ -68,7 +68,10 @@ module gestureflow_line_window #(
     );
   end
 
-  always_ff @(posedge clk or negedge rst_n) begin
+  // These state registers directly drive line-delay BRAM addresses/enables.
+  // Keep reset synchronous so an assertion cannot asynchronously perturb a
+  // RAMB18 control pin; frame_start provides the per-frame logical clear.
+  always_ff @(posedge clk) begin
     if (!rst_n) begin
       column_index <= '0;
       rows_seen <= '0;

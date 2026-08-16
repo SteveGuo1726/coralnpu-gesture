@@ -79,7 +79,9 @@ module gestureflow_conv4x4_rgb_same_stream #(
     .protocol_error(protocol_error)
   );
 
-  always_ff @(posedge clk or negedge rst_n) begin
+  // This scheduler controls same_window backpressure. Use the same
+  // synchronous-reset discipline as the line-buffer control state.
+  always_ff @(posedge clk) begin
     if (!rst_n) begin
       pending_window <= 1'b0;
       mac_active <= 1'b0;
