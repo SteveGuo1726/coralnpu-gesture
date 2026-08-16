@@ -16,7 +16,7 @@ proc package_gestureflow_ip {src_dir project_root} {
   file mkdir $ip_repo_root
   create_project -force gestureflow_axil_pack $pack_dir -part $part_name
 
-  foreach src {gestureflow_activation_bank.sv gestureflow_output_bank.sv gestureflow_requant_relu.sv gestureflow_weight_bank.sv gestureflow_mac_tile.sv gestureflow_axil_microkernel.sv} {
+  foreach src {gestureflow_activation_bank.sv gestureflow_hp0_read_loader.sv gestureflow_output_bank.sv gestureflow_requant_relu.sv gestureflow_weight_bank.sv gestureflow_mac_tile.sv gestureflow_axil_microkernel.sv} {
     set path [file join $src_dir $src]
     if {![file exists $path]} { error "Missing GestureFlow source: $path" }
     add_files -norecurse $path
@@ -59,7 +59,7 @@ if {[file exists $tutorial_xdc]} { file delete -force $tutorial_xdc }
 open_bd_design [get_files */system.bd]
 
 # The copied tutorial project may contain any one of these historical cells.
-foreach cell_name {axi_gpio_0 coralnpu_coremini_axi_0 crvv_axi_0 crvvflat_0 crvvmod_0 crvvaccel_0 gestureflow_0} {
+foreach cell_name {axi_gpio_0 coralnpu_coremini_axi_0 crvv_axi_0 crvvflat_0 crvvmod_0 crvvaccel_0 gestureflow_0 axi_smc} {
   set cells [get_bd_cells -quiet $cell_name]
   if {[llength $cells]} { delete_bd_objs $cells }
 }
@@ -67,26 +67,41 @@ set gpio_port [get_bd_intf_ports -quiet AXI_GPIO_KEY]
 if {[llength $gpio_port]} { delete_bd_objs $gpio_port }
 
 create_bd_cell -type ip -vlnv user.org:user:gestureflow_axil_microkernel:1.0 gestureflow_0
+create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_smc
+set_property -dict [list CONFIG.NUM_SI {1} CONFIG.NUM_MI {1}] [get_bd_cells axi_smc]
 
 # First download uses the known-stable tutorial PS FCLK setting.  The NPU tile
 # itself is separately synthesized at 100 MHz; system frequency is raised only
 # after the whole PS/PL implementation and physical board path are confirmed.
-set_property CONFIG.PCW_FPGA0_PERIPHERAL_FREQMHZ {25} [get_bd_cells processing_system7_0]
+set_property -dict [list \
+  CONFIG.PCW_FPGA0_PERIPHERAL_FREQMHZ {25} \
+  CONFIG.PCW_USE_S_AXI_HP0 {1} \
+  CONFIG.PCW_S_AXI_HP0_DATA_WIDTH {64} \
+  CONFIG.PCW_S_AXI_HP0_ID_WIDTH {6} \
+] [get_bd_cells processing_system7_0]
 catch {set_property CONFIG.FREQ_HZ 25000000 [get_bd_intf_pins gestureflow_0/S_AXI]}
 catch {set_property FREQ_HZ 25000000 [get_bd_intf_pins gestureflow_0/S_AXI]}
 catch {set_property CONFIG.FREQ_HZ 25000000 [get_bd_pins gestureflow_0/aclk]}
 catch {set_property FREQ_HZ 25000000 [get_bd_pins gestureflow_0/aclk]}
+catch {set_property CONFIG.FREQ_HZ 25000000 [get_bd_intf_pins gestureflow_0/M_AXI]}
+catch {set_property CONFIG.FREQ_HZ 25000000 [get_bd_pins axi_smc/aclk]}
 
-connect_bd_net [get_bd_pins processing_system7_0/FCLK_CLK0] [get_bd_pins gestureflow_0/aclk]
+connect_bd_net [get_bd_pins processing_system7_0/FCLK_CLK0] [get_bd_pins gestureflow_0/aclk] [get_bd_pins processing_system7_0/S_AXI_HP0_ACLK] [get_bd_pins axi_smc/aclk]
 set reset_pin [lindex [get_bd_pins -quiet */peripheral_aresetn] 0]
 if {$reset_pin eq ""} { error "Could not find PS peripheral_aresetn" }
-connect_bd_net $reset_pin [get_bd_pins gestureflow_0/aresetn]
+connect_bd_net $reset_pin [get_bd_pins gestureflow_0/aresetn] [get_bd_pins axi_smc/aresetn]
 connect_bd_intf_net [get_bd_intf_pins ps7_0_axi_periph/M00_AXI] [get_bd_intf_pins gestureflow_0/S_AXI]
+connect_bd_intf_net [get_bd_intf_pins gestureflow_0/M_AXI] [get_bd_intf_pins axi_smc/S00_AXI]
+connect_bd_intf_net [get_bd_intf_pins axi_smc/M00_AXI] [get_bd_intf_pins processing_system7_0/S_AXI_HP0]
 
 set segment [lindex [get_bd_addr_segs -quiet gestureflow_0/S_AXI/*] 0]
 if {$segment eq ""} { error "GestureFlow IP did not expose an AXI-Lite address segment" }
 assign_bd_address -offset 0x43C00000 -range 0x00100000 \
   -target_address_space [get_bd_addr_spaces processing_system7_0/Data] $segment
+set accel_ddr_space [lindex [get_bd_addr_spaces -quiet gestureflow_0/M_AXI] 0]
+set hp0_ddr_seg [lindex [get_bd_addr_segs -quiet processing_system7_0/S_AXI_HP0/HP0_DDR_LOWOCM] 0]
+if {$accel_ddr_space eq "" || $hp0_ddr_seg eq ""} { error "Could not expose GestureFlow HP0 DDR address map" }
+assign_bd_address -offset 0x00000000 -range 0x40000000 -target_address_space $accel_ddr_space $hp0_ddr_seg -force
 
 set_property CONFIG.PCW_USE_FABRIC_INTERRUPT {0} [get_bd_cells processing_system7_0]
 regenerate_bd_layout

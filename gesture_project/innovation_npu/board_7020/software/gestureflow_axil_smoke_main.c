@@ -35,6 +35,11 @@
 #define GF_OUT_READ_DATA    0x058U
 #define GF_QUANT_RESULT_IDX 0x05CU
 #define GF_QUANT_RESULT_DATA 0x060U
+#define GF_DMA_SOURCE_ADDR   0x064U
+#define GF_DMA_WORD_COUNT    0x068U
+#define GF_DMA_STAGE_ADDR    0x06CU
+#define GF_DMA_CONTROL       0x070U
+#define GF_DMA_STATUS        0x074U
 
 #define RESULT_PASS         0x600D600DU
 #define RESULT_FAIL         0xBAD0BAD0U
@@ -43,6 +48,9 @@
 
 static volatile u32 *const probe = (volatile u32 *)PROBE_BASE;
 static volatile u32 stage = 0U;
+/* HP0 reads this contiguous DDR payload as 64-bit beats.  It is deliberately
+ * 64-byte aligned, and the source address is flushed before DMA starts. */
+static u32 gf_dma_activation[256] __attribute__((aligned(64)));
 
 static void store_probe(u32 index, u32 value)
 {
@@ -97,7 +105,7 @@ int main(void)
     if (value != 0x47464E50U) { fail(0x1001U, value); }
     value = Xil_In32(GF_BASE + GF_VERSION);
     store_probe(5U, value);
-    if (value != 0x00010003U) { fail(0x1002U, value); }
+    if (value != 0x00010004U) { fail(0x1002U, value); }
 
     /* Complete deterministic 4x4 x 16-Cin-group tile transaction.
      * Every weight/activation is +1; lane N starts at bias N. */
@@ -146,6 +154,43 @@ int main(void)
     value = Xil_In32(GF_BASE + GF_RESULT_IDX);
     store_probe(24U, value);
     if (value != 0x0000FFFFU) { fail(0x1010U, value); }
+
+    /* Real PS DDR -> HP0 -> activation BRAM path. The prior AXI-Lite test
+     * used +1; use +2 here so the MAC result proves DMA payload consumption.
+     * HP0 is non-coherent, therefore production code must flush this buffer
+     * whenever data cache is enabled. The current baseline disables caches
+     * globally for simple AXI-Lite debug, but retains the required flush. */
+    stage = 0x55U;
+    for (tap = 0U; tap < 256U; ++tap) { gf_dma_activation[tap] = 0x02020202U; }
+    Xil_DCacheFlushRange((UINTPTR)gf_dma_activation, sizeof(gf_dma_activation));
+    Xil_Out32(GF_BASE + GF_DMA_SOURCE_ADDR, (u32)(UINTPTR)gf_dma_activation);
+    Xil_Out32(GF_BASE + GF_DMA_WORD_COUNT, 256U);
+    Xil_Out32(GF_BASE + GF_DMA_STAGE_ADDR, 0U);
+    Xil_Out32(GF_BASE + GF_DMA_CONTROL, 0x1U);
+    status = 0U;
+    for (poll = 0U; poll < 1000000U; ++poll) {
+        status = Xil_In32(GF_BASE + GF_DMA_STATUS);
+        if ((status & (1U << 1)) != 0U) { break; }
+    }
+    store_probe(52U, status);
+    if (status != 0x2U) { fail(0x1015U, status); }
+    Xil_Out32(GF_BASE + GF_CONTROL, 0x2U);
+    Xil_Out32(GF_BASE + GF_CONTROL, 0x5U);
+    status = 0U;
+    for (poll = 0U; poll < 1000000U; ++poll) {
+        status = Xil_In32(GF_BASE + GF_STATUS);
+        if ((status & (1U << 3)) != 0U) { break; }
+    }
+    if ((status & (1U << 4)) != 0U || (status & (1U << 3)) == 0U) { fail(0x1016U, status); }
+    cycles = Xil_In32(GF_BASE + GF_CYCLES);
+    store_probe(53U, cycles);
+    for (oc = 0U; oc < 16U; ++oc) {
+        Xil_Out32(GF_BASE + GF_RESULT_IDX, oc);
+        value = Xil_In32(GF_BASE + GF_RESULT_DATA);
+        if (oc == 0U) { store_probe(54U, value); }
+        if (oc == 15U) { store_probe(55U, value); }
+        if (value != 2048U + oc) { fail(0x1017U + oc, value); }
+    }
 
     /* Exercise the actual static-model stem shape: 4x4 x RGB(Cin=3).
      * taps=16, groups=1, final input mask=0b0111, all 16 outputs active. */

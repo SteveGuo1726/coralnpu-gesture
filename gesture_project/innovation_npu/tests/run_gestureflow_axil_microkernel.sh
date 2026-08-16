@@ -9,6 +9,7 @@ rm -rf "$build"
 VERILATOR_ROOT="$verilator_root" verilator --binary --timing --sv -Wall -Wno-fatal --top-module tb_gestureflow_axil_microkernel \
   --Mdir "$build" \
   "$root/rtl/gestureflow_activation_bank.sv" \
+  "$root/rtl/gestureflow_hp0_read_loader.sv" \
   "$root/rtl/gestureflow_output_bank.sv" \
   "$root/rtl/gestureflow_requant_relu.sv" \
   "$root/rtl/gestureflow_weight_bank.sv" \

@@ -21,7 +21,23 @@ module tb_gestureflow_axil_microkernel;
                     RQSHIFT = 32'h048, RQCTRL = 32'h04c,
                     OUT_STAGE_ADDR = 32'h050, OUT_READ_CTRL = 32'h054,
                     OUT_READ_DATA = 32'h058, QUANT_RESULT_IDX = 32'h05c,
-                    QUANT_RESULT_DATA = 32'h060;
+                    QUANT_RESULT_DATA = 32'h060, DMA_SOURCE_ADDR = 32'h064,
+                    DMA_WORD_COUNT = 32'h068, DMA_STAGE_ADDR = 32'h06c,
+                    DMA_CONTROL = 32'h070, DMA_STATUS = 32'h074;
+
+  logic [31:0] m_axi_araddr;
+  logic [5:0] m_axi_arid, m_axi_rid;
+  logic [7:0] m_axi_arlen;
+  logic [2:0] m_axi_arsize;
+  logic [1:0] m_axi_arburst, m_axi_rresp;
+  logic m_axi_arlock, m_axi_arvalid, m_axi_arready, m_axi_rlast, m_axi_rvalid, m_axi_rready;
+  logic [3:0] m_axi_arcache, m_axi_arqos, m_axi_arregion;
+  logic [2:0] m_axi_arprot;
+  logic [63:0] m_axi_rdata;
+  logic [63:0] dma_memory [0:127];
+  logic dma_read_active;
+  logic [6:0] dma_memory_index;
+  logic [4:0] dma_beats_left;
 
   always #5 clk = ~clk;
 
@@ -31,8 +47,45 @@ module tb_gestureflow_axil_microkernel;
     .s_axi_wdata(wdata), .s_axi_wstrb(wstrb), .s_axi_wvalid(wvalid), .s_axi_wready(wready),
     .s_axi_bresp(bresp), .s_axi_bvalid(bvalid), .s_axi_bready(bready),
     .s_axi_araddr(araddr), .s_axi_arprot(arprot), .s_axi_arvalid(arvalid), .s_axi_arready(arready),
-    .s_axi_rdata(rdata), .s_axi_rresp(rresp), .s_axi_rvalid(rvalid), .s_axi_rready(rready)
+    .s_axi_rdata(rdata), .s_axi_rresp(rresp), .s_axi_rvalid(rvalid), .s_axi_rready(rready),
+    .m_axi_araddr(m_axi_araddr), .m_axi_arid(m_axi_arid), .m_axi_arlen(m_axi_arlen), .m_axi_arsize(m_axi_arsize), .m_axi_arburst(m_axi_arburst), .m_axi_arlock(m_axi_arlock), .m_axi_arcache(m_axi_arcache), .m_axi_arprot(m_axi_arprot), .m_axi_arqos(m_axi_arqos), .m_axi_arregion(m_axi_arregion), .m_axi_arvalid(m_axi_arvalid), .m_axi_arready(m_axi_arready), .m_axi_rid(m_axi_rid), .m_axi_rdata(m_axi_rdata), .m_axi_rresp(m_axi_rresp), .m_axi_rlast(m_axi_rlast), .m_axi_rvalid(m_axi_rvalid), .m_axi_rready(m_axi_rready)
   );
+
+  // Bounded AXI memory model: one read burst at a time, matching the HP0
+  // loader's contract. Every 64-bit beat contains two activation words.
+  assign m_axi_arready = !dma_read_active;
+  always_ff @(posedge clk) begin
+    if (!rst_n) begin
+      dma_read_active <= 1'b0;
+      dma_memory_index <= '0;
+      dma_beats_left <= '0;
+      m_axi_rid <= '0;
+      m_axi_rdata <= '0;
+      m_axi_rresp <= 2'b00;
+      m_axi_rlast <= 1'b0;
+      m_axi_rvalid <= 1'b0;
+    end else if (!dma_read_active && m_axi_arvalid && m_axi_arready) begin
+      dma_read_active <= 1'b1;
+      dma_memory_index <= m_axi_araddr[9:3];
+      dma_beats_left <= m_axi_arlen[4:0] + 1'b1;
+      m_axi_rid <= m_axi_arid;
+      m_axi_rdata <= dma_memory[(m_axi_araddr - 32'h00001000) >> 3];
+      m_axi_rresp <= 2'b00;
+      m_axi_rlast <= (m_axi_arlen == 0);
+      m_axi_rvalid <= 1'b1;
+    end else if (dma_read_active && m_axi_rvalid && m_axi_rready) begin
+      if (dma_beats_left == 5'd1) begin
+        dma_read_active <= 1'b0;
+        m_axi_rvalid <= 1'b0;
+        m_axi_rlast <= 1'b0;
+      end else begin
+        dma_memory_index <= dma_memory_index + 1'b1;
+        dma_beats_left <= dma_beats_left - 1'b1;
+        m_axi_rdata <= dma_memory[dma_memory_index + 1'b1];
+        m_axi_rlast <= (dma_beats_left == 5'd2);
+      end
+    end
+  end
 
   task automatic axil_write(input logic [31:0] addr, input logic [31:0] data);
     begin
@@ -64,7 +117,7 @@ module tb_gestureflow_axil_microkernel;
   endtask
 
   logic [31:0] value;
-  logic [31:0] full_cycles, rgb_cycles, carry_cycles;
+  logic [31:0] full_cycles, dma_cycles, rgb_cycles, carry_cycles;
   integer signed real_accum [0:15] = '{12945,40101,-27709,-25992,-7799,-26966,21056,-11847,-5999,-20715,13808,-15449,-10414,13976,-4778,13263};
   integer signed real_multiplier [0:15] = '{1787846233,1122128448,1349594768,1412386588,2062591784,1790157864,1533299872,1443871989,1529114050,1120653286,2057570923,1596767263,1161961791,1968538391,2100971521,1438322766};
   logic [5:0] real_right_shift [0:15] = '{11,9,10,9,11,10,11,11,9,11,8,9,10,11,10,9};
@@ -77,7 +130,8 @@ module tb_gestureflow_axil_microkernel;
     rst_n = 1'b1;
 
     axil_read(MAGIC, value); if (value != 32'h47464e50) $fatal(1, "bad magic %h", value);
-    axil_read(VERSION, value); if (value != 32'h00010003) $fatal(1, "bad version %h", value);
+    axil_read(VERSION, value); if (value != 32'h00010004) $fatal(1, "bad version %h", value);
+    for (int beat = 0; beat < 128; beat++) dma_memory[beat] = 64'h0202020202020202;
 
     // Bias each output lane with its lane number. Load every 4x4 tap/group
     // with four ones. Feeding all-one activations produces 16 groups * 4 = 64.
@@ -116,6 +170,32 @@ module tb_gestureflow_axil_microkernel;
     end
     axil_read(RESULT_IDX, value); if (value != 32'h0000ffff) $fatal(1, "bad result mask %h", value);
     if (dut.cycles >= 1000) $fatal(1, "staged execution did not remove host feed gap cycles=%0d", dut.cycles);
+
+    // Replace AXI-Lite staging with HP0-style burst reads. The 256 words are
+    // all +2, so the full tile result is 16*16*4*2 plus each lane's bias.
+    axil_write(DMA_SOURCE_ADDR, 32'h00001000);
+    axil_write(DMA_WORD_COUNT, 32'd256);
+    axil_write(DMA_STAGE_ADDR, 32'd0);
+    axil_write(DMA_CONTROL, 32'h1);
+    for (int wait_cycle = 0; wait_cycle < 1000; wait_cycle++) begin
+      axil_read(DMA_STATUS, value);
+      if (value[1]) break;
+      if (wait_cycle == 999) $fatal(1, "DMA never completed status=%h", value);
+    end
+    if (value != 32'h00000002) $fatal(1, "DMA fault or busy status=%h", value);
+    axil_write(CONTROL, 32'h2);
+    axil_write(CONTROL, 32'h5);
+    for (int wait_cycle = 0; wait_cycle < 200; wait_cycle++) begin
+      axil_read(STATUS, value);
+      if (value[3]) break;
+      if (wait_cycle == 199) $fatal(1, "DMA-staged transaction never completed status=%h", value);
+    end
+    axil_read(CYCLES, dma_cycles);
+    for (oc = 0; oc < 16; oc++) begin
+      axil_write(RESULT_IDX, oc);
+      axil_read(RESULT_DATA, value);
+      if ($signed(value) != (2048 + oc)) $fatal(1, "DMA lane %0d result=%0d expected=%0d", oc, $signed(value), 2048 + oc);
+    end
 
     // Real RGB stem shape: 4x4 taps, one Cin group with only lanes 0..2.
     // The existing +1 weights/bias produce 16 * 3 + output-lane bias.
@@ -198,7 +278,7 @@ module tb_gestureflow_axil_microkernel;
     axil_write(RESULT_IDX, 1); axil_read(RESULT_DATA, value);
     if (value != 32'h00000000) $fatal(1, "cross-lane carry result=%h", value);
     carry_cycles = dut.cycles;
-    $display("GESTUREFLOW_AXIL_MICROKERNEL_STAGED_PASS full_cycles=%0d rgb_cycles=%0d carry_cycles=%0d lane0=%0d lane15=%0d", full_cycles, rgb_cycles, carry_cycles, dut.result_psum[0], dut.result_psum[15]);
+    $display("GESTUREFLOW_AXIL_MICROKERNEL_DMA_PASS full_cycles=%0d dma_cycles=%0d rgb_cycles=%0d carry_cycles=%0d lane0=%0d lane15=%0d", full_cycles, dma_cycles, rgb_cycles, carry_cycles, dut.result_psum[0], dut.result_psum[15]);
     $finish;
   end
 endmodule
