@@ -16,7 +16,7 @@ proc package_gestureflow_ip {src_dir project_root} {
   file mkdir $ip_repo_root
   create_project -force gestureflow_axil_pack $pack_dir -part $part_name
 
-  foreach src {gestureflow_weight_bank.sv gestureflow_mac_tile.sv gestureflow_axil_microkernel.sv} {
+  foreach src {gestureflow_activation_bank.sv gestureflow_weight_bank.sv gestureflow_mac_tile.sv gestureflow_axil_microkernel.sv} {
     set path [file join $src_dir $src]
     if {![file exists $path]} { error "Missing GestureFlow source: $path" }
     add_files -norecurse $path

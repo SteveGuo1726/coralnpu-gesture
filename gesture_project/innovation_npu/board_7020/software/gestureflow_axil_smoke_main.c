@@ -22,6 +22,8 @@
 #define GF_RESULT_IDX       0x028U
 #define GF_RESULT_DATA      0x02CU
 #define GF_CYCLES           0x030U
+#define GF_ACT_STAGE_ADDR   0x034U
+#define GF_ACT_STAGE_DATA   0x038U
 
 #define RESULT_PASS         0x600D600DU
 #define RESULT_FAIL         0xBAD0BAD0U
@@ -84,7 +86,7 @@ int main(void)
     if (value != 0x47464E50U) { fail(0x1001U, value); }
     value = Xil_In32(GF_BASE + GF_VERSION);
     store_probe(5U, value);
-    if (value != 0x00010000U) { fail(0x1002U, value); }
+    if (value != 0x00010001U) { fail(0x1002U, value); }
 
     /* Complete deterministic 4x4 x 16-Cin-group tile transaction.
      * Every weight/activation is +1; lane N starts at bias N. */
@@ -101,15 +103,15 @@ int main(void)
     }
 
     stage = 0x30U;
-    Xil_Out32(GF_BASE + GF_CONTROL, 0x2U);
-    Xil_Out32(GF_BASE + GF_CONTROL, 0x1U);
     for (tap = 0U; tap < 16U; ++tap) {
-        for (group = 0U; group < 16U; ++group) {
-            u32 last = (tap == 15U && group == 15U) ? (1U << 8) : 0U;
-            Xil_Out32(GF_BASE + GF_ACTRL, tap | (group << 4) | last);
-            Xil_Out32(GF_BASE + GF_ADATA, 0x01010101U);
-        }
+      for (group = 0U; group < 16U; ++group) {
+        Xil_Out32(GF_BASE + GF_ACT_STAGE_ADDR, (tap << 4) | group);
+        Xil_Out32(GF_BASE + GF_ACT_STAGE_DATA, 0x01010101U);
+      }
     }
+    Xil_Out32(GF_BASE + GF_CONTROL, 0x2U);
+    /* bit2 selects autonomous activation-BRAM execution after start. */
+    Xil_Out32(GF_BASE + GF_CONTROL, 0x5U);
 
     stage = 0x40U;
     status = 0U;

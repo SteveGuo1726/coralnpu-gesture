@@ -15,7 +15,8 @@ module tb_gestureflow_axil_microkernel;
                     STATUS = 32'h00c, WCTRL = 32'h010, WDATA = 32'h014,
                     BIDX = 32'h018, BDATA = 32'h01c, ACTRL = 32'h020,
                     ADATA = 32'h024, RESULT_IDX = 32'h028,
-                    RESULT_DATA = 32'h02c, CYCLES = 32'h030;
+                    RESULT_DATA = 32'h02c, CYCLES = 32'h030,
+                    ACT_STAGE_ADDR = 32'h034, ACT_STAGE_DATA = 32'h038;
 
   always #5 clk = ~clk;
 
@@ -66,7 +67,7 @@ module tb_gestureflow_axil_microkernel;
     rst_n = 1'b1;
 
     axil_read(MAGIC, value); if (value != 32'h47464e50) $fatal(1, "bad magic %h", value);
-    axil_read(VERSION, value); if (value != 32'h00010000) $fatal(1, "bad version %h", value);
+    axil_read(VERSION, value); if (value != 32'h00010001) $fatal(1, "bad version %h", value);
 
     // Bias each output lane with its lane number. Load every 4x4 tap/group
     // with four ones. Feeding all-one activations produces 16 groups * 4 = 64.
@@ -81,14 +82,14 @@ module tb_gestureflow_axil_microkernel;
       end
     end
 
-    axil_write(CONTROL, 32'h2);
-    axil_write(CONTROL, 32'h1);
     for (int tap = 0; tap < 16; tap++) begin
       for (int group = 0; group < 16; group++) begin
-        axil_write(ACTRL, tap | (group << 4) | ((tap == 15 && group == 15) << 8));
-        axil_write(ADATA, 32'h01010101);
+        axil_write(ACT_STAGE_ADDR, (tap << 4) | group);
+        axil_write(ACT_STAGE_DATA, 32'h01010101);
       end
     end
+    axil_write(CONTROL, 32'h2);
+    axil_write(CONTROL, 32'h5);
 
     for (int wait_cycle = 0; wait_cycle < 100; wait_cycle++) begin
       axil_read(STATUS, value);
@@ -103,7 +104,8 @@ module tb_gestureflow_axil_microkernel;
       if ($signed(value) != (1024 + oc)) $fatal(1, "lane %0d result=%0d expected=%0d", oc, $signed(value), 1024 + oc);
     end
     axil_read(RESULT_IDX, value); if (value != 16'hffff) $fatal(1, "bad result mask %h", value);
-    $display("GESTUREFLOW_AXIL_MICROKERNEL_PASS cycles=%0d lane0=%0d lane15=%0d", dut.cycles, dut.result_psum[0], dut.result_psum[15]);
+    if (dut.cycles >= 1000) $fatal(1, "staged execution did not remove host feed gap cycles=%0d", dut.cycles);
+    $display("GESTUREFLOW_AXIL_MICROKERNEL_STAGED_PASS cycles=%0d lane0=%0d lane15=%0d", dut.cycles, dut.result_psum[0], dut.result_psum[15]);
     $finish;
   end
 endmodule

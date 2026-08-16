@@ -81,6 +81,30 @@ bash gesture_project/innovation_npu/tests/run_gestureflow_conv4x4_rgb_stream.sh
 连续窗口、以及无主机逐窗口控制的 4x4 流式卷积。测试脚本会从当前 `verilator`
 二进制位置自动推导 `VERILATOR_ROOT`，适配本机未执行系统级安装的 Verilator。
 
+### 实板 activation-staging 基线
+
+`gestureflow_activation_bank.sv` 与 `gestureflow_axil_microkernel.sv` 现已形成首个
+可实板验证的供数路径：PS 在任务启动前通过 AXI-Lite 将 256 个四路 INT8 activation
+word 装入片上 BRAM，随后用 `CONTROL=0x5` 启动 autonomous staged mode。硬件处理
+同步 BRAM 读延迟并连续向 16x4 MAC tile 发射，不在计算期间等待 ARM 写每个输入组。
+
+在 Zynq-7020、25MHz PL 时钟下，完整 `16 output x 16 tap x 16 input-group x 4 lane`
+事务为 16,384 INT8 MAC，真实板上周期计数为 `263`，16 路 INT32 结果逐条通过，
+即该**预装载后的执行段**约为 `1.557 GMAC/s`。该数字不含 PS 预装载、DDR/DMA、
+量化后处理或整层调度，因此不能当作模型端到端帧率。完整回归入口如下：
+
+```bash
+bash gesture_project/innovation_npu/tests/run_gestureflow_axil_microkernel.sh
+bash gesture_project/innovation_npu/board_7020/run_build_7020_from_wsl.sh
+bash gesture_project/innovation_npu/board_7020/build_software_7020_from_wsl.sh
+bash gesture_project/innovation_npu/board_7020/run_board_7020_from_wsl.sh
+```
+
+Windows 工程必须位于 `E:\coralnpu_vivado\projects\gestureflow_axil_baseline_7020_v1`，
+不能让 Vivado/XSCT 直接执行 `\\wsl.localhost\...` 路径。硬件服务器应使用
+`E:\Xilinx\Vivado\2023.2\bin\hw_server.bat -s tcp::3333`，板测 Tcl 已固定连接
+`tcp:127.0.0.1:3333`。
+
 `gestureflow_conv4x4_stream.sv` 当前只用于单输入通道集成对账，不能误写为 RGB
 或整网已经完成。RGB 首层 wrapper 已验证三路输入占用 4-lane MAC 的前三路、
 第四路显式掩码；下一步是跨输入通道累加与输出通道 tile 调度，再以真实 TFLite
