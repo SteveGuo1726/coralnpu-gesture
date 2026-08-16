@@ -60,6 +60,7 @@ module tb_gestureflow_axil_microkernel;
   endtask
 
   logic [31:0] value;
+  logic [31:0] full_cycles, rgb_cycles, carry_cycles;
   integer oc;
   initial begin
     awaddr = '0; wdata = '0; araddr = '0; awprot = '0; arprot = '0;
@@ -99,6 +100,7 @@ module tb_gestureflow_axil_microkernel;
     end
     axil_read(STATUS, value); if (value[4]) $fatal(1, "protocol fault status=%h", value);
     axil_read(CYCLES, value); if (value == 0) $fatal(1, "cycle counter did not run");
+    full_cycles = value;
     for (oc = 0; oc < 16; oc++) begin
       axil_write(RESULT_IDX, oc);
       axil_read(RESULT_DATA, value);
@@ -127,7 +129,31 @@ module tb_gestureflow_axil_microkernel;
       if ($signed(value) != (48 + oc)) $fatal(1, "RGB lane %0d result=%0d expected=%0d", oc, $signed(value), 48 + oc);
     end
     if (dut.cycles >= 100) $fatal(1, "RGB staged execution took %0d cycles", dut.cycles);
-    $display("GESTUREFLOW_AXIL_MICROKERNEL_STAGED_PASS full_cycles=263 rgb_cycles=%0d lane0=%0d lane15=%0d", dut.cycles, dut.result_psum[0], dut.result_psum[15]);
+    rgb_cycles = dut.cycles;
+
+    // Regression for packed-array carry contamination. Lane 0 deliberately
+    // wraps from INT32_MAX to INT32_MIN; lane 1 must remain exactly zero.
+    // A whole-vector result_psum <= accum + sum would incorrectly carry the
+    // lane-0 overflow into lane 1.
+    axil_write(JOB_CFG, 32'h00030100);
+    axil_write(BIDX, 0); axil_write(BDATA, 32'h7fffffff);
+    axil_write(BIDX, 1); axil_write(BDATA, 32'h00000000);
+    axil_write(WCTRL, 0); axil_write(WDATA, 32'h00000001);
+    axil_write(WCTRL, 1); axil_write(WDATA, 32'h00000000);
+    axil_write(ACT_STAGE_ADDR, 0); axil_write(ACT_STAGE_DATA, 32'h00000001);
+    axil_write(CONTROL, 32'h2);
+    axil_write(CONTROL, 32'h5);
+    for (int wait_cycle = 0; wait_cycle < 100; wait_cycle++) begin
+      axil_read(STATUS, value);
+      if (value[3]) break;
+      if (wait_cycle == 99) $fatal(1, "carry transaction never completed status=%h", value);
+    end
+    axil_write(RESULT_IDX, 0); axil_read(RESULT_DATA, value);
+    if (value != 32'h80000000) $fatal(1, "lane 0 wrap result=%h", value);
+    axil_write(RESULT_IDX, 1); axil_read(RESULT_DATA, value);
+    if (value != 32'h00000000) $fatal(1, "cross-lane carry result=%h", value);
+    carry_cycles = dut.cycles;
+    $display("GESTUREFLOW_AXIL_MICROKERNEL_STAGED_PASS full_cycles=%0d rgb_cycles=%0d carry_cycles=%0d lane0=%0d lane15=%0d", full_cycles, rgb_cycles, carry_cycles, dut.result_psum[0], dut.result_psum[15]);
     $finish;
   end
 endmodule

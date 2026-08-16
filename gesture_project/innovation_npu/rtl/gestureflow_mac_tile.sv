@@ -224,7 +224,13 @@ module gestureflow_mac_tile #(
           end
         end
         if (reduced_last) begin
-          result_psum <= accum + reduced_sum_extended;
+          // These are packed lane arrays. A vector-wide '+' would propagate
+          // the carry from lane N into lane N+1, corrupting only selected
+          // output channels on real signed model data. Keep every INT32
+          // output accumulator mathematically independent.
+          for (int oc = 0; oc < OUT_LANES; oc++) begin
+            result_psum[oc] <= accum[oc] + reduced_sum_extended[oc];
+          end
           result_lane_enable <= reduced_output_lanes;
           result_valid <= 1'b1;
           busy <= 1'b0;

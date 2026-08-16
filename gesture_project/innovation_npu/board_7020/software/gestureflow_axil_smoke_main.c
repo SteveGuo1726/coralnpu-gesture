@@ -6,6 +6,7 @@
 #include "xil_mmu.h"
 #include "xil_printf.h"
 #include "xil_types.h"
+#include "gestureflow_real_conv4x4_probe.h"
 
 #define GF_BASE             0x43C00000U
 #define PROBE_BASE          0xFFFF0000U
@@ -67,7 +68,7 @@ static void fail(u32 code, u32 observed)
 
 int main(void)
 {
-    u32 oc, tap, group, poll, value, status, cycles;
+    u32 oc, tap, group, poll, value, status, cycles, real_mismatch;
     const u32 expected_base = 1024U;
 
     Xil_DCacheDisable();
@@ -160,13 +161,57 @@ int main(void)
     for (oc = 0U; oc < 16U; ++oc) {
         Xil_Out32(GF_BASE + GF_RESULT_IDX, oc);
         value = Xil_In32(GF_BASE + GF_RESULT_DATA);
-        store_probe(8U + oc, value);
         if (value != 48U + oc) { fail(0x1200U + oc, value); }
     }
 
+    /* Real model first-window check. The generated header contains weights,
+     * bias, and activation bytes from the project-local 4x4 INT8 TFLite
+     * model. Compare the raw INT32 accumulator before requantization. */
+    stage = 0x70U;
+    Xil_Out32(GF_BASE + GF_JOB_CFG, 0xFFFF070FU);
+    for (oc = 0U; oc < GF_REAL_PROBE_OUTPUT_LANES; ++oc) {
+        Xil_Out32(GF_BASE + GF_BIDX, oc);
+        Xil_Out32(GF_BASE + GF_BDATA, (u32)gf_real_probe_bias[oc]);
+        for (tap = 0U; tap < GF_REAL_PROBE_TAPS; ++tap) {
+            u32 base = (oc * GF_REAL_PROBE_TAPS + tap) * 3U;
+            u32 packed = (u32)(uint8_t)gf_real_probe_weights[base]
+                       | ((u32)(uint8_t)gf_real_probe_weights[base + 1U] << 8)
+                       | ((u32)(uint8_t)gf_real_probe_weights[base + 2U] << 16);
+            Xil_Out32(GF_BASE + GF_WCTRL, oc | (tap << 4));
+            Xil_Out32(GF_BASE + GF_WDATA, packed);
+        }
+    }
+    for (tap = 0U; tap < GF_REAL_PROBE_TAPS; ++tap) {
+        u32 packed = (u32)(uint8_t)gf_real_probe_activation[tap * 3U]
+                   | ((u32)(uint8_t)gf_real_probe_activation[tap * 3U + 1U] << 8)
+                   | ((u32)(uint8_t)gf_real_probe_activation[tap * 3U + 2U] << 16);
+        Xil_Out32(GF_BASE + GF_ACT_STAGE_ADDR, tap);
+        Xil_Out32(GF_BASE + GF_ACT_STAGE_DATA, packed);
+    }
+    Xil_Out32(GF_BASE + GF_CONTROL, 0x2U);
+    Xil_Out32(GF_BASE + GF_CONTROL, 0x5U);
+    status = 0U;
+    for (poll = 0U; poll < 1000000U; ++poll) {
+        status = Xil_In32(GF_BASE + GF_STATUS);
+        if ((status & (1U << 3)) != 0U) { break; }
+    }
+    store_probe(27U, status);
+    if ((status & (1U << 4)) != 0U || (status & (1U << 3)) == 0U) { fail(0x1030U, status); }
+    cycles = Xil_In32(GF_BASE + GF_CYCLES);
+    store_probe(28U, cycles);
+    if (cycles == 0U || cycles >= 100U) { fail(0x1031U, cycles); }
+    real_mismatch = 0U;
+    for (oc = 0U; oc < GF_REAL_PROBE_OUTPUT_LANES; ++oc) {
+        Xil_Out32(GF_BASE + GF_RESULT_IDX, oc);
+        value = Xil_In32(GF_BASE + GF_RESULT_DATA);
+        store_probe(8U + oc, value);
+        if ((int32_t)value != gf_real_probe_expected_accum[oc]) { ++real_mismatch; }
+    }
+    if (real_mismatch != 0U) { fail(0x13FFU, real_mismatch); }
+
     store_probe(0U, RESULT_PASS);
-    xil_printf("GESTUREFLOW_AXIL_CONFIGURABLE_PASS full_cycles=%lu rgb_cycles=%lu lane0=%lu lane15=%lu\r\n",
-               (unsigned long)probe[7], (unsigned long)cycles,
+    xil_printf("GESTUREFLOW_REAL_CONV4X4_PASS full_cycles=%lu rgb_cycles=%lu real_cycles=%lu lane0=0x%08lx lane15=0x%08lx\r\n",
+               (unsigned long)probe[7], (unsigned long)probe[26], (unsigned long)cycles,
                (unsigned long)probe[8], (unsigned long)probe[23]);
     while (1) { usleep(100000U); }
     return 0;
