@@ -9,9 +9,53 @@ separate hardware stage and must not be silently folded into this check.
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 
 import numpy as np
+
+
+def quantize_multiplier(real_multiplier: float) -> tuple[int, int]:
+    """Match TensorFlow Lite's QuantizeMultiplier for a positive scale."""
+    significand, shift = math.frexp(real_multiplier)
+    quantized = int(round(significand * (1 << 31)))
+    if quantized == (1 << 31):
+        quantized //= 2
+        shift += 1
+    if not (0 < quantized < (1 << 31)):
+        raise ValueError(f"invalid TFLite multiplier {real_multiplier}")
+    return quantized, shift
+
+
+def trunc_divide(numerator: int, denominator: int) -> int:
+    """C++ signed integer division, which truncates toward zero."""
+    return numerator // denominator if numerator >= 0 else -((-numerator) // denominator)
+
+
+def saturating_rounding_doubling_high_mul(left: int, right: int) -> int:
+    product = left * right
+    nudge = (1 << 30) if product >= 0 else (1 - (1 << 30))
+    return trunc_divide(product + nudge, 1 << 31)
+
+
+def rounding_divide_by_pot(value: int, exponent: int) -> int:
+    if exponent < 0:
+        raise ValueError(f"negative right shift {exponent}")
+    if exponent == 0:
+        return value
+    mask = (1 << exponent) - 1
+    remainder = value & mask
+    threshold = (mask >> 1) + (1 if value < 0 else 0)
+    return (value >> exponent) + (1 if remainder > threshold else 0)
+
+
+def multiply_by_quantized_multiplier(value: int, multiplier: int, shift: int) -> int:
+    if shift > 0:
+        value *= 1 << shift
+        shift = 0
+    return rounding_divide_by_pot(
+        saturating_rounding_doubling_high_mul(value, multiplier), -shift
+    )
 
 
 def main() -> None:
@@ -22,12 +66,23 @@ def main() -> None:
     parser.add_argument("--output_x", type=int, default=32)
     args = parser.parse_args()
 
-    import tensorflow as tf  # pylint: disable=import-outside-toplevel
+    # TensorFlow's reference resolver is preferred for a software golden.
+    # A clean board-development WSL installation does not need the full
+    # training stack, however, so retain a tflite-runtime fallback for model
+    # inspection and deterministic integer reference generation.
+    try:
+        import tensorflow as tf  # pylint: disable=import-outside-toplevel
 
-    interpreter = tf.lite.Interpreter(
-        model_path=str(Path(args.model).resolve()),
-        experimental_op_resolver_type=tf.lite.experimental.OpResolverType.BUILTIN_REF,
-    )
+        interpreter = tf.lite.Interpreter(
+            model_path=str(Path(args.model).resolve()),
+            experimental_op_resolver_type=tf.lite.experimental.OpResolverType.BUILTIN_REF,
+        )
+        interpreter_backend = "tensorflow_builtin_ref"
+    except ModuleNotFoundError:
+        from tflite_runtime.interpreter import Interpreter  # pylint: disable=import-outside-toplevel
+
+        interpreter = Interpreter(model_path=str(Path(args.model).resolve()))
+        interpreter_backend = "tflite_runtime"
     interpreter.allocate_tensors()
     input_detail = interpreter.get_input_details()[0]
     output_detail = interpreter.get_output_details()[0]
@@ -77,6 +132,34 @@ def main() -> None:
             np.sum(hardware_window.astype(np.int64) * weights[output_channel].astype(np.int64))
         )
 
+    input_scale = float(input_detail["quantization"][0])
+    output_scale, output_zero_point = output_conv_detail["quantization"]
+    weight_scales = weight_detail["quantization_parameters"]["scales"]
+    if len(weight_scales) != 16:
+        raise SystemExit(f"Expected 16 per-channel weight scales, got {len(weight_scales)}")
+    requant_multiplier = np.empty(16, dtype=np.int32)
+    requant_shift = np.empty(16, dtype=np.int32)
+    expected_quantized = np.empty(16, dtype=np.int8)
+    for output_channel in range(16):
+        multiplier, shift = quantize_multiplier(
+            input_scale * float(weight_scales[output_channel]) / float(output_scale)
+        )
+        requant_multiplier[output_channel] = multiplier
+        requant_shift[output_channel] = shift
+        quantized = multiply_by_quantized_multiplier(
+            int(expected[output_channel]), multiplier, shift) + int(output_zero_point)
+        # This operator's output tensor name records the converter-fused ReLU.
+        quantized = max(int(output_zero_point), min(127, quantized))
+        expected_quantized[output_channel] = np.int8(quantized)
+
+    tflite_quantized = conv_output[0, args.output_y, args.output_x, :16]
+    if not np.array_equal(expected_quantized, tflite_quantized):
+        raise SystemExit(
+            "TFLite requant mismatch: "
+            f"expected={expected_quantized.tolist()} "
+            f"tflite={tflite_quantized.tolist()}"
+        )
+
     out_path = Path(args.out).resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -99,21 +182,28 @@ def main() -> None:
 #define GF_REAL_PROBE_INPUT_MASK 0x7U
 #define GF_REAL_PROBE_OUTPUT_Y %dU
 #define GF_REAL_PROBE_OUTPUT_X %dU
+#define GF_REAL_PROBE_OUTPUT_ZERO_POINT %d
 
-""" % (args.output_y, args.output_x)
+""" % (args.output_y, args.output_x, int(output_zero_point))
     text += c_array(weights.reshape(16, 16, 3), "int8_t", "gf_real_probe_weights")
     text += c_array(hardware_window.reshape(16, 3), "int8_t", "gf_real_probe_activation")
     text += c_array(bias[:16], "int32_t", "gf_real_probe_bias")
     text += c_array(expected.astype(np.int32), "int32_t", "gf_real_probe_expected_accum")
+    text += c_array(requant_multiplier, "int32_t", "gf_real_probe_requant_multiplier")
+    text += c_array(requant_shift, "int32_t", "gf_real_probe_requant_shift")
+    text += c_array(expected_quantized, "int8_t", "gf_real_probe_expected_quantized")
     text += "\n#endif\n"
     out_path.write_text(text, encoding="ascii")
 
     print(f"Wrote {out_path}")
+    print(f"interpreter_backend={interpreter_backend}")
     print(f"model_input_quant={input_detail['quantization']} conv_output_quant={output_conv_detail['quantization']}")
     print(f"tflite_input_window={window.reshape(-1).tolist()}")
     print(f"hardware_zero_point_adjusted_window={hardware_window.reshape(-1).tolist()}")
     print(f"expected_accum={expected.tolist()}")
-    print(f"tflite_conv_output={conv_output[0, args.output_y, args.output_x, :16].tolist()}")
+    print(f"requant_multiplier={requant_multiplier.tolist()}")
+    print(f"requant_shift={requant_shift.tolist()}")
+    print(f"tflite_conv_output={tflite_quantized.tolist()}")
 
 
 if __name__ == "__main__":

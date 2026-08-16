@@ -10,6 +10,7 @@
 #define GF_REAL_PROBE_INPUT_MASK 0x7U
 #define GF_REAL_PROBE_OUTPUT_Y 32U
 #define GF_REAL_PROBE_OUTPUT_X 32U
+#define GF_REAL_PROBE_OUTPUT_ZERO_POINT -128
 
 static const int8_t gf_real_probe_weights[768] = {
     -4, -48, -59, 12, -96, -127, -72, -56, -57, -35, -14, 50, -24, 5, -16, -24,
@@ -71,6 +72,15 @@ static const int32_t gf_real_probe_bias[16] = {
 };
 static const int32_t gf_real_probe_expected_accum[16] = {
     12945, 40101, -27709, -25992, -7799, -26966, 21056, -11847, -5999, -20715, 13808, -15449, -10414, 13976, -4778, 13263
+};
+static const int32_t gf_real_probe_requant_multiplier[16] = {
+    1787846233, 1122128448, 1349594768, 1412386588, 2062591784, 1790157864, 1533299872, 1443871989, 1529114050, 1120653286, 2057570923, 1596767263, 1161961791, 1968538391, 2100971521, 1438322766
+};
+static const int32_t gf_real_probe_requant_shift[16] = {
+    -11, -9, -10, -9, -11, -10, -11, -11, -9, -11, -8, -9, -10, -11, -10, -9
+};
+static const int8_t gf_real_probe_expected_quantized[16] = {
+    -123, -87, -128, -128, -128, -128, -121, -128, -128, -128, -76, -128, -128, -122, -128, -111
 };
 
 #endif

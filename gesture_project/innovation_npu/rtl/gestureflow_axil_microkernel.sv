@@ -13,10 +13,12 @@ module gestureflow_axil_microkernel (
   // RESULT_IDX is deliberately write-index/read-mask. This lets a PS program
   // select one output lane then obtain its full signed INT32 accumulator from
   // RESULT_DATA without relying on an AXI read side effect.
-  localparam [11:0] MAGIC=12'h000, VERSION=12'h004, CONTROL=12'h008, STATUS=12'h00c, WCTRL=12'h010, WDATA=12'h014, BIDX=12'h018, BDATA=12'h01c, ACTRL=12'h020, ADATA=12'h024, RESULT_IDX=12'h028, RESULT_DATA=12'h02c, CYCLES=12'h030, ACT_STAGE_ADDR=12'h034, ACT_STAGE_DATA=12'h038, JOB_CFG=12'h03c;
+  localparam [11:0] MAGIC=12'h000, VERSION=12'h004, CONTROL=12'h008, STATUS=12'h00c, WCTRL=12'h010, WDATA=12'h014, BIDX=12'h018, BDATA=12'h01c, ACTRL=12'h020, ADATA=12'h024, RESULT_IDX=12'h028, RESULT_DATA=12'h02c, CYCLES=12'h030, ACT_STAGE_ADDR=12'h034, ACT_STAGE_DATA=12'h038, JOB_CFG=12'h03c, RQIDX=12'h040, RQMULT=12'h044, RQSHIFT=12'h048, RQCTRL=12'h04c, OUT_STAGE_ADDR=12'h050, OUT_READ_CTRL=12'h054, OUT_READ_DATA=12'h058, QUANT_RESULT_IDX=12'h05c, QUANT_RESULT_DATA=12'h060;
   logic [31:0] awaddr,wdata; logic aw_seen,w_seen; logic [3:0] wstrb;
   logic [3:0] w_oc,w_tap,w_group,b_index,result_index; logic signed [15:0][31:0] bias,result_psum; logic [15:0] result_mask; logic [31:0] cycles; logic done, fault;
   logic weight_we,start_v,mac_v; logic [3:0] mac_tap,mac_group; logic mac_last; logic signed [3:0][7:0] weight_data,activation; logic tile_start_ready,tile_mac_ready,tile_result_valid,tile_busy,tile_fault; logic [15:0] tile_result_mask; logic signed [15:0][31:0] tile_result;
+  logic requant_in_ready,requant_out_valid,requant_config_error,requant_enable,requant_relu_enable; logic signed [7:0] requant_zero_point; logic [3:0] requant_index,quant_result_index; logic signed [15:0][31:0] requant_multiplier; logic [15:0][5:0] requant_right_shift; logic signed [15:0][7:0] quant_result; logic [15:0] quant_result_mask;
+  logic [7:0] output_write_addr,output_read_addr; logic output_read_enable; logic [1:0] output_read_word_index; logic [127:0] output_read_data;
   logic stage_write_enable,stage_read_enable,stage_running,stage_data_valid;
   logic [7:0] stage_write_addr,stage_read_addr,stage_read_linear;
   logic [31:0] stage_write_data,stage_read_data;
@@ -25,19 +27,24 @@ module gestureflow_axil_microkernel (
   logic stage_read_active;
   assign s_axi_awready=!aw_seen&&!s_axi_bvalid; assign s_axi_wready=!w_seen&&!s_axi_bvalid; assign s_axi_arready=!s_axi_rvalid;
   gestureflow_mac_tile #(.OUT_LANES(16),.INPUT_LANES(4),.MAX_TAPS(16),.MAX_IC_GROUPS(16)) tile(
-    .clk(aclk),.rst_n(aresetn),.weight_write_valid(weight_we),.weight_write_oc(w_oc),.weight_write_tap(w_tap),.weight_write_ic_group(w_group),.weight_write_data(weight_data),.start_valid(start_v),.start_ready(tile_start_ready),.bias(bias),.output_lane_enable(job_output_lane_enable),.mac_valid(mac_v),.mac_ready(tile_mac_ready),.mac_tap(mac_tap),.mac_ic_group(mac_group),.activation(activation),.input_lane_enable(mac_input_lane_enable),.mac_last(mac_last),.result_valid(tile_result_valid),.result_ready(1'b1),.result_psum(tile_result),.result_lane_enable(tile_result_mask),.busy(tile_busy),.protocol_error(tile_fault));
+    .clk(aclk),.rst_n(aresetn),.weight_write_valid(weight_we),.weight_write_oc(w_oc),.weight_write_tap(w_tap),.weight_write_ic_group(w_group),.weight_write_data(weight_data),.start_valid(start_v),.start_ready(tile_start_ready),.bias(bias),.output_lane_enable(job_output_lane_enable),.mac_valid(mac_v),.mac_ready(tile_mac_ready),.mac_tap(mac_tap),.mac_ic_group(mac_group),.activation(activation),.input_lane_enable(mac_input_lane_enable),.mac_last(mac_last),.result_valid(tile_result_valid),.result_ready(requant_in_ready),.result_psum(tile_result),.result_lane_enable(tile_result_mask),.busy(tile_busy),.protocol_error(tile_fault));
   gestureflow_activation_bank #(.ADDR_W(8),.DATA_W(32)) activation_bank(
     .clk(aclk),.write_enable(stage_write_enable),.write_addr(stage_write_addr),.write_data(stage_write_data),.read_enable(stage_read_enable),.read_addr(stage_read_addr),.read_data(stage_read_data));
+  gestureflow_requant_relu #(.LANES(16)) requant(
+    .clk(aclk),.rst_n(aresetn),.in_valid(tile_result_valid),.in_ready(requant_in_ready),.in_psum(tile_result),.in_lane_enable(tile_result_mask),.enable(requant_enable),.relu_enable(requant_relu_enable),.output_zero_point(requant_zero_point),.multiplier(requant_multiplier),.right_shift(requant_right_shift),.out_valid(requant_out_valid),.out_ready(1'b1),.out_data(quant_result),.out_lane_enable(quant_result_mask),.config_error(requant_config_error));
+  gestureflow_output_bank #(.ADDR_W(8),.DATA_W(128)) output_bank(
+    .clk(aclk),.write_enable(requant_out_valid),.write_addr(output_write_addr),.write_data(quant_result),.read_enable(output_read_enable),.read_addr(output_read_addr),.read_data(output_read_data));
   // This shell feeds BRAM address/control signals through the tile. Use a
   // synchronous reset so the PS7 reset cannot asynchronously disturb RAMB
   // address/enable inputs during configuration.
   always_ff @(posedge aclk) begin
-    if(!aresetn) begin aw_seen<=0;w_seen<=0;s_axi_bvalid<=0;s_axi_bresp<=0;s_axi_rvalid<=0;s_axi_rresp<=0;s_axi_rdata<=0;weight_we<=0;start_v<=0;mac_v<=0;bias<='0;done<=0;fault<=0;cycles<=0;result_psum<='0;result_mask<=0;w_oc<=0;w_tap<=0;w_group<=0;b_index<=0;result_index<=0;stage_write_enable<=0;stage_write_addr<=0;stage_write_data<=0;stage_read_enable<=0;stage_read_addr<=0;stage_read_linear<=0;stage_running<=0;stage_read_active<=0;stage_data_valid<=0;stage_read_tap<=0;stage_read_group<=0;stage_issue_tap<=0;stage_issue_group<=0;job_tap_limit<=4'd15;job_group_limit<=4'd15;job_tail_input_mask<=4'hf;job_output_lane_enable<=16'hffff;mac_input_lane_enable<=4'hf; end
+    if(!aresetn) begin aw_seen<=0;w_seen<=0;s_axi_bvalid<=0;s_axi_bresp<=0;s_axi_rvalid<=0;s_axi_rresp<=0;s_axi_rdata<=0;weight_we<=0;start_v<=0;mac_v<=0;bias<='0;done<=0;fault<=0;cycles<=0;result_psum<='0;result_mask<=0;w_oc<=0;w_tap<=0;w_group<=0;b_index<=0;result_index<=0;stage_write_enable<=0;stage_write_addr<=0;stage_write_data<=0;stage_read_enable<=0;stage_read_addr<=0;stage_read_linear<=0;stage_running<=0;stage_read_active<=0;stage_data_valid<=0;stage_read_tap<=0;stage_read_group<=0;stage_issue_tap<=0;stage_issue_group<=0;job_tap_limit<=4'd15;job_group_limit<=4'd15;job_tail_input_mask<=4'hf;job_output_lane_enable<=16'hffff;mac_input_lane_enable<=4'hf;requant_enable<=0;requant_relu_enable<=0;requant_zero_point<=0;requant_index<=0;quant_result_index<=0;requant_multiplier<='0;requant_right_shift<='0;output_write_addr<=0;output_read_addr<=0;output_read_enable<=0;output_read_word_index<=0; end
     else begin
-      weight_we<=0;start_v<=0;mac_v<=0;stage_write_enable<=0;stage_read_enable<=0;
+      weight_we<=0;start_v<=0;mac_v<=0;stage_write_enable<=0;stage_read_enable<=0;output_read_enable<=0;
       if(tile_busy) cycles<=cycles+1'b1;
-      if(tile_result_valid) begin result_psum<=tile_result;result_mask<=tile_result_mask;done<=1; end
-      if(tile_fault) fault<=1;
+      if(tile_result_valid&&requant_in_ready) begin result_psum<=tile_result;result_mask<=tile_result_mask; end
+      if(requant_out_valid) begin done<=1; output_write_addr<=output_write_addr+1'b1; end
+      if(tile_fault||requant_config_error) fault<=1;
       // The synchronous BRAM has one cycle read latency, so requests are
       // issued ahead of the MAC stream and its tail is explicitly drained.
       // The descriptor limits make the same engine cover a full 16x16 tile
@@ -86,7 +93,14 @@ module gestureflow_axil_microkernel (
           // [3:0] tap_count-1, [7:4] Cin-group-count-1, [11:8] valid
           // lanes in the final Cin group, [31:16] active output lanes.
           JOB_CFG: begin job_tap_limit<=wdata[3:0];job_group_limit<=wdata[7:4];job_tail_input_mask<=wdata[11:8];job_output_lane_enable<=wdata[31:16];end
+          RQIDX: requant_index<=wdata[3:0];
+          RQMULT: if(!tile_busy&&!requant_out_valid) requant_multiplier[requant_index]<=wdata; else fault<=1;
+          RQSHIFT: if(!tile_busy&&!requant_out_valid) requant_right_shift[requant_index]<=wdata[5:0]; else fault<=1;
+          RQCTRL: if(!tile_busy&&!requant_out_valid) begin requant_enable<=wdata[0];requant_relu_enable<=wdata[1];requant_zero_point<=wdata[15:8];end else fault<=1;
+          OUT_STAGE_ADDR: output_write_addr<=wdata[7:0];
+          OUT_READ_CTRL: begin output_read_addr<=wdata[7:0];output_read_word_index<=wdata[9:8];output_read_enable<=1;end
           RESULT_IDX: result_index<=wdata[3:0];
+          QUANT_RESULT_IDX: quant_result_index<=wdata[3:0];
           default: begin end
         endcase
         s_axi_bvalid<=1; s_axi_bresp<=0; aw_seen<=0;w_seen<=0;
@@ -94,8 +108,9 @@ module gestureflow_axil_microkernel (
       if(s_axi_bvalid&&s_axi_bready) s_axi_bvalid<=0;
       if(s_axi_arvalid&&s_axi_arready) begin
         case(s_axi_araddr[11:0])
-          MAGIC:s_axi_rdata<=32'h47464e50; VERSION:s_axi_rdata<=32'h00010002; STATUS:s_axi_rdata<={26'd0,stage_running,fault,done,tile_busy,tile_fault,tile_result_valid};
-          RESULT_DATA:s_axi_rdata<=result_psum[result_index]; RESULT_IDX:s_axi_rdata<={16'd0,result_mask}; CYCLES:s_axi_rdata<=cycles; default:s_axi_rdata<=32'hdeadbeef;
+          MAGIC:s_axi_rdata<=32'h47464e50; VERSION:s_axi_rdata<=32'h00010003; STATUS:s_axi_rdata<={26'd0,stage_running,fault,done,tile_busy,tile_fault,tile_result_valid};
+          RESULT_DATA:s_axi_rdata<=result_psum[result_index]; RESULT_IDX:s_axi_rdata<={16'd0,result_mask}; CYCLES:s_axi_rdata<=cycles;
+          QUANT_RESULT_DATA:s_axi_rdata<={{24{quant_result[quant_result_index][7]}},quant_result[quant_result_index]}; QUANT_RESULT_IDX:s_axi_rdata<={16'd0,quant_result_mask}; OUT_READ_DATA:s_axi_rdata<=output_read_data[output_read_word_index*32 +: 32]; default:s_axi_rdata<=32'hdeadbeef;
         endcase s_axi_rvalid<=1;s_axi_rresp<=0;
       end
       if(s_axi_rvalid&&s_axi_rready) s_axi_rvalid<=0;

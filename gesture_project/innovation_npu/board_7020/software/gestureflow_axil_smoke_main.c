@@ -26,6 +26,15 @@
 #define GF_ACT_STAGE_ADDR   0x034U
 #define GF_ACT_STAGE_DATA   0x038U
 #define GF_JOB_CFG          0x03CU
+#define GF_RQIDX            0x040U
+#define GF_RQMULT           0x044U
+#define GF_RQSHIFT          0x048U
+#define GF_RQCTRL           0x04CU
+#define GF_OUT_STAGE_ADDR   0x050U
+#define GF_OUT_READ_CTRL    0x054U
+#define GF_OUT_READ_DATA    0x058U
+#define GF_QUANT_RESULT_IDX 0x05CU
+#define GF_QUANT_RESULT_DATA 0x060U
 
 #define RESULT_PASS         0x600D600DU
 #define RESULT_FAIL         0xBAD0BAD0U
@@ -79,7 +88,7 @@ int main(void)
     Xil_ExceptionRegisterHandler(XIL_EXCEPTION_ID_DATA_ABORT_INT, data_abort, 0);
     Xil_ExceptionRegisterHandler(XIL_EXCEPTION_ID_PREFETCH_ABORT_INT, prefetch_abort, 0);
     Xil_ExceptionEnable();
-    for (oc = 0U; oc < 32U; ++oc) { store_probe(oc, 0U); }
+    for (oc = 0U; oc < 64U; ++oc) { store_probe(oc, 0U); }
     store_probe(0U, 0x47464E50U);
 
     stage = 0x10U;
@@ -88,7 +97,7 @@ int main(void)
     if (value != 0x47464E50U) { fail(0x1001U, value); }
     value = Xil_In32(GF_BASE + GF_VERSION);
     store_probe(5U, value);
-    if (value != 0x00010002U) { fail(0x1002U, value); }
+    if (value != 0x00010003U) { fail(0x1002U, value); }
 
     /* Complete deterministic 4x4 x 16-Cin-group tile transaction.
      * Every weight/activation is +1; lane N starts at bias N. */
@@ -169,6 +178,7 @@ int main(void)
      * model. Compare the raw INT32 accumulator before requantization. */
     stage = 0x70U;
     Xil_Out32(GF_BASE + GF_JOB_CFG, 0xFFFF070FU);
+    Xil_Out32(GF_BASE + GF_OUT_STAGE_ADDR, 0U);
     for (oc = 0U; oc < GF_REAL_PROBE_OUTPUT_LANES; ++oc) {
         Xil_Out32(GF_BASE + GF_BIDX, oc);
         Xil_Out32(GF_BASE + GF_BDATA, (u32)gf_real_probe_bias[oc]);
@@ -180,7 +190,14 @@ int main(void)
             Xil_Out32(GF_BASE + GF_WCTRL, oc | (tap << 4));
             Xil_Out32(GF_BASE + GF_WDATA, packed);
         }
+        Xil_Out32(GF_BASE + GF_RQIDX, oc);
+        Xil_Out32(GF_BASE + GF_RQMULT, (u32)gf_real_probe_requant_multiplier[oc]);
+        Xil_Out32(GF_BASE + GF_RQSHIFT, (u32)(-gf_real_probe_requant_shift[oc]));
     }
+    /* Output scale is per channel in the model; the generated multipliers
+     * already include input scale, weight scale and output scale. The shared
+     * output zero point and fused ReLU match the first TFLite CONV_2D. */
+    Xil_Out32(GF_BASE + GF_RQCTRL, 0x00008003U);
     for (tap = 0U; tap < GF_REAL_PROBE_TAPS; ++tap) {
         u32 packed = (u32)(uint8_t)gf_real_probe_activation[tap * 3U]
                    | ((u32)(uint8_t)gf_real_probe_activation[tap * 3U + 1U] << 8)
@@ -208,6 +225,29 @@ int main(void)
         if ((int32_t)value != gf_real_probe_expected_accum[oc]) { ++real_mismatch; }
     }
     if (real_mismatch != 0U) { fail(0x13FFU, real_mismatch); }
+
+    /* Read the post-quantized vector through the debug selector and verify
+     * every lane. Normal layer consumers will use the output BRAM/DMA path,
+     * not these AXI-Lite reads; this is a board-level numerical probe. */
+    for (oc = 0U; oc < GF_REAL_PROBE_OUTPUT_LANES; ++oc) {
+        Xil_Out32(GF_BASE + GF_QUANT_RESULT_IDX, oc);
+        value = Xil_In32(GF_BASE + GF_QUANT_RESULT_DATA);
+        store_probe(32U + oc, value);
+        if ((int8_t)value != gf_real_probe_expected_quantized[oc]) { fail(0x1400U + oc, value); }
+    }
+    /* The same 16-byte vector was written to one output-bank address. The
+     * four reads below prove the BRAM path without treating AXI-Lite as the
+     * future layer transport. */
+    for (group = 0U; group < 4U; ++group) {
+        u32 expected_word = 0U;
+        for (oc = 0U; oc < 4U; ++oc) {
+            expected_word |= (u32)(uint8_t)gf_real_probe_expected_quantized[group * 4U + oc] << (oc * 8U);
+        }
+        Xil_Out32(GF_BASE + GF_OUT_READ_CTRL, group << 8);
+        value = Xil_In32(GF_BASE + GF_OUT_READ_DATA);
+        store_probe(48U + group, value);
+        if (value != expected_word) { fail(0x1500U + group, value); }
+    }
 
     store_probe(0U, RESULT_PASS);
     xil_printf("GESTUREFLOW_REAL_CONV4X4_PASS full_cycles=%lu rgb_cycles=%lu real_cycles=%lu lane0=0x%08lx lane15=0x%08lx\r\n",

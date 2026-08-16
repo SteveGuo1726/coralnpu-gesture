@@ -17,7 +17,11 @@ module tb_gestureflow_axil_microkernel;
                     ADATA = 32'h024, RESULT_IDX = 32'h028,
                     RESULT_DATA = 32'h02c, CYCLES = 32'h030,
                     ACT_STAGE_ADDR = 32'h034, ACT_STAGE_DATA = 32'h038,
-                    JOB_CFG = 32'h03c;
+                    JOB_CFG = 32'h03c, RQIDX = 32'h040, RQMULT = 32'h044,
+                    RQSHIFT = 32'h048, RQCTRL = 32'h04c,
+                    OUT_STAGE_ADDR = 32'h050, OUT_READ_CTRL = 32'h054,
+                    OUT_READ_DATA = 32'h058, QUANT_RESULT_IDX = 32'h05c,
+                    QUANT_RESULT_DATA = 32'h060;
 
   always #5 clk = ~clk;
 
@@ -61,6 +65,10 @@ module tb_gestureflow_axil_microkernel;
 
   logic [31:0] value;
   logic [31:0] full_cycles, rgb_cycles, carry_cycles;
+  integer signed real_accum [0:15] = '{12945,40101,-27709,-25992,-7799,-26966,21056,-11847,-5999,-20715,13808,-15449,-10414,13976,-4778,13263};
+  integer signed real_multiplier [0:15] = '{1787846233,1122128448,1349594768,1412386588,2062591784,1790157864,1533299872,1443871989,1529114050,1120653286,2057570923,1596767263,1161961791,1968538391,2100971521,1438322766};
+  logic [5:0] real_right_shift [0:15] = '{11,9,10,9,11,10,11,11,9,11,8,9,10,11,10,9};
+  integer signed real_quantized [0:15] = '{-123,-87,-128,-128,-128,-128,-121,-128,-128,-128,-76,-128,-128,-122,-128,-111};
   integer oc;
   initial begin
     awaddr = '0; wdata = '0; araddr = '0; awprot = '0; arprot = '0;
@@ -69,7 +77,7 @@ module tb_gestureflow_axil_microkernel;
     rst_n = 1'b1;
 
     axil_read(MAGIC, value); if (value != 32'h47464e50) $fatal(1, "bad magic %h", value);
-    axil_read(VERSION, value); if (value != 32'h00010002) $fatal(1, "bad version %h", value);
+    axil_read(VERSION, value); if (value != 32'h00010003) $fatal(1, "bad version %h", value);
 
     // Bias each output lane with its lane number. Load every 4x4 tap/group
     // with four ones. Feeding all-one activations produces 16 groups * 4 = 64.
@@ -106,7 +114,7 @@ module tb_gestureflow_axil_microkernel;
       axil_read(RESULT_DATA, value);
       if ($signed(value) != (1024 + oc)) $fatal(1, "lane %0d result=%0d expected=%0d", oc, $signed(value), 1024 + oc);
     end
-    axil_read(RESULT_IDX, value); if (value != 16'hffff) $fatal(1, "bad result mask %h", value);
+    axil_read(RESULT_IDX, value); if (value != 32'h0000ffff) $fatal(1, "bad result mask %h", value);
     if (dut.cycles >= 1000) $fatal(1, "staged execution did not remove host feed gap cycles=%0d", dut.cycles);
 
     // Real RGB stem shape: 4x4 taps, one Cin group with only lanes 0..2.
@@ -130,6 +138,43 @@ module tb_gestureflow_axil_microkernel;
     end
     if (dut.cycles >= 100) $fatal(1, "RGB staged execution took %0d cycles", dut.cycles);
     rgb_cycles = dut.cycles;
+
+    // Exact first-layer TFLite requantization fixture. Raw accumulators are
+    // real model values; Q31 multipliers, shifts, output zero point and fused
+    // ReLU are exported by the project-local model probe generator.
+    axil_write(JOB_CFG, 32'hffff0f00);
+    axil_write(OUT_STAGE_ADDR, 0);
+    for (oc = 0; oc < 16; oc++) begin
+      axil_write(BIDX, oc); axil_write(BDATA, real_accum[oc]);
+      axil_write(WCTRL, oc); axil_write(WDATA, 0);
+      axil_write(RQIDX, oc); axil_write(RQMULT, real_multiplier[oc]);
+      axil_write(RQSHIFT, {26'd0, real_right_shift[oc]});
+    end
+    axil_write(RQCTRL, 32'h00008003);
+    axil_write(ACT_STAGE_ADDR, 0); axil_write(ACT_STAGE_DATA, 0);
+    axil_write(CONTROL, 32'h2);
+    axil_write(CONTROL, 32'h5);
+    for (int wait_cycle = 0; wait_cycle < 100; wait_cycle++) begin
+      axil_read(STATUS, value);
+      if (value[3]) break;
+      if (wait_cycle == 99) $fatal(1, "requant transaction never completed status=%h", value);
+    end
+    for (oc = 0; oc < 16; oc++) begin
+      axil_write(RESULT_IDX, oc); axil_read(RESULT_DATA, value);
+      if ($signed(value) != real_accum[oc]) $fatal(1, "requant raw lane %0d got=%0d expected=%0d", oc, $signed(value), real_accum[oc]);
+      axil_write(QUANT_RESULT_IDX, oc); axil_read(QUANT_RESULT_DATA, value);
+      if ($signed(value) != real_quantized[oc]) $fatal(1, "requant lane %0d got=%0d expected=%0d raw=%0d multiplier=%0d shift=%0d zero=%0d enabled=%0b", oc, $signed(value), real_quantized[oc], dut.result_psum[oc], dut.requant_multiplier[oc], dut.requant_right_shift[oc], dut.requant_zero_point, dut.requant_enable);
+    end
+    axil_write(OUT_READ_CTRL, 0);
+    repeat (2) @(negedge clk);
+    for (int word = 0; word < 4; word++) begin
+      axil_write(OUT_READ_CTRL, word << 8);
+      repeat (2) @(negedge clk);
+      axil_read(OUT_READ_DATA, value);
+      for (int byte_index = 0; byte_index < 4; byte_index++) begin
+        if ($signed(value[byte_index*8 +: 8]) != real_quantized[word*4+byte_index]) $fatal(1, "output bank word=%0d byte=%0d got=%0d expected=%0d", word, byte_index, $signed(value[byte_index*8 +: 8]), real_quantized[word*4+byte_index]);
+      end
+    end
 
     // Regression for packed-array carry contamination. Lane 0 deliberately
     // wraps from INT32_MAX to INT32_MIN; lane 1 must remain exactly zero.
