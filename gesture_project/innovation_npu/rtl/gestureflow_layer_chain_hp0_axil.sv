@@ -75,7 +75,7 @@ module gestureflow_layer_chain_hp0_axil #(
 
   logic [31:0] awaddr, wdata; logic [3:0] wstrb; logic aw_seen, w_seen;
   logic running, done, fault, layer_mode;
-  logic dma_start, dma_clear, store_start, store_clear, store_enable;
+  logic dma_start, dma_clear, store_start, store_clear, store_enable, store_pool_2x2;
   logic [31:0] dma_source_addr, dma_bytes;
   logic [13:0] dma_pixels;
   logic [31:0] store_destination, store_bytes;
@@ -208,8 +208,9 @@ module gestureflow_layer_chain_hp0_axil #(
     .clk(aclk), .write_enable(output_write_valid), .write_addr(output_write_addr), .write_data(quant_data),
     .read_enable(output_read_enable), .read_addr(output_read_addr), .read_data(output_read_data)
   );
-  gestureflow_hp0_tensor_writer #(.VECTOR_COUNT(OUTPUTS), .VECTOR_ADDR_W(OUTPUT_ADDR_W), .VECTOR_BYTES(16)) store (
+  gestureflow_hp0_tensor_writer #(.VECTOR_COUNT(OUTPUTS), .VECTOR_ADDR_W(OUTPUT_ADDR_W), .VECTOR_BYTES(16), .INPUT_WIDTH(IMAGE_WIDTH)) store (
     .clk(aclk), .rst_n(aresetn), .start(store_start), .clear(store_clear), .destination_addr(store_destination),
+    .pool_2x2(store_pool_2x2),
     .byte_count(store_bytes), .busy(store_busy), .done(store_done), .fault(store_fault), .bank_read_addr(output_read_addr),
     .bank_read_enable(output_read_enable), .bank_read_data(output_read_data), .vectors_written(store_vectors_written),
     .bytes_written(store_bytes_written), .m_axi_awaddr(m_axi_awaddr), .m_axi_awid(m_axi_awid), .m_axi_awlen(m_axi_awlen),
@@ -227,7 +228,7 @@ module gestureflow_layer_chain_hp0_axil #(
     if (!aresetn) begin
       awaddr<='0; wdata<='0; wstrb<='0; aw_seen<=0; w_seen<=0; s_axi_bvalid<=0; s_axi_bresp<=0;
       s_axi_rvalid<=0; s_axi_rresp<=0; s_axi_rdata<=0; running<=0; done<=0; fault<=0; layer_mode<=0;
-      dma_start<=0; dma_clear<=0; store_start<=0; store_clear<=0; store_enable<=0; dma_source_addr<=0;
+      dma_start<=0; dma_clear<=0; store_start<=0; store_clear<=0; store_enable<=0; store_pool_2x2<=0; dma_source_addr<=0;
       dma_bytes<=0; dma_pixels<=0; store_destination<=0; store_bytes<=0; layer_cycles<=0;
       weight_write_valid<=0; weight_write_oc<=0; weight_write_tap<=0; weight_write_ic_group<=0; weight_write_data<=0;
       bias<='0; bias_index<=0; input_zero_point<='0; output_zero_point<=0; output_lane_enable<=16'hffff;
@@ -277,7 +278,7 @@ module gestureflow_layer_chain_hp0_axil #(
           DMA_PIXELS: if (running || dma_busy) fault<=1; else dma_pixels<=wdata[13:0];
           STORE_DESTINATION: if (running || store_busy) fault<=1; else store_destination<=wdata;
           STORE_BYTES: if (running || store_busy) fault<=1; else store_bytes<=wdata;
-          STORE_CONTROL: if (running || store_busy) store_enable<=store_enable; else store_enable<=wdata[0];
+          STORE_CONTROL: if (running || store_busy) fault<=1; else begin store_enable<=wdata[0]; store_pool_2x2<=wdata[1]; end
           default: begin end
         endcase
         if (awaddr[11:0] == WDATA && !(running || dma_busy)) weight_write_valid<=1;
@@ -287,7 +288,7 @@ module gestureflow_layer_chain_hp0_axil #(
       if (store_done && store_enable && running) begin running<=0; done<=1; end
       if (s_axi_arvalid && s_axi_arready) begin
         case (s_axi_araddr[11:0])
-          MAGIC: s_axi_rdata<=32'h47464e50; VERSION: s_axi_rdata<=32'h00040000;
+          MAGIC: s_axi_rdata<=32'h47464e50; VERSION: s_axi_rdata<=32'h00040001;
           STATUS: s_axi_rdata<={24'd0,frame_input_done,protocol_error||quant_fault,hash_active,1'b0,dma_busy,fault,done,running};
           QCFG: s_axi_rdata<={14'd0,requant_relu_enable,requant_enable,output_zero_point,input_zero_point[0]};
           LAYER_MODE: s_axi_rdata<={31'd0,layer_mode}; CYCLES:s_axi_rdata<=layer_cycles;
@@ -297,7 +298,7 @@ module gestureflow_layer_chain_hp0_axil #(
           // 96x96x16 activation (147456 bytes); the assignment naturally
           // discards only the unused upper three bits.
           DMA_STATUS:s_axi_rdata<={dma_bytes_read[28:0],dma_fault,dma_done,dma_busy};
-          STORE_DESTINATION:s_axi_rdata<=store_destination; STORE_BYTES:s_axi_rdata<=store_bytes; STORE_CONTROL:s_axi_rdata<={31'd0,store_enable};
+          STORE_DESTINATION:s_axi_rdata<=store_destination; STORE_BYTES:s_axi_rdata<=store_bytes; STORE_CONTROL:s_axi_rdata<={30'd0,store_pool_2x2,store_enable};
           STORE_STATUS:s_axi_rdata<={store_bytes_written[28:0],store_fault,store_done,store_busy};
           default:s_axi_rdata<=32'hdeadbeef;
         endcase

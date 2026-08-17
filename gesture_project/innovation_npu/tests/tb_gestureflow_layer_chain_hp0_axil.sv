@@ -7,10 +7,14 @@
 module gestureflow_layer_chain_body_golden;
   `include "generated_gestureflow_real_conv4x4_body2_layer.svh"
 endmodule
+module gestureflow_layer_chain_pool_golden;
+  `include "generated_gestureflow_real_maxpool2d.svh"
+endmodule
 
 module tb_gestureflow_layer_chain_hp0_axil;
   `include "generated_gestureflow_real_conv4x4_full_layer.svh"
   gestureflow_layer_chain_body_golden body_golden();
+  gestureflow_layer_chain_pool_golden pool_golden();
   localparam logic [31:0] MAGIC=32'h000, VERSION=32'h004, CONTROL=32'h008,
     STATUS=32'h00c, QCFG=32'h010, WCTRL=32'h014, WDATA=32'h018,
     BIDX=32'h01c, BDATA=32'h020, RQIDX=32'h024, RQMULT=32'h028,
@@ -19,9 +23,9 @@ module tb_gestureflow_layer_chain_hp0_axil;
     DMA_BYTES=32'h048, DMA_PIXELS=32'h04c, DMA_STATUS=32'h050,
     STORE_DESTINATION=32'h054, STORE_BYTES=32'h058, STORE_CONTROL=32'h05c,
     STORE_STATUS=32'h060, LAYER_MODE=32'h064;
-  localparam logic [31:0] RGB_BASE=32'h00001000, ACT1_BASE=32'h00010000, ACT2_BASE=32'h00040000;
-  localparam int RGB_BYTES=96*96*3, ACTIVATION_BYTES=96*96*16;
-  localparam int DDR_BYTES=32'h00064000, DDR_BEATS=DDR_BYTES/8;
+  localparam logic [31:0] RGB_BASE=32'h00001000, ACT1_BASE=32'h00010000, ACT2_BASE=32'h00040000, ACT3_BASE=32'h00070000;
+  localparam int RGB_BYTES=96*96*3, ACTIVATION_BYTES=96*96*16, POOL_BYTES=48*48*16;
+  localparam int DDR_BYTES=32'h00080000, DDR_BEATS=DDR_BYTES/8;
 
   logic clk=0, aresetn=0;
   logic [31:0] s_axi_awaddr=0, s_axi_wdata=0, s_axi_araddr=0, s_axi_rdata;
@@ -40,7 +44,7 @@ module tb_gestureflow_layer_chain_hp0_axil;
   logic [63:0] m_axi_wdata; logic [7:0] m_axi_wstrb;
   logic [63:0] ddr [0:DDR_BEATS-1]; logic ddr_active; logic [15:0] ddr_index; logic [4:0] ddr_beats_left;
   logic write_active; logic [15:0] write_index; logic [4:0] write_beats_left;
-  logic [31:0] layer0_cycles, layer1_cycles;
+  logic [31:0] layer0_cycles, layer1_cycles, pool_cycles;
 
   always #5 clk=~clk;
   assign m_axi_arready = !ddr_active;
@@ -89,7 +93,8 @@ module tb_gestureflow_layer_chain_hp0_axil;
       if (!write_active && m_axi_awvalid && m_axi_awready) begin
         if (m_axi_awaddr[3:0] != 0 ||
             !((m_axi_awaddr >= ACT1_BASE && m_axi_awaddr < ACT1_BASE + ACTIVATION_BYTES) ||
-              (m_axi_awaddr >= ACT2_BASE && m_axi_awaddr < ACT2_BASE + ACTIVATION_BYTES)) ||
+              (m_axi_awaddr >= ACT2_BASE && m_axi_awaddr < ACT2_BASE + ACTIVATION_BYTES) ||
+              (m_axi_awaddr >= ACT3_BASE && m_axi_awaddr < ACT3_BASE + POOL_BYTES)) ||
             m_axi_awlen != 1 || m_axi_awsize != 3 || m_axi_awburst != 2'b01 || m_axi_awid != 0)
           $fatal(1,"invalid chain HP0 write addr=%08x len=%0d",m_axi_awaddr,m_axi_awlen);
         write_active<=1; write_index<=16'(m_axi_awaddr >> 3); write_beats_left<=m_axi_awlen[4:0]+1'b1;
@@ -157,7 +162,7 @@ module tb_gestureflow_layer_chain_hp0_axil;
     for (int byte_index=0; byte_index<RGB_BYTES; byte_index++) ddr[(RGB_BASE>>3)+(byte_index>>3)][(byte_index&7)*8 +: 8] = gf_full_input_q[byte_index] ^ 8'h80;
     repeat(3) @(negedge clk); aresetn=1;
     read32(MAGIC,value); if(value!=32'h47464e50)$fatal(1,"bad chain magic %08x",value);
-    read32(VERSION,value); if(value!=32'h00040000)$fatal(1,"bad chain version %08x",value);
+    read32(VERSION,value); if(value!=32'h00040001)$fatal(1,"bad chain version %08x",value);
     write32(CONTROL,1); write32(LAYER_MODE,0); write32(QCFG,32'h0003_8080); load_rgb_weights();
     write32(DMA_SOURCE,RGB_BASE); write32(DMA_BYTES,RGB_BYTES); write32(DMA_PIXELS,9216);
     write32(STORE_DESTINATION,ACT1_BASE); write32(STORE_BYTES,ACTIVATION_BYTES); write32(STORE_CONTROL,1); write32(CONTROL,2);
@@ -174,7 +179,18 @@ module tb_gestureflow_layer_chain_hp0_axil;
     read32(OUTPUT_FNV1A,value); if(value!=body_golden.GF_FULL_QUANT_FNV1A)$fatal(1,"chain layer1 hash %08x",value);
     read32(STORE_STATUS,value); if(value[2:0]!=3'b010 || value[31:3] != 29'(ACTIVATION_BYTES))$fatal(1,"chain store status %08x",value);
     layer1_cycles=dut.layer_cycles;
-    $display("GESTUREFLOW_LAYER_CHAIN_HP0_AXIL_PASS layer0_cycles=%0d layer1_cycles=%0d hash0=%08x hash1=%08x",layer0_cycles,layer1_cycles,GF_FULL_QUANT_FNV1A,body_golden.GF_FULL_QUANT_FNV1A);
+    write32(CONTROL,1); write32(LAYER_MODE,1); write32(QCFG,32'h0003_8080); load_body_weights();
+    write32(DMA_SOURCE,ACT1_BASE); write32(DMA_BYTES,ACTIVATION_BYTES); write32(DMA_PIXELS,9216);
+    write32(STORE_DESTINATION,ACT3_BASE); write32(STORE_BYTES,POOL_BYTES); write32(STORE_CONTROL,3); write32(CONTROL,2);
+    for (int wait_cycle=0; wait_cycle<4_000_000; wait_cycle++) begin @(negedge clk); if(dut.fault)$fatal(1,"chain pool fault"); if(dut.done)break; if(wait_cycle==3_999_999)$fatal(1,"chain pool timeout"); end
+    read32(OUTPUT_FNV1A,value); if(value!=body_golden.GF_FULL_QUANT_FNV1A)$fatal(1,"chain pooled conv hash %08x",value);
+    read32(STORE_STATUS,value); if(value[2:0]!=3'b010 || value[31:3] != 29'(POOL_BYTES))$fatal(1,"chain pool store status %08x",value);
+    for (int byte_index=0; byte_index<POOL_BYTES; byte_index++)
+      if (ddr[(ACT3_BASE>>3)+(byte_index>>3)][(byte_index&7)*8 +: 8] !== pool_golden.gf_pool_output_q[byte_index])
+        $fatal(1,"pool tensor mismatch byte=%0d got=%02x expected=%02x",byte_index,
+          ddr[(ACT3_BASE>>3)+(byte_index>>3)][(byte_index&7)*8 +: 8],pool_golden.gf_pool_output_q[byte_index]);
+    pool_cycles=dut.layer_cycles;
+    $display("GESTUREFLOW_LAYER_CHAIN_HP0_POOL_AXIL_PASS layer0_cycles=%0d layer1_cycles=%0d pool_cycles=%0d hash0=%08x hash1=%08x pool=%08x",layer0_cycles,layer1_cycles,pool_cycles,GF_FULL_QUANT_FNV1A,body_golden.GF_FULL_QUANT_FNV1A,pool_golden.GF_POOL_FNV1A);
     $finish;
   end
 endmodule

@@ -8,12 +8,14 @@
 module gestureflow_hp0_tensor_writer #(
   parameter int VECTOR_COUNT = 9216,
   parameter int VECTOR_ADDR_W = 14,
-  parameter int VECTOR_BYTES = 16
+  parameter int VECTOR_BYTES = 16,
+  parameter int INPUT_WIDTH = 96
 ) (
   input logic clk,
   input logic rst_n,
   input logic start,
   input logic clear,
+  input logic pool_2x2,
   input logic [31:0] destination_addr,
   input logic [31:0] byte_count,
   output logic busy,
@@ -50,17 +52,38 @@ module gestureflow_hp0_tensor_writer #(
   typedef enum logic [2:0] {
     IDLE, ISSUE_READ, CAPTURE_READ, ISSUE_AW, SEND_W, WAIT_B
   } state_t;
-  localparam int EXPECTED_BYTES = VECTOR_COUNT * VECTOR_BYTES;
+  localparam int POOLED_VECTOR_COUNT = VECTOR_COUNT / 4;
   state_t state;
   logic [VECTOR_ADDR_W-1:0] vector_index;
   logic [31:0] next_addr;
   logic [VECTOR_BYTES*8-1:0] vector_data;
   logic beat_index;
+  logic pool_active;
+  logic [1:0] pool_phase;
+  logic [31:0] pool_read_address;
+  logic [VECTOR_BYTES*8-1:0] pool_data0, pool_data1, pool_data2;
+
+  function automatic logic [VECTOR_BYTES*8-1:0] max4_vectors(
+    input logic [VECTOR_BYTES*8-1:0] a, input logic [VECTOR_BYTES*8-1:0] b,
+    input logic [VECTOR_BYTES*8-1:0] c, input logic [VECTOR_BYTES*8-1:0] d
+  );
+    logic signed [7:0] maximum;
+    for (int lane = 0; lane < VECTOR_BYTES; lane++) begin
+      maximum = $signed(a[lane*8 +: 8]);
+      if ($signed(b[lane*8 +: 8]) > maximum) maximum = $signed(b[lane*8 +: 8]);
+      if ($signed(c[lane*8 +: 8]) > maximum) maximum = $signed(c[lane*8 +: 8]);
+      if ($signed(d[lane*8 +: 8]) > maximum) maximum = $signed(d[lane*8 +: 8]);
+      max4_vectors[lane*8 +: 8] = maximum;
+    end
+  endfunction
 
   assign busy = (state != IDLE);
 
   always_comb begin
-    bank_read_addr = vector_index;
+    pool_read_address = (int'(vector_index) / (INPUT_WIDTH / 2)) * 2 * INPUT_WIDTH +
+      (int'(vector_index) % (INPUT_WIDTH / 2)) * 2 + (pool_phase[1] ? INPUT_WIDTH : 0) + int'(pool_phase[0]);
+    if (pool_active) bank_read_addr = VECTOR_ADDR_W'(pool_read_address);
+    else bank_read_addr = vector_index;
     bank_read_enable = (state == ISSUE_READ);
     m_axi_awaddr = next_addr;
     m_axi_awid = 6'd0;
@@ -87,6 +110,9 @@ module gestureflow_hp0_tensor_writer #(
       next_addr <= '0;
       vector_data <= '0;
       beat_index <= 1'b0;
+      pool_active <= 1'b0;
+      pool_phase <= '0;
+      pool_data0 <= '0; pool_data1 <= '0; pool_data2 <= '0;
       done <= 1'b0;
       fault <= 1'b0;
       vectors_written <= '0;
@@ -97,6 +123,8 @@ module gestureflow_hp0_tensor_writer #(
       fault <= 1'b0;
       vector_index <= '0;
       beat_index <= 1'b0;
+      pool_active <= 1'b0;
+      pool_phase <= '0;
       vectors_written <= '0;
       bytes_written <= '0;
     end else begin
@@ -108,7 +136,10 @@ module gestureflow_hp0_tensor_writer #(
           beat_index <= 1'b0;
           vectors_written <= '0;
           bytes_written <= '0;
-          if ((destination_addr[3:0] != 0) || (byte_count != EXPECTED_BYTES)) begin
+          pool_active <= pool_2x2;
+          pool_phase <= '0;
+          if ((destination_addr[3:0] != 0) ||
+              (byte_count != (pool_2x2 ? POOLED_VECTOR_COUNT * VECTOR_BYTES : VECTOR_COUNT * VECTOR_BYTES))) begin
             fault <= 1'b1;
           end else begin
             next_addr <= destination_addr;
@@ -116,9 +147,16 @@ module gestureflow_hp0_tensor_writer #(
           end
         end
         ISSUE_READ: state <= CAPTURE_READ;
-        CAPTURE_READ: begin
+        CAPTURE_READ: if (!pool_active) begin
           vector_data <= bank_read_data;
           state <= ISSUE_AW;
+        end else begin
+          case (pool_phase)
+            2'd0: begin pool_data0 <= bank_read_data; pool_phase <= 2'd1; state <= ISSUE_READ; end
+            2'd1: begin pool_data1 <= bank_read_data; pool_phase <= 2'd2; state <= ISSUE_READ; end
+            2'd2: begin pool_data2 <= bank_read_data; pool_phase <= 2'd3; state <= ISSUE_READ; end
+            default: begin vector_data <= max4_vectors(pool_data0, pool_data1, pool_data2, bank_read_data); state <= ISSUE_AW; end
+          endcase
         end
         ISSUE_AW: if (m_axi_awvalid && m_axi_awready) begin
           beat_index <= 1'b0;
@@ -135,11 +173,12 @@ module gestureflow_hp0_tensor_writer #(
           if ((m_axi_bid != 0) || (m_axi_bresp != 0)) fault <= 1'b1;
           vectors_written <= vectors_written + 1'b1;
           bytes_written <= bytes_written + VECTOR_BYTES;
-          if (vector_index == VECTOR_ADDR_W'(VECTOR_COUNT - 1)) begin
+          if (vector_index == VECTOR_ADDR_W'((pool_active ? POOLED_VECTOR_COUNT : VECTOR_COUNT) - 1)) begin
             done <= 1'b1;
             state <= IDLE;
           end else begin
             vector_index <= vector_index + 1'b1;
+            pool_phase <= '0;
             next_addr <= next_addr + VECTOR_BYTES;
             state <= ISSUE_READ;
           end

@@ -2,7 +2,7 @@
 `timescale 1ns/1ps
 module tb_gestureflow_hp0_tensor_writer;
   localparam int VECTOR_COUNT = 5;
-  logic clk=0, rst_n=0, start=0, clear=0;
+  logic clk=0, rst_n=0, start=0, clear=0, pool_2x2=0;
   logic [31:0] destination_addr=0, byte_count=0;
   logic busy, done, fault;
   logic [2:0] bank_read_addr; logic bank_read_enable; logic [127:0] bank_read_data;
@@ -15,7 +15,7 @@ module tb_gestureflow_hp0_tensor_writer;
   always #5 clk=~clk;
 
   gestureflow_hp0_tensor_writer #(.VECTOR_COUNT(VECTOR_COUNT),.VECTOR_ADDR_W(3)) dut (
-    .clk,.rst_n,.start,.clear,.destination_addr,.byte_count,.busy,.done,.fault,.bank_read_addr,.bank_read_enable,.bank_read_data,
+    .clk,.rst_n,.start,.clear,.pool_2x2,.destination_addr,.byte_count,.busy,.done,.fault,.bank_read_addr,.bank_read_enable,.bank_read_data,
     .vectors_written(),.bytes_written(),.m_axi_awaddr(awaddr),.m_axi_awid(awid),.m_axi_awlen(awlen),.m_axi_awsize(awsize),.m_axi_awburst(awburst),.m_axi_awlock(awlock),.m_axi_awcache(awcache),.m_axi_awprot(awprot),.m_axi_awqos(awqos),.m_axi_awregion(awregion),.m_axi_awvalid(awvalid),.m_axi_awready(awready),.m_axi_wdata(wdata),.m_axi_wstrb(wstrb),.m_axi_wlast(wlast),.m_axi_wvalid(wvalid),.m_axi_wready(wready),.m_axi_bid(bid),.m_axi_bresp(bresp),.m_axi_bvalid(bvalid),.m_axi_bready(bready)
   );
 

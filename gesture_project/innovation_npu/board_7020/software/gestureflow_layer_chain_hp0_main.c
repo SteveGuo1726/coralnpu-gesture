@@ -16,6 +16,7 @@
 #include "xtime_l.h"
 #include "gestureflow_real_conv4x4_full_layer.h"
 #include "gestureflow_chain_body_data.h"
+#include "gestureflow_real_maxpool2d.h"
 
 #define GF_BASE 0x43C00000U
 #define PROBE_BASE 0xFFFF0000U
@@ -65,6 +66,7 @@ static volatile u32 stage;
 static uint8_t gf_rgb[GF_RGB_BYTES] __attribute__((aligned(64)));
 static int8_t gf_activation_1[GF_ACTIVATION_BYTES] __attribute__((aligned(64)));
 static int8_t gf_activation_2[GF_ACTIVATION_BYTES] __attribute__((aligned(64)));
+static int8_t gf_pool_1[GF_POOL_OUTPUT_BYTES] __attribute__((aligned(64)));
 
 static void store_probe(u32 index, u32 value)
 {
@@ -152,15 +154,16 @@ static void load_body_layer(void)
     }
 }
 
-static u32 run_layer(uint32_t mode, uint32_t source, uint32_t bytes, uint32_t destination)
+static u32 run_layer(uint32_t mode, uint32_t source, uint32_t bytes, uint32_t destination,
+                     uint32_t store_bytes, uint32_t store_control)
 {
     Xil_Out32(GF_BASE + GF_LAYER_MODE, mode);
     Xil_Out32(GF_BASE + GF_DMA_SOURCE, source);
     Xil_Out32(GF_BASE + GF_DMA_BYTES, bytes);
     Xil_Out32(GF_BASE + GF_DMA_PIXELS, 9216U);
     Xil_Out32(GF_BASE + GF_STORE_DESTINATION, destination);
-    Xil_Out32(GF_BASE + GF_STORE_BYTES, GF_ACTIVATION_BYTES);
-    Xil_Out32(GF_BASE + GF_STORE_CONTROL, 1U);
+    Xil_Out32(GF_BASE + GF_STORE_BYTES, store_bytes);
+    Xil_Out32(GF_BASE + GF_STORE_CONTROL, store_control);
     Xil_Out32(GF_BASE + GF_CONTROL, 2U);
     wait_layer_done();
     return Xil_In32(GF_BASE + GF_CYCLES);
@@ -168,11 +171,11 @@ static u32 run_layer(uint32_t mode, uint32_t source, uint32_t bytes, uint32_t de
 
 int main(void)
 {
-    u32 index, status, dma_status, store_status, hash, ddr_hash, cycles0, cycles1;
+    u32 index, status, dma_status, store_status, hash, ddr_hash, cycles0, cycles1, pool_cycles, pool_hash;
     XTime t0, t1;
     Xil_DCacheDisable(); Xil_ICacheDisable();
     Xil_SetTlbAttributes(GF_BASE, DEVICE_MEMORY); Xil_SetTlbAttributes(PROBE_BASE, DEVICE_MEMORY);
-    Xil_SetTlbAttributes((UINTPTR)gf_rgb, DEVICE_MEMORY); Xil_SetTlbAttributes((UINTPTR)gf_activation_1, DEVICE_MEMORY); Xil_SetTlbAttributes((UINTPTR)gf_activation_2, DEVICE_MEMORY);
+    Xil_SetTlbAttributes((UINTPTR)gf_rgb, DEVICE_MEMORY); Xil_SetTlbAttributes((UINTPTR)gf_activation_1, DEVICE_MEMORY); Xil_SetTlbAttributes((UINTPTR)gf_activation_2, DEVICE_MEMORY); Xil_SetTlbAttributes((UINTPTR)gf_pool_1, DEVICE_MEMORY);
     Xil_ExceptionInit();
     Xil_ExceptionRegisterHandler(XIL_EXCEPTION_ID_DATA_ABORT_INT, data_abort, 0);
     Xil_ExceptionRegisterHandler(XIL_EXCEPTION_ID_PREFETCH_ABORT_INT, prefetch_abort, 0);
@@ -181,14 +184,15 @@ int main(void)
     store_probe(0U, 0x47464E50U);
     stage = 0x10U;
     if (Xil_In32(GF_BASE + GF_MAGIC) != 0x47464E50U) terminal_failure(0x4101U, Xil_In32(GF_BASE + GF_MAGIC));
-    if (Xil_In32(GF_BASE + GF_VERSION) != 0x00040000U) terminal_failure(0x4102U, Xil_In32(GF_BASE + GF_VERSION));
+    if (Xil_In32(GF_BASE + GF_VERSION) != 0x00040001U) terminal_failure(0x4102U, Xil_In32(GF_BASE + GF_VERSION));
     for (index = 0U; index < GF_RGB_BYTES; ++index) gf_rgb[index] = gf_full_camera_rgb[index];
     Xil_DCacheFlushRange((UINTPTR)gf_rgb, GF_RGB_BYTES);
     Xil_DCacheFlushRange((UINTPTR)gf_activation_1, GF_ACTIVATION_BYTES);
     Xil_DCacheFlushRange((UINTPTR)gf_activation_2, GF_ACTIVATION_BYTES);
+    Xil_DCacheFlushRange((UINTPTR)gf_pool_1, GF_POOL_OUTPUT_BYTES);
 
     stage = 0x20U; Xil_Out32(GF_BASE + GF_CONTROL, 1U); load_first_layer();
-    XTime_GetTime(&t0); cycles0 = run_layer(0U, (u32)(UINTPTR)gf_rgb, GF_RGB_BYTES, (u32)(UINTPTR)gf_activation_1); XTime_GetTime(&t1);
+    XTime_GetTime(&t0); cycles0 = run_layer(0U, (u32)(UINTPTR)gf_rgb, GF_RGB_BYTES, (u32)(UINTPTR)gf_activation_1, GF_ACTIVATION_BYTES, 1U); XTime_GetTime(&t1);
     status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS); hash = Xil_In32(GF_BASE + GF_OUTPUT_FNV1A);
     ddr_hash = fnv1a_bytes(gf_activation_1, GF_ACTIVATION_BYTES);
     store_probe(4U,status); store_probe(5U,cycles0); store_probe(6U,Xil_In32(GF_BASE+GF_INPUT_PIXELS)); store_probe(7U,Xil_In32(GF_BASE+GF_OUTPUT_VECTORS)); store_probe(8U,hash); store_probe(9U,dma_status); store_probe(10U,store_status); store_probe(11U,ddr_hash);
@@ -197,16 +201,24 @@ int main(void)
         GF_STORE_BYTES_WRITTEN(store_status) != GF_ACTIVATION_BYTES || hash != GF_FULL_OUTPUT_FNV1A || ddr_hash != GF_FULL_OUTPUT_FNV1A) terminal_failure(0x4103U, ddr_hash);
 
     stage = 0x30U; Xil_Out32(GF_BASE + GF_CONTROL, 1U); load_body_layer();
-    cycles1 = run_layer(1U, (u32)(UINTPTR)gf_activation_1, GF_ACTIVATION_BYTES, (u32)(UINTPTR)gf_activation_2);
+    cycles1 = run_layer(1U, (u32)(UINTPTR)gf_activation_1, GF_ACTIVATION_BYTES, (u32)(UINTPTR)gf_activation_2, GF_ACTIVATION_BYTES, 1U);
     status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS); hash = Xil_In32(GF_BASE + GF_OUTPUT_FNV1A);
     ddr_hash = fnv1a_bytes(gf_activation_2, GF_ACTIVATION_BYTES);
     store_probe(12U,cycles1); store_probe(13U,hash); store_probe(14U,dma_status); store_probe(15U,store_status); store_probe(16U,ddr_hash); store_probe(17U,(u32)t0); store_probe(18U,(u32)t1);
     if ((status & (GF_FAULT_BIT|GF_LAYER_FAULT_BIT)) || (dma_status & GF_DMA_FAULT_BIT) || !(dma_status & GF_DMA_DONE_BIT) ||
         GF_DMA_BYTES_READ(dma_status) != GF_ACTIVATION_BYTES || (store_status & GF_STORE_FAULT_BIT) || !(store_status & GF_STORE_DONE_BIT) ||
         GF_STORE_BYTES_WRITTEN(store_status) != GF_ACTIVATION_BYTES || hash != gf_chain_body_output_fnv1a || ddr_hash != gf_chain_body_output_fnv1a) terminal_failure(0x4104U, ddr_hash);
+    stage = 0x40U; Xil_Out32(GF_BASE + GF_CONTROL, 1U); load_body_layer();
+    pool_cycles = run_layer(1U, (u32)(UINTPTR)gf_activation_1, GF_ACTIVATION_BYTES, (u32)(UINTPTR)gf_pool_1, GF_POOL_OUTPUT_BYTES, 3U);
+    status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS); hash = Xil_In32(GF_BASE + GF_OUTPUT_FNV1A);
+    pool_hash = fnv1a_bytes(gf_pool_1, GF_POOL_OUTPUT_BYTES);
+    store_probe(19U,pool_cycles); store_probe(20U,hash); store_probe(21U,store_status); store_probe(22U,pool_hash);
+    if ((status & (GF_FAULT_BIT|GF_LAYER_FAULT_BIT)) || (dma_status & GF_DMA_FAULT_BIT) || !(dma_status & GF_DMA_DONE_BIT) ||
+        GF_DMA_BYTES_READ(dma_status) != GF_ACTIVATION_BYTES || (store_status & GF_STORE_FAULT_BIT) || !(store_status & GF_STORE_DONE_BIT) ||
+        GF_STORE_BYTES_WRITTEN(store_status) != GF_POOL_OUTPUT_BYTES || hash != gf_chain_body_output_fnv1a || pool_hash != GF_POOL_OUTPUT_FNV1A) terminal_failure(0x4105U, pool_hash);
     store_probe(0U, GF_RESULT_PASS);
-    xil_printf("GESTUREFLOW_LAYER_CHAIN_HP0_BOARD_PASS c0=%lu c1=%lu hash0=%08lx hash1=%08lx ddr1=%08lx ddr2=%08lx\r\n",
-      (unsigned long)cycles0,(unsigned long)cycles1,(unsigned long)GF_FULL_OUTPUT_FNV1A,(unsigned long)hash,
-      (unsigned long)GF_FULL_OUTPUT_FNV1A,(unsigned long)ddr_hash);
+    xil_printf("GESTUREFLOW_LAYER_CHAIN_HP0_POOL_BOARD_PASS c0=%lu c1=%lu pool=%lu hash0=%08lx hash1=%08lx ddr1=%08lx ddr2=%08lx poolddr=%08lx\r\n",
+      (unsigned long)cycles0,(unsigned long)cycles1,(unsigned long)pool_cycles,(unsigned long)GF_FULL_OUTPUT_FNV1A,(unsigned long)hash,
+      (unsigned long)GF_FULL_OUTPUT_FNV1A,(unsigned long)ddr_hash,(unsigned long)pool_hash);
     while (1) { usleep(100000U); }
 }
