@@ -12,6 +12,8 @@ module gestureflow_conv4x4_cin_same_stream #(
 ) (
   input logic clk,
   input logic rst_n,
+  input logic [15:0] image_width,
+  input logic [15:0] image_height,
   input logic frame_start,
   input logic pixel_valid,
   output logic pixel_ready,
@@ -64,7 +66,7 @@ module gestureflow_conv4x4_cin_same_stream #(
   gestureflow_same4x4_cin_window #(
     .IMAGE_WIDTH(IMAGE_WIDTH), .IMAGE_HEIGHT(IMAGE_HEIGHT), .CHANNELS(INPUT_CHANNELS)
   ) same_window (
-    .clk(clk), .rst_n(rst_n), .frame_start(frame_start),
+    .clk(clk), .rst_n(rst_n), .image_width(image_width), .image_height(image_height), .frame_start(frame_start),
     .pixel_valid(pixel_valid), .pixel_ready(pixel_ready), .pixel_data(pixel_data),
     .padding_value(input_zero_point), .window_valid(window_valid), .window_ready(window_ready),
     .window_data(window_data), .output_row(window_row), .output_column(window_column),

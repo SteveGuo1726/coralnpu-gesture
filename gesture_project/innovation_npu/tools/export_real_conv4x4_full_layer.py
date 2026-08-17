@@ -107,11 +107,20 @@ def main() -> None:
         "--conv-index", type=int, default=0,
         help="Zero-based CONV_2D ordinal to export (default: first convolution).",
     )
+    parser.add_argument(
+        "--tag", default="full",
+        help="C symbol tag; use a distinct tag when exporting another layer.",
+    )
     args = parser.parse_args()
 
     from tflite_runtime.interpreter import Interpreter  # pylint: disable=import-outside-toplevel
 
-    interpreter = Interpreter(model_path=str(args.model.resolve()))
+    # Later tensors can reuse an earlier activation's arena allocation.  A
+    # layer beyond conv1 must therefore preserve intermediates before reading
+    # its real DDR-equivalent input and golden output.
+    interpreter = Interpreter(
+        model_path=str(args.model.resolve()), experimental_preserve_all_tensors=True
+    )
     interpreter.allocate_tensors()
     model_input_detail = interpreter.get_input_details()[0]
     if tuple(model_input_detail["shape"]) != (1, 96, 96, 3) or model_input_detail["dtype"] != np.int8:
@@ -171,7 +180,7 @@ def main() -> None:
     if not np.array_equal(raw_standard, raw_folded):
         raise SystemExit("Folded-bias proof failed: raw INT32 tensors differ")
     if raw_folded.min() < np.iinfo(np.int32).min or raw_folded.max() > np.iinfo(np.int32).max:
-        raise SystemExit("First-layer folded accumulator exceeds INT32")
+        raise SystemExit("Folded convolution accumulator exceeds INT32")
 
     multipliers = np.empty(output_lanes, dtype=np.int32)
     right_shifts = np.empty(output_lanes, dtype=np.uint8)
@@ -179,7 +188,7 @@ def main() -> None:
     for lane in range(output_lanes):
         multiplier, shift = quantize_multiplier(float(input_scale) * float(weight_scales[lane]) / float(output_scale))
         if shift > 0 or -shift > 31:
-            raise SystemExit(f"Unsupported first-layer requant shift {shift} for lane {lane}")
+            raise SystemExit(f"Unsupported convolution requant shift {shift} for lane {lane}")
         multipliers[lane] = multiplier
         right_shifts[lane] = -shift
         for row in range(image_height):
@@ -190,7 +199,7 @@ def main() -> None:
     if not np.array_equal(quantized, tflite_output):
         mismatch = np.argwhere(quantized != tflite_output)[0]
         raise SystemExit(
-            "TFLite first-layer requant mismatch at "
+            "TFLite convolution requant mismatch at "
             f"{mismatch.tolist()}: generated={int(quantized[tuple(mismatch)])} "
             f"tflite={int(tflite_output[tuple(mismatch)])}"
         )
@@ -239,6 +248,14 @@ def main() -> None:
     c_text += c_array(probe_raw, "int32_t", "gf_full_probe_raw")
     c_text += c_array(probe_quant, "int8_t", "gf_full_probe_quant")
     c_text += "\n#endif\n"
+    # Keep generated layers linkable in one ARM application. The original
+    # baseline deliberately retains the historical gf_full_* names; later
+    # layers receive an explicit tag instead of colliding silently.
+    if args.tag != "full":
+        macro_tag = args.tag.upper()
+        c_text = c_text.replace("GESTUREFLOW_REAL_CONV4X4_FULL_LAYER_H", f"GESTUREFLOW_REAL_CONV4X4_{macro_tag}_LAYER_H")
+        c_text = c_text.replace("GF_FULL", f"GF_{macro_tag}")
+        c_text = c_text.replace("gf_full", f"gf_{args.tag}")
     args.c_out.write_text(c_text, encoding="ascii")
 
     svh_text = """// PROJECT_LOCAL_SELF_RESEARCH_NOT_GOOGLE_OFFICIAL
@@ -257,6 +274,8 @@ localparam int GF_FULL_PROBE_COUNT = %d;
         )
     svh_text += sv_array(layer_input, "gf_full_input_q")
     svh_text += sv_array(weights, "gf_full_weights")
+    if args.tag != "full":
+        svh_text += sv_array(quantized, f"gf_{args.tag}_output_q")
     def sv32(value: int) -> str:
         return f"-32'sd{-value}" if value < 0 else f"32'sd{value}"
     svh_text += "localparam logic signed [31:0] gf_full_folded_bias [0:%d] = '{\n  " % (output_lanes - 1) + ", ".join(sv32(int(value)) for value in folded_bias) + "\n};\n"
@@ -267,6 +286,9 @@ localparam int GF_FULL_PROBE_COUNT = %d;
     svh_text += "localparam logic signed [7:0] gf_full_probe_quant [0:%d][0:%d] = '{\n" % (len(probes) - 1, output_lanes - 1)
     svh_text += ",\n".join("  '{" + ", ".join((f"-8'sd{-int(value)}" if value < 0 else f"8'sd{int(value)}") for value in vector) + "}" for vector in probe_quant)
     svh_text += "\n};\n"
+    if args.tag != "full":
+        svh_text = svh_text.replace("GF_FULL", f"GF_{args.tag.upper()}")
+        svh_text = svh_text.replace("gf_full", f"gf_{args.tag}")
     args.svh_out.write_text(svh_text, encoding="ascii")
 
     print(f"Wrote {args.c_out.resolve()}")

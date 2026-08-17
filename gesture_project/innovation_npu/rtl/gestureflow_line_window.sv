@@ -11,6 +11,9 @@ module gestureflow_line_window #(
 ) (
   input  logic clk,
   input  logic rst_n,
+  // Bounded by IMAGE_WIDTH so one physical line store can serve later body
+  // layers without creating a second spatial front end.
+  input  logic [15:0] frame_width,
   // Assert on a cycle without pixel_valid before the next frame's first pixel.
   input  logic frame_start,
   input  logic pixel_valid,
@@ -133,7 +136,7 @@ module gestureflow_line_window #(
         stage_pixel_data <= pixel_data;
         stage_column_index <= column_index;
         stage_rows_seen <= rows_seen;
-        if (column_index == COLUMN_W'(IMAGE_WIDTH - 1)) begin
+        if (column_index == COLUMN_W'(frame_width - 1'b1)) begin
           column_index <= '0;
           if (rows_seen < COUNT_W'(KERNEL_SIZE)) begin
             rows_seen <= rows_seen + 1'b1;

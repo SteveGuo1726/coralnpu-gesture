@@ -63,6 +63,7 @@ module gestureflow_same4x4_rgb_window #(
     ) line_window (
       .clk(clk),
       .rst_n(rst_n),
+      .frame_width(16'(PADDED_WIDTH)),
       .frame_start(frame_start),
       .pixel_valid(line_pixel_valid),
       .pixel_data(line_pixel_data[channel]),

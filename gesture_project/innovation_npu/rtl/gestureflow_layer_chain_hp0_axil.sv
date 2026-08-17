@@ -69,7 +69,9 @@ module gestureflow_layer_chain_hp0_axil #(
     INPUT_PIXELS=12'h038, OUTPUT_VECTORS=12'h03c, OUTPUT_FNV1A=12'h040,
     DMA_SOURCE=12'h044, DMA_BYTES=12'h048, DMA_PIXELS=12'h04c, DMA_STATUS=12'h050,
     STORE_DESTINATION=12'h054, STORE_BYTES=12'h058, STORE_CONTROL=12'h05c,
-    STORE_STATUS=12'h060, LAYER_MODE=12'h064;
+    STORE_STATUS=12'h060, LAYER_MODE=12'h064, JOB_WIDTH=12'h068,
+    JOB_HEIGHT=12'h06c, OUTPUT_LANE_MASK=12'h070, STORE_STRIDE=12'h074,
+    STORE_VALID_BYTES=12'h078;
   localparam logic [31:0] FNV_OFFSET=32'h811c9dc5, FNV_PRIME=32'h01000193;
   localparam int PIXELS = IMAGE_WIDTH * IMAGE_HEIGHT;
 
@@ -79,6 +81,9 @@ module gestureflow_layer_chain_hp0_axil #(
   logic [31:0] dma_source_addr, dma_bytes;
   logic [13:0] dma_pixels;
   logic [31:0] store_destination, store_bytes;
+  logic [15:0] job_width, job_height;
+  logic [31:0] store_stride_bytes;
+  logic [4:0] store_valid_bytes;
   logic [31:0] layer_cycles;
   logic weight_write_valid;
   logic [3:0] weight_write_oc, weight_write_tap, weight_write_ic_group, bias_index, requant_index;
@@ -178,7 +183,7 @@ module gestureflow_layer_chain_hp0_axil #(
     .m_axi_rvalid(m_axi_rvalid), .m_axi_rready(tensor_rready)
   );
   gestureflow_conv4x4_cin_same_stream #(.IMAGE_WIDTH(IMAGE_WIDTH), .IMAGE_HEIGHT(IMAGE_HEIGHT), .INPUT_CHANNELS(16), .OUT_LANES(OUT_LANES)) stream (
-    .clk(aclk), .rst_n(aresetn), .frame_start(frame_start), .pixel_valid(pixel_valid), .pixel_ready(pixel_ready),
+    .clk(aclk), .rst_n(aresetn), .image_width(job_width), .image_height(job_height), .frame_start(frame_start), .pixel_valid(pixel_valid), .pixel_ready(pixel_ready),
     .pixel_data(pixel_data), .input_zero_point(input_zero_point), .input_lane_enable(layer_mode ? 4'hf : 4'b0111),
     .weight_write_valid(weight_write_valid), .weight_write_oc(weight_write_oc), .weight_write_tap(weight_write_tap),
     .weight_write_ic_group(weight_write_ic_group[1:0]), .weight_write_data(weight_write_data), .bias(bias),
@@ -193,7 +198,7 @@ module gestureflow_layer_chain_hp0_axil #(
     .out_valid(quant_valid), .out_ready(1'b1), .out_data(quant_data), .out_lane_enable(), .config_error(quant_fault)
   );
   assign output_write_valid = quant_valid;
-  assign output_write_addr = OUTPUT_ADDR_W'(int'(quant_row) * IMAGE_WIDTH + int'(quant_column));
+  assign output_write_addr = OUTPUT_ADDR_W'(int'(quant_row) * int'(job_width) + int'(quant_column));
   assign output_write_data = quant_data;
   always_ff @(posedge aclk) begin
     if (!aresetn) begin
@@ -210,7 +215,8 @@ module gestureflow_layer_chain_hp0_axil #(
   );
   gestureflow_hp0_tensor_writer #(.VECTOR_COUNT(OUTPUTS), .VECTOR_ADDR_W(OUTPUT_ADDR_W), .VECTOR_BYTES(16), .INPUT_WIDTH(IMAGE_WIDTH)) store (
     .clk(aclk), .rst_n(aresetn), .start(store_start), .clear(store_clear), .destination_addr(store_destination),
-    .pool_2x2(store_pool_2x2),
+    .pool_2x2(store_pool_2x2), .vector_count(dma_pixels), .input_width(job_width),
+    .destination_stride_bytes(store_stride_bytes), .valid_vector_bytes(store_valid_bytes),
     .byte_count(store_bytes), .busy(store_busy), .done(store_done), .fault(store_fault), .bank_read_addr(output_read_addr),
     .bank_read_enable(output_read_enable), .bank_read_data(output_read_data), .vectors_written(store_vectors_written),
     .bytes_written(store_bytes_written), .m_axi_awaddr(m_axi_awaddr), .m_axi_awid(m_axi_awid), .m_axi_awlen(m_axi_awlen),
@@ -230,6 +236,8 @@ module gestureflow_layer_chain_hp0_axil #(
       s_axi_rvalid<=0; s_axi_rresp<=0; s_axi_rdata<=0; running<=0; done<=0; fault<=0; layer_mode<=0;
       dma_start<=0; dma_clear<=0; store_start<=0; store_clear<=0; store_enable<=0; store_pool_2x2<=0; dma_source_addr<=0;
       dma_bytes<=0; dma_pixels<=0; store_destination<=0; store_bytes<=0; layer_cycles<=0;
+      job_width<=16'(IMAGE_WIDTH); job_height<=16'(IMAGE_HEIGHT);
+      store_stride_bytes<=0; store_valid_bytes<=0;
       weight_write_valid<=0; weight_write_oc<=0; weight_write_tap<=0; weight_write_ic_group<=0; weight_write_data<=0;
       bias<='0; bias_index<=0; input_zero_point<='0; output_zero_point<=0; output_lane_enable<=16'hffff;
       requant_enable<=0; requant_relu_enable<=0; requant_index<=0; requant_multiplier<='0; requant_right_shift<='0;
@@ -251,7 +259,7 @@ module gestureflow_layer_chain_hp0_axil #(
       if (output_write_valid) begin
         if (hash_active) fault <= 1'b1;
         hash_vector <= output_write_data; hash_byte_index<=0; hash_active<=1; output_vectors<=output_vectors+1'b1;
-        if (output_vectors == 14'(OUTPUTS-1)) last_output_seen<=1;
+        if (output_vectors == 14'(dma_pixels-1'b1)) last_output_seen<=1;
       end
       if (s_axi_awvalid && s_axi_awready) begin awaddr<=s_axi_awaddr; aw_seen<=1; end
       if (s_axi_wvalid && s_axi_wready) begin wdata<=s_axi_wdata; wstrb<=s_axi_wstrb; w_seen<=1; end
@@ -265,6 +273,11 @@ module gestureflow_layer_chain_hp0_axil #(
             end
           end
           LAYER_MODE: if (running || dma_busy || store_busy) fault<=1; else layer_mode<=wdata[0];
+          JOB_WIDTH: if (running || dma_busy || store_busy) fault<=1; else job_width<=wdata[15:0];
+          JOB_HEIGHT: if (running || dma_busy || store_busy) fault<=1; else job_height<=wdata[15:0];
+          OUTPUT_LANE_MASK: if (running || dma_busy || store_busy) fault<=1; else output_lane_enable<=wdata[15:0];
+          STORE_STRIDE: if (running || store_busy) fault<=1; else store_stride_bytes<=wdata;
+          STORE_VALID_BYTES: if (running || store_busy) fault<=1; else store_valid_bytes<=wdata[4:0];
           QCFG: begin input_zero_point<={16{wdata[7:0]}}; output_zero_point<=wdata[15:8]; requant_enable<=wdata[16]; requant_relu_enable<=wdata[17]; end
           WCTRL: begin weight_write_oc<=wdata[3:0]; weight_write_tap<=wdata[7:4]; weight_write_ic_group<=wdata[11:8]; end
           WDATA: if (running || dma_busy) fault<=1; else weight_write_data<=wdata;
@@ -288,17 +301,17 @@ module gestureflow_layer_chain_hp0_axil #(
       if (store_done && store_enable && running) begin running<=0; done<=1; end
       if (s_axi_arvalid && s_axi_arready) begin
         case (s_axi_araddr[11:0])
-          MAGIC: s_axi_rdata<=32'h47464e50; VERSION: s_axi_rdata<=32'h00040001;
+          MAGIC: s_axi_rdata<=32'h47464e50; VERSION: s_axi_rdata<=32'h00040002;
           STATUS: s_axi_rdata<={24'd0,frame_input_done,protocol_error||quant_fault,hash_active,1'b0,dma_busy,fault,done,running};
           QCFG: s_axi_rdata<={14'd0,requant_relu_enable,requant_enable,output_zero_point,input_zero_point[0]};
-          LAYER_MODE: s_axi_rdata<={31'd0,layer_mode}; CYCLES:s_axi_rdata<=layer_cycles;
+          LAYER_MODE: s_axi_rdata<={31'd0,layer_mode}; JOB_WIDTH:s_axi_rdata<={16'd0,job_width}; JOB_HEIGHT:s_axi_rdata<={16'd0,job_height}; OUTPUT_LANE_MASK:s_axi_rdata<={16'd0,output_lane_enable}; CYCLES:s_axi_rdata<=layer_cycles;
           INPUT_PIXELS:s_axi_rdata<={18'd0,input_pixels}; OUTPUT_VECTORS:s_axi_rdata<={18'd0,output_vectors}; OUTPUT_FNV1A:s_axi_rdata<=completed_hash;
           DMA_SOURCE:s_axi_rdata<=dma_source_addr; DMA_BYTES:s_axi_rdata<=dma_bytes; DMA_PIXELS:s_axi_rdata<={18'd0,dma_pixels};
           // Keep the established [31:3] byte-count field wide enough for a
           // 96x96x16 activation (147456 bytes); the assignment naturally
           // discards only the unused upper three bits.
           DMA_STATUS:s_axi_rdata<={dma_bytes_read[28:0],dma_fault,dma_done,dma_busy};
-          STORE_DESTINATION:s_axi_rdata<=store_destination; STORE_BYTES:s_axi_rdata<=store_bytes; STORE_CONTROL:s_axi_rdata<={30'd0,store_pool_2x2,store_enable};
+          STORE_DESTINATION:s_axi_rdata<=store_destination; STORE_BYTES:s_axi_rdata<=store_bytes; STORE_CONTROL:s_axi_rdata<={30'd0,store_pool_2x2,store_enable}; STORE_STRIDE:s_axi_rdata<=store_stride_bytes; STORE_VALID_BYTES:s_axi_rdata<={27'd0,store_valid_bytes};
           STORE_STATUS:s_axi_rdata<={store_bytes_written[28:0],store_fault,store_done,store_busy};
           default:s_axi_rdata<=32'hdeadbeef;
         endcase

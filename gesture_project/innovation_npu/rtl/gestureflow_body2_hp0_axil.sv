@@ -70,6 +70,7 @@ module gestureflow_body2_hp0_axil (
     .m_axi_arburst(m_axi_arburst),.m_axi_arlock(m_axi_arlock),.m_axi_arcache(m_axi_arcache),.m_axi_arprot(m_axi_arprot),.m_axi_arqos(m_axi_arqos),.m_axi_arregion(m_axi_arregion),
     .m_axi_arvalid(m_axi_arvalid),.m_axi_arready(m_axi_arready),.m_axi_rid(m_axi_rid),.m_axi_rdata(m_axi_rdata),.m_axi_rresp(m_axi_rresp),.m_axi_rlast(m_axi_rlast),.m_axi_rvalid(m_axi_rvalid),.m_axi_rready(m_axi_rready));
   gestureflow_conv4x4_cin_same_stream #(.IMAGE_WIDTH(IMAGE_WIDTH),.IMAGE_HEIGHT(IMAGE_HEIGHT),.INPUT_CHANNELS(CHANNELS),.OUT_LANES(16)) stream (
+    .image_width(IMAGE_WIDTH), .image_height(IMAGE_HEIGHT),
     .clk(aclk),.rst_n(aresetn),.frame_start(frame_start),.pixel_valid(pixel_valid),.pixel_ready(pixel_ready),.pixel_data(pixel_data),.input_zero_point(input_zero_point),.input_lane_enable(4'hf),
     .weight_write_valid(weight_write_valid),.weight_write_oc(weight_write_oc),.weight_write_tap(weight_write_tap),.weight_write_ic_group(weight_write_ic_group),.weight_write_data(weight_write_data),
     .bias(bias),.output_lane_enable(output_lane_enable),.output_valid(raw_valid),.output_ready(raw_ready),.output_psum(raw_psum),.output_lane_enable_valid(raw_mask),

@@ -6,6 +6,7 @@ module tb_gestureflow_line_window;
   localparam int KERNEL_SIZE = 4;
   logic clk = 1'b0;
   logic rst_n = 1'b0;
+  logic [15:0] frame_width = 16'(IMAGE_WIDTH);
   logic frame_start;
   logic pixel_valid;
   logic pixel_ready;

@@ -13,6 +13,8 @@ module gestureflow_same4x4_cin_window #(
 ) (
   input logic clk,
   input logic rst_n,
+  input logic [15:0] image_width,
+  input logic [15:0] image_height,
   input logic frame_start,
   input logic pixel_valid,
   output logic pixel_ready,
@@ -40,11 +42,14 @@ module gestureflow_same4x4_cin_window #(
   logic [CHANNELS-1:0] channel_pixel_ready;
   logic [CHANNELS-1:0] channel_window_valid;
   logic signed [CHANNELS-1:0][15:0][7:0] channel_window_data;
+  logic [15:0] padded_width, padded_height;
 
   always_comb begin
+    padded_width = image_width + 16'd3;
+    padded_height = image_height + 16'd3;
     source_pixel_needed = active &&
-      (virtual_row >= ROW_W'(1)) && (virtual_row <= ROW_W'(IMAGE_HEIGHT)) &&
-      (virtual_column >= COL_W'(1)) && (virtual_column <= COL_W'(IMAGE_WIDTH));
+      (virtual_row >= ROW_W'(1)) && (virtual_row <= ROW_W'(image_height)) &&
+      (virtual_column >= COL_W'(1)) && (virtual_column <= COL_W'(image_width));
     line_accept = channel_pixel_ready[0];
     line_pixel_valid = active && line_accept && (!source_pixel_needed || pixel_valid);
     line_pixel_data = source_pixel_needed ? pixel_data : padding_value;
@@ -56,6 +61,7 @@ module gestureflow_same4x4_cin_window #(
   for (genvar channel = 0; channel < CHANNELS; channel++) begin : channel_rows
     gestureflow_line_window #(.IMAGE_WIDTH(PADDED_WIDTH), .KERNEL_SIZE(4)) line_window (
       .clk(clk), .rst_n(rst_n), .frame_start(frame_start),
+      .frame_width(padded_width),
       .pixel_valid(line_pixel_valid), .pixel_data(line_pixel_data[channel]),
       .pixel_ready(channel_pixel_ready[channel]), .window_ready(window_ready),
       .window_valid(channel_window_valid[channel]), .window_data(channel_window_data[channel])
@@ -85,11 +91,11 @@ module gestureflow_same4x4_cin_window #(
           output_row <= {{(16-ROW_W){1'b0}}, virtual_row - ROW_W'(3)};
           output_column <= {{(16-COL_W){1'b0}}, virtual_column - COL_W'(3)};
         end
-        if ((virtual_row == ROW_W'(PADDED_HEIGHT - 1)) &&
-            (virtual_column == COL_W'(PADDED_WIDTH - 1))) begin
+        if ((virtual_row == ROW_W'(padded_height - 1'b1)) &&
+            (virtual_column == COL_W'(padded_width - 1'b1))) begin
           active <= 1'b0;
           frame_done <= 1'b1;
-        end else if (virtual_column == COL_W'(PADDED_WIDTH - 1)) begin
+        end else if (virtual_column == COL_W'(padded_width - 1'b1)) begin
           virtual_column <= '0;
           virtual_row <= virtual_row + 1'b1;
         end else begin
