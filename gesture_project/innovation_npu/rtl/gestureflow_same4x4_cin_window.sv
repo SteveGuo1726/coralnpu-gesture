@@ -39,9 +39,9 @@ module gestureflow_same4x4_cin_window #(
   logic line_accept;
   logic line_pixel_valid;
   logic signed [CHANNELS-1:0][7:0] line_pixel_data;
-  logic [CHANNELS-1:0] channel_pixel_ready;
-  logic [CHANNELS-1:0] channel_window_valid;
-  logic signed [CHANNELS-1:0][15:0][7:0] channel_window_data;
+  logic line_pixel_ready;
+  logic packed_window_valid;
+  logic signed [15:0][CHANNELS*8-1:0] packed_window_data;
   logic [15:0] padded_width, padded_height;
 
   always_comb begin
@@ -50,22 +50,25 @@ module gestureflow_same4x4_cin_window #(
     source_pixel_needed = active &&
       (virtual_row >= ROW_W'(1)) && (virtual_row <= ROW_W'(image_height)) &&
       (virtual_column >= COL_W'(1)) && (virtual_column <= COL_W'(image_width));
-    line_accept = channel_pixel_ready[0];
+    line_accept = line_pixel_ready;
     line_pixel_valid = active && line_accept && (!source_pixel_needed || pixel_valid);
     line_pixel_data = source_pixel_needed ? pixel_data : padding_value;
     pixel_ready = source_pixel_needed && line_accept;
-    window_valid = channel_window_valid[0];
-    window_data = channel_window_data;
+    window_valid = packed_window_valid;
   end
 
-  for (genvar channel = 0; channel < CHANNELS; channel++) begin : channel_rows
-    gestureflow_line_window #(.IMAGE_WIDTH(PADDED_WIDTH), .KERNEL_SIZE(4)) line_window (
-      .clk(clk), .rst_n(rst_n), .frame_start(frame_start),
-      .frame_width(padded_width),
-      .pixel_valid(line_pixel_valid), .pixel_data(line_pixel_data[channel]),
-      .pixel_ready(channel_pixel_ready[channel]), .window_ready(window_ready),
-      .window_valid(channel_window_valid[channel]), .window_data(channel_window_data[channel])
-    );
+  gestureflow_line_window_vector #(
+    .IMAGE_WIDTH(PADDED_WIDTH), .KERNEL_SIZE(4), .DATA_WIDTH(CHANNELS * 8)
+  ) line_window (
+    .clk(clk), .rst_n(rst_n), .frame_start(frame_start), .frame_width(padded_width),
+    .pixel_valid(line_pixel_valid), .pixel_data(line_pixel_data), .pixel_ready(line_pixel_ready),
+    .window_ready(window_ready), .window_valid(packed_window_valid), .window_data(packed_window_data)
+  );
+
+  for (genvar channel = 0; channel < CHANNELS; channel++) begin : unpack_channel
+    for (genvar tap = 0; tap < 16; tap++) begin : unpack_tap
+      assign window_data[channel][tap] = packed_window_data[tap][channel*8 +: 8];
+    end
   end
 
   // These controls feed inferred BRAM enables and addresses through the line
