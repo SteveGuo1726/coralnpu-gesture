@@ -17,6 +17,9 @@ module gestureflow_conv4x4_cin_same_stream #(
   output logic pixel_ready,
   input logic signed [INPUT_CHANNELS-1:0][7:0] pixel_data,
   input logic signed [INPUT_CHANNELS-1:0][7:0] input_zero_point,
+  // Runtime lane masking lets one physical 4-lane tile serve RGB (3 lanes)
+  // and full 16-channel body layers without instantiating a second MAC core.
+  input logic [3:0] input_lane_enable,
   input logic weight_write_valid,
   input logic [$clog2(OUT_LANES)-1:0] weight_write_oc,
   input logic [3:0] weight_write_tap,
@@ -86,7 +89,7 @@ module gestureflow_conv4x4_cin_same_stream #(
     .start_valid(pending_window), .start_ready(tile_start_ready), .bias(bias),
     .output_lane_enable(output_lane_enable), .mac_valid(mac_active), .mac_ready(tile_mac_ready),
     .mac_tap(tap_index), .mac_ic_group(ic_group_index), .activation(tile_activation),
-    .input_lane_enable(4'hf),
+    .input_lane_enable(input_lane_enable),
     .mac_last((tap_index == 4'd15) && (ic_group_index == IC_GROUP_W'(IC_GROUPS - 1))),
     .result_valid(output_valid), .result_ready(output_ready), .result_psum(output_psum),
     .result_lane_enable(output_lane_enable_valid), .busy(busy), .protocol_error(protocol_error)

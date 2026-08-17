@@ -55,7 +55,7 @@ module tb_gestureflow_conv4x4_cin_full_layer;
   ) stream (
     .clk(clk), .rst_n(rst_n), .frame_start(frame_start),
     .pixel_valid(pixel_valid), .pixel_ready(pixel_ready), .pixel_data(pixel_data),
-    .input_zero_point(input_zero_point), .weight_write_valid(weight_write_valid),
+    .input_zero_point(input_zero_point), .input_lane_enable(4'hf), .weight_write_valid(weight_write_valid),
     .weight_write_oc(weight_write_oc), .weight_write_tap(weight_write_tap),
     .weight_write_ic_group(weight_write_ic_group), .weight_write_data(weight_write_data),
     .bias(bias), .output_lane_enable(output_lane_enable), .output_valid(raw_valid),
