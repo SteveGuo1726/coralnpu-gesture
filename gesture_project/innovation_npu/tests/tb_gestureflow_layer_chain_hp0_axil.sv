@@ -214,7 +214,7 @@ module tb_gestureflow_layer_chain_hp0_axil;
     for (int byte_index=0; byte_index<RGB_BYTES; byte_index++) ddr[(RGB_BASE>>3)+(byte_index>>3)][(byte_index&7)*8 +: 8] = gf_full_input_q[byte_index] ^ 8'h80;
     repeat(3) @(negedge clk); aresetn=1;
     read32(MAGIC,value); if(value!=32'h47464e50)$fatal(1,"bad chain magic %08x",value);
-    read32(VERSION,value); if(value!=32'h00040002)$fatal(1,"bad chain version %08x",value);
+    read32(VERSION,value); if(value!=32'h00040003)$fatal(1,"bad chain version %08x",value);
     write32(CONTROL,1); write32(LAYER_MODE,0); write32(QCFG,32'h0003_8080); load_rgb_weights();
     write32(DMA_SOURCE,RGB_BASE); write32(DMA_BYTES,RGB_BYTES); write32(DMA_PIXELS,9216);
     write32(STORE_DESTINATION,ACT1_BASE); write32(STORE_BYTES,ACTIVATION_BYTES); write32(STORE_CONTROL,1); write32(CONTROL,2);

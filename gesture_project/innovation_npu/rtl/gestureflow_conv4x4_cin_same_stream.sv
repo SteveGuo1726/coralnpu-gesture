@@ -106,7 +106,9 @@ module gestureflow_conv4x4_cin_same_stream #(
       mac_active <= 1'b0;
       tap_index <= '0;
       ic_group_index <= '0;
+      /* verilator lint_off WIDTHCONCAT */
       held_window <= '0;
+      /* verilator lint_on WIDTHCONCAT */
       held_row <= '0;
       held_column <= '0;
     end else begin

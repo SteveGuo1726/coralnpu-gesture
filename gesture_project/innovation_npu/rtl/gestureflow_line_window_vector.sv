@@ -67,7 +67,9 @@ module gestureflow_line_window_vector #(
       stage_column_index <= '0;
       stage_rows_seen <= '0;
       window_valid <= 1'b0;
+      /* verilator lint_off WIDTHCONCAT */
       window_data <= '0;
+      /* verilator lint_on WIDTHCONCAT */
       for (int row = 0; row < KERNEL_SIZE; row++) begin
         for (int column = 0; column < KERNEL_SIZE - 1; column++) begin
           horizontal_history[row][column] <= '0;

@@ -50,8 +50,8 @@ module gestureflow_hp0_tensor_loader #(
   localparam int FIFO_BYTES_W = (FIFO_BYTES < 2) ? 1 : $clog2(FIFO_BYTES + 1);
   localparam logic [FIFO_BYTES_W-1:0] FIFO_LIMIT = FIFO_BYTES_W'(FIFO_BYTES - 8);
   // Keep the compare/subtract operand sized to this instance's FIFO counter.
-  // The 16-channel reader has a 5-bit counter while the 40-channel reader
-  // needs six bits; a universal 6-bit constant would truncate in the former.
+  // The 16-channel reader has a 5-bit counter while the 80-channel reader
+  // needs seven bits; a universal constant would truncate in smaller modes.
   localparam logic [FIFO_BYTES_W-1:0] CHANNEL_BYTES = FIFO_BYTES_W'(CHANNELS);
   state_t state;
   logic [31:0] next_addr;
@@ -80,8 +80,8 @@ module gestureflow_hp0_tensor_loader #(
   endfunction
 
   initial begin
-    if (CHANNELS > 64 || (CHANNELS % 8) != 0) begin
-      $error("CHANNELS must be an 8-byte multiple not exceeding the 64-byte FIFO");
+    if (CHANNELS > 80 || (CHANNELS % 8) != 0) begin
+      $error("CHANNELS must be an 8-byte multiple not exceeding the 80-byte FIFO");
     end
   end
 
