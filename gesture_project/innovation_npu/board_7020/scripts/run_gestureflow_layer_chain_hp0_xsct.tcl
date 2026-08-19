@@ -34,9 +34,9 @@ for {set i 0} {$i < 4800} {incr i} {
   after 25
 }
 puts [format {GESTUREFLOW_LAYER_CHAIN_HP0_FINAL_RESULT = 0x%08X} $final]
-for {set i 0} {$i < 85} {incr i} {
+for {set i 0} {$i < 101} {incr i} {
   puts [format {GESTUREFLOW_LAYER_CHAIN_HP0_PROBE[%02d] = 0x%08X} $i [rd32 [expr {$probe_base + $i * 4}]]]
 }
 if {$final != 0x600D600D} { error "GestureFlow layer-chain HP0 board run failed" }
-puts "GESTUREFLOW_LAYER_CHAIN_HP0_CONV3B_BOARD_PASS"
+puts "GESTUREFLOW_LAYER_CHAIN_HP0_POOL3_BOARD_PASS"
 disconnect; exit
