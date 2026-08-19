@@ -19,6 +19,7 @@
 #include "gestureflow_real_maxpool2d.h"
 #include "gestureflow_real_conv4x4_conv2a_layer.h"
 #include "gestureflow_real_conv4x4_conv2b_layer.h"
+#include "gestureflow_real_maxpool2d_pool2.h"
 
 #define GF_BASE 0x43C00000U
 #define PROBE_BASE 0xFFFF0000U
@@ -72,6 +73,8 @@
 #define GF_CONV2A_TILE_BYTES (48U * 48U * 16U)
 #define GF_CONV2B_BYTES (48U * 48U * 40U)
 #define GF_CONV2B_TILE_BYTES (48U * 48U * 16U)
+#define GF_POOL2_BYTES GF_POOL2_OUTPUT_BYTES
+#define GF_POOL2_TILE_BYTES (24U * 24U * 16U)
 
 static volatile u32 *const probe = (volatile u32 *)PROBE_BASE;
 static volatile u32 stage;
@@ -81,6 +84,7 @@ static int8_t gf_activation_2[GF_ACTIVATION_BYTES] __attribute__((aligned(64)));
 static int8_t gf_pool_1[GF_POOL_OUTPUT_BYTES] __attribute__((aligned(64)));
 static int8_t gf_conv2a[GF_CONV2A_BYTES] __attribute__((aligned(64)));
 static int8_t gf_conv2b[GF_CONV2B_BYTES] __attribute__((aligned(64)));
+static int8_t gf_pool2[GF_POOL2_BYTES] __attribute__((aligned(64)));
 
 static void store_probe(u32 index, u32 value)
 {
@@ -95,6 +99,14 @@ static uint32_t fnv1a_bytes(const int8_t *data, uint32_t count)
     for (index = 0U; index < count; ++index)
         value = (value ^ (uint8_t)data[index]) * 0x01000193U;
     return value;
+}
+
+static int bytes_equal(const int8_t *left, const int8_t *right, uint32_t count)
+{
+    uint32_t index;
+    for (index = 0U; index < count; ++index)
+        if (left[index] != right[index]) return 0;
+    return 1;
 }
 
 static void terminal_failure(u32 code, u32 observed)
@@ -251,15 +263,16 @@ int main(void)
     u32 index, status, dma_status, store_status, hash, ddr_hash, cycles0, cycles1, pool_cycles, pool_hash;
     u32 conv2_cycles[3], conv2_hash[3], conv2_ddr_hash;
     u32 conv2b_cycles[3], conv2b_hash[3], conv2b_ddr_hash;
+    u32 pool2_cycles[3], pool2_hash[3], pool2_ddr_hash;
     XTime t0, t1;
     Xil_DCacheDisable(); Xil_ICacheDisable();
     Xil_SetTlbAttributes(GF_BASE, DEVICE_MEMORY); Xil_SetTlbAttributes(PROBE_BASE, DEVICE_MEMORY);
-    Xil_SetTlbAttributes((UINTPTR)gf_rgb, DEVICE_MEMORY); Xil_SetTlbAttributes((UINTPTR)gf_activation_1, DEVICE_MEMORY); Xil_SetTlbAttributes((UINTPTR)gf_activation_2, DEVICE_MEMORY); Xil_SetTlbAttributes((UINTPTR)gf_pool_1, DEVICE_MEMORY); Xil_SetTlbAttributes((UINTPTR)gf_conv2a, DEVICE_MEMORY); Xil_SetTlbAttributes((UINTPTR)gf_conv2b, DEVICE_MEMORY);
+    Xil_SetTlbAttributes((UINTPTR)gf_rgb, DEVICE_MEMORY); Xil_SetTlbAttributes((UINTPTR)gf_activation_1, DEVICE_MEMORY); Xil_SetTlbAttributes((UINTPTR)gf_activation_2, DEVICE_MEMORY); Xil_SetTlbAttributes((UINTPTR)gf_pool_1, DEVICE_MEMORY); Xil_SetTlbAttributes((UINTPTR)gf_conv2a, DEVICE_MEMORY); Xil_SetTlbAttributes((UINTPTR)gf_conv2b, DEVICE_MEMORY); Xil_SetTlbAttributes((UINTPTR)gf_pool2, DEVICE_MEMORY);
     Xil_ExceptionInit();
     Xil_ExceptionRegisterHandler(XIL_EXCEPTION_ID_DATA_ABORT_INT, data_abort, 0);
     Xil_ExceptionRegisterHandler(XIL_EXCEPTION_ID_PREFETCH_ABORT_INT, prefetch_abort, 0);
     Xil_ExceptionEnable();
-    for (index = 0U; index < 32U; ++index) store_probe(index, 0U);
+    for (index = 0U; index < 64U; ++index) store_probe(index, 0U);
     store_probe(0U, 0x47464E50U);
     stage = 0x10U;
     if (Xil_In32(GF_BASE + GF_MAGIC) != 0x47464E50U) terminal_failure(0x4101U, Xil_In32(GF_BASE + GF_MAGIC));
@@ -271,6 +284,7 @@ int main(void)
     Xil_DCacheFlushRange((UINTPTR)gf_pool_1, GF_POOL_OUTPUT_BYTES);
     Xil_DCacheFlushRange((UINTPTR)gf_conv2a, GF_CONV2A_BYTES);
     Xil_DCacheFlushRange((UINTPTR)gf_conv2b, GF_CONV2B_BYTES);
+    Xil_DCacheFlushRange((UINTPTR)gf_pool2, GF_POOL2_BYTES);
 
     stage = 0x20U; Xil_Out32(GF_BASE + GF_CONTROL, 1U); load_first_layer();
     XTime_GetTime(&t0); cycles0 = run_layer(0U, (u32)(UINTPTR)gf_rgb, GF_RGB_BYTES, (u32)(UINTPTR)gf_activation_1, GF_ACTIVATION_BYTES, 1U, 96U, 96U, 16U, 16U); XTime_GetTime(&t1);
@@ -338,11 +352,35 @@ int main(void)
     conv2b_ddr_hash = fnv1a_bytes(gf_conv2b, GF_CONV2B_BYTES);
     store_probe(42U, conv2b_ddr_hash);
     if (conv2b_ddr_hash != GF_CONV2B_OUTPUT_FNV1A) terminal_failure(0x410fU, conv2b_ddr_hash);
+    if (!bytes_equal(gf_conv2b, gf_pool2_input, GF_POOL2_INPUT_BYTES)) terminal_failure(0x4110U, conv2b_ddr_hash);
+    /* Re-run the proven conv2_b tiles with pool fused into the writer. This
+     * is the deployed path: no conv2_b activation is read back from DDR for
+     * pool2. The preceding full DDR comparison proves its pool input. */
+    for (index = 0U; index < 3U; ++index) {
+        u32 first_oc = index * 16U;
+        u32 mask = index == 2U ? 0x00ffU : 0xffffU;
+        u32 destination = (u32)(UINTPTR)gf_pool2 + first_oc;
+        stage = 0x70U + index;
+        Xil_Out32(GF_BASE + GF_CONTROL, 1U); load_conv2b_tile(first_oc, mask);
+        pool2_cycles[index] = run_layer(2U, (u32)(UINTPTR)gf_conv2a, GF_CONV2A_BYTES, destination,
+                                         index == 2U ? 24U * 24U * 8U : GF_POOL2_TILE_BYTES,
+                                         3U, 48U, 48U, 40U, index == 2U ? 8U : 16U);
+        status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS);
+        pool2_cycles[index] = Xil_In32(GF_BASE + GF_CYCLES); pool2_hash[index] = Xil_In32(GF_BASE + GF_OUTPUT_FNV1A);
+        if ((status & (GF_FAULT_BIT|GF_LAYER_FAULT_BIT)) || (dma_status & GF_DMA_FAULT_BIT) || !(dma_status & GF_DMA_DONE_BIT) ||
+            GF_DMA_BYTES_READ(dma_status) != GF_CONV2A_BYTES || (store_status & GF_STORE_FAULT_BIT) || !(store_status & GF_STORE_DONE_BIT) ||
+            GF_STORE_BYTES_WRITTEN(store_status) != (index == 2U ? 24U * 24U * 8U : GF_POOL2_TILE_BYTES)) terminal_failure(0x4111U + index, store_status);
+        store_probe(43U + index * 3U, pool2_cycles[index]); store_probe(44U + index * 3U, pool2_hash[index]); store_probe(45U + index * 3U, store_status);
+    }
+    pool2_ddr_hash = fnv1a_bytes(gf_pool2, GF_POOL2_BYTES);
+    store_probe(52U, pool2_ddr_hash);
+    if (pool2_ddr_hash != GF_POOL2_OUTPUT_FNV1A) terminal_failure(0x4114U, pool2_ddr_hash);
     store_probe(0U, GF_RESULT_PASS);
-    xil_printf("GESTUREFLOW_LAYER_CHAIN_HP0_CONV2B_BOARD_PASS c0=%lu c1=%lu pool=%lu conv2a=%lu,%lu,%lu conv2b=%lu,%lu,%lu hash0=%08lx hash1=%08lx pool=%08lx conv2a=%08lx conv2b=%08lx\r\n",
+    xil_printf("GESTUREFLOW_LAYER_CHAIN_HP0_POOL2_BOARD_PASS c0=%lu c1=%lu pool=%lu conv2a=%lu,%lu,%lu conv2b=%lu,%lu,%lu pool2=%lu,%lu,%lu hash0=%08lx hash1=%08lx pool=%08lx conv2a=%08lx conv2b=%08lx pool2=%08lx\r\n",
       (unsigned long)cycles0,(unsigned long)cycles1,(unsigned long)pool_cycles,(unsigned long)conv2_cycles[0],(unsigned long)conv2_cycles[1],(unsigned long)conv2_cycles[2],
       (unsigned long)conv2b_cycles[0],(unsigned long)conv2b_cycles[1],(unsigned long)conv2b_cycles[2],
+      (unsigned long)pool2_cycles[0],(unsigned long)pool2_cycles[1],(unsigned long)pool2_cycles[2],
       (unsigned long)GF_FULL_OUTPUT_FNV1A,(unsigned long)gf_chain_body_output_fnv1a,(unsigned long)pool_hash,
-      (unsigned long)conv2_ddr_hash,(unsigned long)conv2b_ddr_hash);
+      (unsigned long)conv2_ddr_hash,(unsigned long)conv2b_ddr_hash,(unsigned long)pool2_ddr_hash);
     while (1) { usleep(100000U); }
 }

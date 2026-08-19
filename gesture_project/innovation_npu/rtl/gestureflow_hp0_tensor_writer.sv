@@ -168,9 +168,11 @@ module gestureflow_hp0_tensor_writer #(
           if ((destination_addr[2:0] != 0) || (effective_stride_bytes[2:0] != 0) ||
               (effective_valid_bytes == 0) || (effective_valid_bytes > VECTOR_BYTES) ||
               (input_width == 0) ||
-              (pool_2x2 && ((effective_valid_bytes != VECTOR_BYTES) ||
-                             (effective_stride_bytes != VECTOR_BYTES) ||
-                             (effective_vector_count[1:0] != 0))) ||
+              // Pooling reads full vectors from the local output bank, but
+              // its DDR write may be a channel tile inside a wider NHWC
+              // tensor.  Permit a runtime stride and an 8-byte tail here;
+              // WSTRB already protects inactive tail lanes.
+              (pool_2x2 && (effective_vector_count[1:0] != 0)) ||
               (byte_count != ((pool_2x2 ? effective_pooled_vector_count : effective_vector_count) * effective_valid_bytes))) begin
             fault <= 1'b1;
           end else begin
