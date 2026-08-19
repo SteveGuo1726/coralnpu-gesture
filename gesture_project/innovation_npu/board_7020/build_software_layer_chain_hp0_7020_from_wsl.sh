@@ -14,6 +14,7 @@ conv2b_header="$root/board_7020/software/gestureflow_real_conv4x4_conv2b_layer.h
 conv3a_header="$root/board_7020/software/gestureflow_real_conv4x4_conv3a_layer.h"
 conv3b_header="$root/board_7020/software/gestureflow_real_conv4x4_conv3b_layer.h"
 pool3_header="$root/board_7020/software/gestureflow_real_maxpool2d_pool3.h"
+head1x1_header="$root/board_7020/software/gestureflow_real_conv4x4_head1x1_layer.h"
 dst=/mnt/e/coralnpu_vivado/projects/gestureflow_layer_chain_hp0_7020_v1
 app="$dst/vitis/axi_gpio"
 include_win='E:\coralnpu_vivado\projects\gestureflow_layer_chain_hp0_7020_v1\vitis\system_wrapper\export\system_wrapper\sw\system_wrapper\standalone_ps7_cortexa9_0\bspinclude\include'
@@ -31,5 +32,6 @@ cp -f "$conv2b_header" "$app/src/gestureflow_real_conv4x4_conv2b_layer.h"
 cp -f "$conv3a_header" "$app/src/gestureflow_real_conv4x4_conv3a_layer.h"
 cp -f "$conv3b_header" "$app/src/gestureflow_real_conv4x4_conv3b_layer.h"
 cp -f "$pool3_header" "$app/src/gestureflow_real_maxpool2d_pool3.h"
+cp -f "$head1x1_header" "$app/src/gestureflow_real_conv4x4_head1x1_layer.h"
 cp -f "$app/src/lscript.ld" "$app/src/gestureflow_layer_chain_hp0.ld"
 cmd.exe /d /s /c "set PATH=E:\Xilinx\Vitis\2023.2\gnu\aarch32\nt\gcc-arm-none-eabi\bin;E:\Xilinx\Vitis\2023.2\gnuwin\bin;%PATH% && pushd E:\coralnpu_vivado\projects\gestureflow_layer_chain_hp0_7020_v1\vitis\axi_gpio\Debug && arm-none-eabi-gcc -Wall -O2 -g3 -c -mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard -I${include_win} -o gestureflow_layer_chain_hp0_main.o ..\src\gestureflow_layer_chain_hp0_main.c && arm-none-eabi-gcc -Wall -O2 -g3 -c -mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard -I${include_win} -o gestureflow_chain_body_data.o ..\src\gestureflow_chain_body_data.c && arm-none-eabi-gcc -mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard -Wl,-build-id=none -specs=Xilinx.spec -Wl,-T -Wl,..\src\gestureflow_layer_chain_hp0.ld -L${lib_win} -o gestureflow_layer_chain_hp0.elf gestureflow_layer_chain_hp0_main.o gestureflow_chain_body_data.o -Wl,--start-group -lxil -lgcc -lc -Wl,--end-group && arm-none-eabi-size gestureflow_layer_chain_hp0.elf"

@@ -136,8 +136,17 @@ def main() -> None:
     bias = np.asarray(interpreter.get_tensor(conv["inputs"][2]), dtype=np.int32)
     output_index = int(conv["outputs"][0])
     output_detail = details[output_index]
-    if len(weights.shape) != 4 or tuple(weights.shape[1:3]) != (4, 4):
-        raise SystemExit(f"Expected 4x4 CONV_2D weights, received {weights.shape}")
+    if len(weights.shape) != 4 or tuple(weights.shape[1:3]) not in ((4, 4), (1, 1)):
+        raise SystemExit(f"Expected 4x4 or 1x1 CONV_2D weights, received {weights.shape}")
+    # The streaming accelerator always produces a SAME 4x4 window whose
+    # (1,1) tap is the output pixel. A 1x1 head therefore maps exactly onto
+    # the existing resident 4x4 bank by placing its only kernel coefficient
+    # at (1,1) and zeroing the other 15 taps. This preserves the one-tile,
+    # local-INT32 accumulation dataflow instead of introducing a second core.
+    if tuple(weights.shape[1:3]) == (1, 1):
+        embedded_weights = np.zeros((weights.shape[0], 4, 4, weights.shape[3]), dtype=np.int8)
+        embedded_weights[:, 1, 1, :] = weights[:, 0, 0, :]
+        weights = embedded_weights
     output_lanes, kernel_height, kernel_width, input_channels = weights.shape
     input_shape = tuple(int(item) for item in input_detail["shape"])
     output_shape = tuple(int(item) for item in output_detail["shape"])
