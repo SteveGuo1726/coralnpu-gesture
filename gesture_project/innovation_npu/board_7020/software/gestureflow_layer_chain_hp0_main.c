@@ -24,6 +24,7 @@
 #include "gestureflow_real_conv4x4_conv3b_layer.h"
 #include "gestureflow_real_maxpool2d_pool3.h"
 #include "gestureflow_real_conv4x4_head1x1_layer.h"
+#include "gestureflow_real_gap_fc.h"
 
 #define GF_BASE 0x43C00000U
 #define PROBE_BASE 0xFFFF0000U
@@ -57,6 +58,14 @@
 #define GF_OUTPUT_LANE_MASK 0x070U
 #define GF_STORE_STRIDE 0x074U
 #define GF_STORE_VALID_BYTES 0x078U
+#define GF_POST_GAP_MULT 0x080U
+#define GF_POST_GAP_SHIFT 0x084U
+#define GF_POST_QCFG 0x088U
+#define GF_POST_GAP_FNV1A_REG 0x08CU
+#define GF_POST_FC_FNV1A_REG 0x090U
+#define GF_POST_CLASS_REG 0x094U
+#define GF_POST_CYCLES_REG 0x098U
+#define GF_POST_PROGRESS_REG 0x09CU
 #define GF_RESULT_PASS 0x600D600DU
 #define GF_RESULT_FAIL 0xBAD0BAD0U
 #define GF_RESULT_DATA_ABORT 0xDA7AAB01U
@@ -349,6 +358,48 @@ static u32 run_layer(uint32_t mode, uint32_t source, uint32_t bytes, uint32_t de
     return Xil_In32(GF_BASE + GF_CYCLES);
 }
 
+/* Model-specific postprocess descriptor. The PS writes only resident FC
+ * weights and TFLite fixed-point metadata; 12x12x112 GAP and the 112x6 FC
+ * execute entirely in PL mode 4 with no DDR partial-sum/result handoff. */
+static void load_gap_fc_descriptor(void)
+{
+    u32 class_index, group, lane, packed;
+    Xil_Out32(GF_BASE + GF_LAYER_MODE, 4U);
+    Xil_Out32(GF_BASE + GF_POST_GAP_MULT, (u32)GF_POST_GAP_MULTIPLIER);
+    Xil_Out32(GF_BASE + GF_POST_GAP_SHIFT, GF_POST_GAP_RIGHT_SHIFT);
+    Xil_Out32(GF_BASE + GF_POST_QCFG,
+              ((u32)(uint8_t)GF_POST_GAP_INPUT_ZERO_POINT) |
+              ((u32)(uint8_t)GF_POST_GAP_OUTPUT_ZERO_POINT << 8U) |
+              ((u32)(uint8_t)GF_POST_FC_OUTPUT_ZERO_POINT << 16U));
+    for (class_index = 0U; class_index < GF_POST_FC_OUTPUTS; ++class_index) {
+        Xil_Out32(GF_BASE + GF_BIDX, class_index);
+        Xil_Out32(GF_BASE + GF_BDATA, (u32)gf_post_fc_folded_bias[class_index]);
+        Xil_Out32(GF_BASE + GF_RQIDX, class_index);
+        Xil_Out32(GF_BASE + GF_RQMULT, (u32)gf_post_fc_requant_multiplier[class_index]);
+        Xil_Out32(GF_BASE + GF_RQSHIFT, (u32)gf_post_fc_requant_right_shift[class_index]);
+        for (group = 0U; group < GF_POST_GAP_CHANNELS / 4U; ++group) {
+            packed = 0U;
+            for (lane = 0U; lane < 4U; ++lane) {
+                packed |= (u32)(uint8_t)gf_post_fc_weights[class_index * GF_POST_GAP_CHANNELS + group * 4U + lane] << (lane * 8U);
+            }
+            Xil_Out32(GF_BASE + GF_WCTRL, class_index | (group << 8U));
+            Xil_Out32(GF_BASE + GF_WDATA, packed);
+        }
+    }
+}
+
+static u32 run_gap_fc(uint32_t source)
+{
+    Xil_Out32(GF_BASE + GF_LAYER_MODE, 4U);
+    Xil_Out32(GF_BASE + GF_DMA_SOURCE, source);
+    Xil_Out32(GF_BASE + GF_DMA_BYTES, GF_HEAD1X1_BYTES);
+    Xil_Out32(GF_BASE + GF_DMA_PIXELS, GF_POST_GAP_ELEMENTS);
+    Xil_Out32(GF_BASE + GF_STORE_CONTROL, 0U);
+    Xil_Out32(GF_BASE + GF_CONTROL, 2U);
+    wait_layer_done();
+    return Xil_In32(GF_BASE + GF_POST_CYCLES_REG);
+}
+
 int main(void)
 {
     u32 index, status, dma_status, store_status, hash, ddr_hash, cycles0, cycles1, pool_cycles, pool_hash;
@@ -359,6 +410,7 @@ int main(void)
     u32 conv3b_cycles[5], conv3b_hash[5], conv3b_ddr_hash;
     u32 pool3_cycles[5], pool3_hash[5], pool3_ddr_hash;
     u32 head1x1_cycles[7], head1x1_hash[7], head1x1_ddr_hash;
+    u32 gap_fc_cycles, gap_fnv, fc_fnv, post_class, post_progress;
     XTime t0, t1;
     Xil_DCacheDisable(); Xil_ICacheDisable();
     Xil_SetTlbAttributes(GF_BASE, DEVICE_MEMORY); Xil_SetTlbAttributes(PROBE_BASE, DEVICE_MEMORY);
@@ -367,11 +419,11 @@ int main(void)
     Xil_ExceptionRegisterHandler(XIL_EXCEPTION_ID_DATA_ABORT_INT, data_abort, 0);
     Xil_ExceptionRegisterHandler(XIL_EXCEPTION_ID_PREFETCH_ABORT_INT, prefetch_abort, 0);
     Xil_ExceptionEnable();
-    for (index = 0U; index < 128U; ++index) store_probe(index, 0U);
+    for (index = 0U; index < 136U; ++index) store_probe(index, 0U);
     store_probe(0U, 0x47464E50U);
     stage = 0x10U;
     if (Xil_In32(GF_BASE + GF_MAGIC) != 0x47464E50U) terminal_failure(0x4101U, Xil_In32(GF_BASE + GF_MAGIC));
-    if (Xil_In32(GF_BASE + GF_VERSION) != 0x00040003U) terminal_failure(0x4102U, Xil_In32(GF_BASE + GF_VERSION));
+    if (Xil_In32(GF_BASE + GF_VERSION) != 0x00040004U) terminal_failure(0x4102U, Xil_In32(GF_BASE + GF_VERSION));
     for (index = 0U; index < GF_RGB_BYTES; ++index) gf_rgb[index] = gf_full_camera_rgb[index];
     Xil_DCacheFlushRange((UINTPTR)gf_rgb, GF_RGB_BYTES);
     Xil_DCacheFlushRange((UINTPTR)gf_activation_1, GF_ACTIVATION_BYTES);
@@ -550,16 +602,32 @@ int main(void)
     head1x1_ddr_hash = fnv1a_bytes(gf_head1x1, GF_HEAD1X1_BYTES);
     store_probe(122U, head1x1_ddr_hash);
     if (head1x1_ddr_hash != GF_HEAD1X1_OUTPUT_FNV1A) terminal_failure(0x4132U, head1x1_ddr_hash);
+    stage = 0xC0U;
+    Xil_Out32(GF_BASE + GF_CONTROL, 1U);
+    load_gap_fc_descriptor();
+    gap_fc_cycles = run_gap_fc((u32)(UINTPTR)gf_head1x1);
+    status = Xil_In32(GF_BASE + GF_STATUS);
+    dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS);
+    gap_fnv = Xil_In32(GF_BASE + GF_POST_GAP_FNV1A_REG);
+    fc_fnv = Xil_In32(GF_BASE + GF_POST_FC_FNV1A_REG);
+    post_class = Xil_In32(GF_BASE + GF_POST_CLASS_REG);
+    post_progress = Xil_In32(GF_BASE + GF_POST_PROGRESS_REG);
+    store_probe(123U, gap_fc_cycles); store_probe(124U, gap_fnv); store_probe(125U, fc_fnv);
+    store_probe(126U, post_class); store_probe(127U, post_progress); store_probe(128U, status); store_probe(129U, dma_status);
+    if ((status & (GF_FAULT_BIT|GF_LAYER_FAULT_BIT)) || (dma_status & GF_DMA_FAULT_BIT) || !(dma_status & GF_DMA_DONE_BIT) ||
+        GF_DMA_BYTES_READ(dma_status) != GF_HEAD1X1_BYTES || gap_fnv != GF_POST_GAP_EXPECTED_FNV1A ||
+        fc_fnv != GF_POST_FC_EXPECTED_FNV1A || (post_class & 7U) != GF_POST_EXPECTED_CLASS)
+        terminal_failure(0x4133U, fc_fnv);
     store_probe(0U, GF_RESULT_PASS);
-    xil_printf("GESTUREFLOW_LAYER_CHAIN_HP0_HEAD1X1_BOARD_PASS c0=%lu c1=%lu pool=%lu conv2a=%lu,%lu,%lu conv2b=%lu,%lu,%lu pool2=%lu,%lu,%lu conv3a=%lu,%lu,%lu,%lu,%lu conv3b=%lu,%lu,%lu,%lu,%lu pool3=%lu,%lu,%lu,%lu,%lu head=%lu,%lu,%lu,%lu,%lu,%lu,%lu hash0=%08lx hash1=%08lx pool=%08lx conv2a=%08lx conv2b=%08lx pool2=%08lx conv3a=%08lx conv3b=%08lx pool3=%08lx head=%08lx\r\n",
+    xil_printf("GESTUREFLOW_LAYER_CHAIN_HP0_FULL_NETWORK_BOARD_PASS c0=%lu c1=%lu pool=%lu conv2a=%lu,%lu,%lu conv2b=%lu,%lu,%lu pool2=%lu,%lu,%lu conv3a=%lu,%lu,%lu,%lu,%lu conv3b=%lu,%lu,%lu,%lu,%lu pool3=%lu,%lu,%lu,%lu,%lu head=%lu,%lu,%lu,%lu,%lu,%lu,%lu post=%lu hash0=%08lx hash1=%08lx pool=%08lx conv2a=%08lx conv2b=%08lx pool2=%08lx conv3a=%08lx conv3b=%08lx pool3=%08lx head=%08lx gap=%08lx fc=%08lx class=%lu\r\n",
       (unsigned long)cycles0,(unsigned long)cycles1,(unsigned long)pool_cycles,(unsigned long)conv2_cycles[0],(unsigned long)conv2_cycles[1],(unsigned long)conv2_cycles[2],
       (unsigned long)conv2b_cycles[0],(unsigned long)conv2b_cycles[1],(unsigned long)conv2b_cycles[2],
       (unsigned long)pool2_cycles[0],(unsigned long)pool2_cycles[1],(unsigned long)pool2_cycles[2],
       (unsigned long)conv3a_cycles[0],(unsigned long)conv3a_cycles[1],(unsigned long)conv3a_cycles[2],(unsigned long)conv3a_cycles[3],(unsigned long)conv3a_cycles[4],
       (unsigned long)conv3b_cycles[0],(unsigned long)conv3b_cycles[1],(unsigned long)conv3b_cycles[2],(unsigned long)conv3b_cycles[3],(unsigned long)conv3b_cycles[4],
       (unsigned long)pool3_cycles[0],(unsigned long)pool3_cycles[1],(unsigned long)pool3_cycles[2],(unsigned long)pool3_cycles[3],(unsigned long)pool3_cycles[4],
-      (unsigned long)head1x1_cycles[0],(unsigned long)head1x1_cycles[1],(unsigned long)head1x1_cycles[2],(unsigned long)head1x1_cycles[3],(unsigned long)head1x1_cycles[4],(unsigned long)head1x1_cycles[5],(unsigned long)head1x1_cycles[6],
+      (unsigned long)head1x1_cycles[0],(unsigned long)head1x1_cycles[1],(unsigned long)head1x1_cycles[2],(unsigned long)head1x1_cycles[3],(unsigned long)head1x1_cycles[4],(unsigned long)head1x1_cycles[5],(unsigned long)head1x1_cycles[6],(unsigned long)gap_fc_cycles,
       (unsigned long)GF_FULL_OUTPUT_FNV1A,(unsigned long)gf_chain_body_output_fnv1a,(unsigned long)pool_hash,
-      (unsigned long)conv2_ddr_hash,(unsigned long)conv2b_ddr_hash,(unsigned long)pool2_ddr_hash,(unsigned long)conv3a_ddr_hash,(unsigned long)conv3b_ddr_hash,(unsigned long)pool3_ddr_hash,(unsigned long)head1x1_ddr_hash);
+      (unsigned long)conv2_ddr_hash,(unsigned long)conv2b_ddr_hash,(unsigned long)pool2_ddr_hash,(unsigned long)conv3a_ddr_hash,(unsigned long)conv3b_ddr_hash,(unsigned long)pool3_ddr_hash,(unsigned long)head1x1_ddr_hash,(unsigned long)gap_fnv,(unsigned long)fc_fnv,(unsigned long)(post_class & 7U));
     while (1) { usleep(100000U); }
 }

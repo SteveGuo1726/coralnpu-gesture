@@ -4,7 +4,7 @@ proc package_ip {src_dir project_root} {
   set pack [file join $project_root .tmp_gestureflow_layer_chain_hp0_pack]
   file delete -force $root; file delete -force $pack; file mkdir [file dirname $root]
   create_project -force gestureflow_layer_chain_hp0_pack $pack -part xc7z020clg400-2
-  foreach src {gestureflow_line_delay_bank.sv gestureflow_line_window.sv gestureflow_line_delay_vector_bank.sv gestureflow_line_window_vector.sv gestureflow_same4x4_cin_window.sv gestureflow_weight_bank.sv gestureflow_mac_tile.sv gestureflow_conv4x4_cin_same_stream.sv gestureflow_requant_relu.sv gestureflow_output_bank.sv gestureflow_hp0_rgb_loader.sv gestureflow_hp0_tensor_loader.sv gestureflow_hp0_tensor_writer.sv gestureflow_layer_chain_hp0_axil.sv} {
+  foreach src {gestureflow_line_delay_bank.sv gestureflow_line_window.sv gestureflow_line_delay_vector_bank.sv gestureflow_line_window_vector.sv gestureflow_same4x4_cin_window.sv gestureflow_weight_bank.sv gestureflow_mac_tile.sv gestureflow_conv4x4_cin_same_stream.sv gestureflow_requant_relu.sv gestureflow_output_bank.sv gestureflow_hp0_rgb_loader.sv gestureflow_hp0_tensor_loader.sv gestureflow_hp0_gap_fc.sv gestureflow_hp0_tensor_writer.sv gestureflow_layer_chain_hp0_axil.sv} {
     set path [file join $src_dir $src]
     if {![file exists $path]} { error "Missing GestureFlow source: $path" }
     add_files -norecurse $path; set_property file_type SystemVerilog [get_files $path]

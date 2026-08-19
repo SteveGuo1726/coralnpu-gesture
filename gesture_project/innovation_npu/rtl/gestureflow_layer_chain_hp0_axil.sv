@@ -71,7 +71,9 @@ module gestureflow_layer_chain_hp0_axil #(
     STORE_DESTINATION=12'h054, STORE_BYTES=12'h058, STORE_CONTROL=12'h05c,
     STORE_STATUS=12'h060, LAYER_MODE=12'h064, JOB_WIDTH=12'h068,
     JOB_HEIGHT=12'h06c, OUTPUT_LANE_MASK=12'h070, STORE_STRIDE=12'h074,
-    STORE_VALID_BYTES=12'h078;
+    STORE_VALID_BYTES=12'h078, POST_GAP_MULT=12'h080, POST_GAP_SHIFT=12'h084,
+    POST_QCFG=12'h088, POST_GAP_FNV1A=12'h08c, POST_FC_FNV1A=12'h090,
+    POST_CLASS=12'h094, POST_CYCLES=12'h098, POST_PROGRESS=12'h09c;
   localparam logic [31:0] FNV_OFFSET=32'h811c9dc5, FNV_PRIME=32'h01000193;
   // The physical 16x4 DSP tile remains fixed. Mode 3 only widens the
   // ingress/window storage so 20 Cin groups accumulate locally before one
@@ -82,7 +84,7 @@ module gestureflow_layer_chain_hp0_axil #(
 
   logic [31:0] awaddr, wdata; logic [3:0] wstrb; logic aw_seen, w_seen;
   logic running, done, fault;
-  logic [1:0] layer_mode;
+  logic [2:0] layer_mode;
   logic dma_start, dma_clear, store_start, store_clear, store_enable, store_pool_2x2;
   logic [31:0] dma_source_addr, dma_bytes;
   logic [13:0] dma_pixels;
@@ -100,6 +102,13 @@ module gestureflow_layer_chain_hp0_axil #(
   logic [15:0] output_lane_enable;
   logic signed [MAX_INPUT_CHANNELS-1:0][7:0] input_zero_point, selected_pixel;
   logic requant_enable, requant_relu_enable; logic signed [7:0] output_zero_point;
+  logic post_start, post_clear, post_busy, post_done, post_fault;
+  logic signed [31:0] post_gap_multiplier;
+  logic [5:0] post_gap_right_shift;
+  logic signed [7:0] post_gap_input_zero_point, post_gap_output_zero_point, post_fc_output_zero_point;
+  logic [31:0] post_gap_fnv1a, post_fc_fnv1a, post_cycles;
+  logic [2:0] post_predicted_class, post_fc_values_done;
+  logic [6:0] post_gap_values_done;
 
   logic rgb_busy, rgb_done, rgb_fault, rgb_frame_start, rgb_pixel_valid, rgb_pixel_ready;
   logic signed [2:0][7:0] rgb_pixel; logic [13:0] rgb_pixels_emitted; logic [15:0] rgb_bytes_read;
@@ -115,6 +124,9 @@ module gestureflow_layer_chain_hp0_axil #(
   logic tensor_arlock, tensor_arvalid, tensor_rready, tensor40_arlock, tensor40_arvalid, tensor40_rready, tensor80_arlock, tensor80_arvalid, tensor80_rready;
   logic [3:0] rgb_arcache, tensor_arcache, tensor40_arcache, tensor80_arcache, rgb_arqos, tensor_arqos, tensor40_arqos, tensor80_arqos, rgb_arregion, tensor_arregion, tensor40_arregion, tensor80_arregion;
   logic [2:0] rgb_arprot, tensor_arprot, tensor40_arprot, tensor80_arprot;
+  logic [31:0] post_araddr; logic [5:0] post_arid; logic [7:0] post_arlen; logic [2:0] post_arsize;
+  logic [1:0] post_arburst; logic post_arlock, post_arvalid, post_rready;
+  logic [3:0] post_arcache, post_arqos, post_arregion; logic [2:0] post_arprot;
   logic [5:0] unused_rgb_rid, unused_tensor_rid;
   logic [63:0] unused_rgb_rdata, unused_tensor_rdata; logic [1:0] unused_rgb_rresp, unused_tensor_rresp;
   logic unused_rgb_rlast, unused_tensor_rlast;
@@ -136,13 +148,13 @@ module gestureflow_layer_chain_hp0_axil #(
     fnv_step = (current ^ {24'd0, byte_value}) * FNV_PRIME;
   endfunction
 
-  assign dma_busy = (layer_mode == 3) ? tensor80_busy : (layer_mode == 2 ? tensor40_busy : (layer_mode == 1 ? tensor_busy : rgb_busy));
-  assign dma_done = (layer_mode == 3) ? tensor80_done : (layer_mode == 2 ? tensor40_done : (layer_mode == 1 ? tensor_done : rgb_done));
-  assign dma_fault = (layer_mode == 3) ? tensor80_fault : (layer_mode == 2 ? tensor40_fault : (layer_mode == 1 ? tensor_fault : rgb_fault));
-  assign dma_bytes_read = (layer_mode == 3) ? tensor80_bytes_read : (layer_mode == 2 ? tensor40_bytes_read : (layer_mode == 1 ? tensor_bytes_read : {16'd0, rgb_bytes_read}));
-  assign input_pixels = (layer_mode == 3) ? tensor80_pixels_emitted : (layer_mode == 2 ? tensor40_pixels_emitted : (layer_mode == 1 ? tensor_pixels_emitted : rgb_pixels_emitted));
+  assign dma_busy = (layer_mode == 4) ? post_busy : (layer_mode == 3) ? tensor80_busy : (layer_mode == 2 ? tensor40_busy : (layer_mode == 1 ? tensor_busy : rgb_busy));
+  assign dma_done = (layer_mode == 4) ? post_done : (layer_mode == 3) ? tensor80_done : (layer_mode == 2 ? tensor40_done : (layer_mode == 1 ? tensor_done : rgb_done));
+  assign dma_fault = (layer_mode == 4) ? post_fault : (layer_mode == 3) ? tensor80_fault : (layer_mode == 2 ? tensor40_fault : (layer_mode == 1 ? tensor_fault : rgb_fault));
+  assign dma_bytes_read = (layer_mode == 4) ? dma_bytes : (layer_mode == 3) ? tensor80_bytes_read : (layer_mode == 2 ? tensor40_bytes_read : (layer_mode == 1 ? tensor_bytes_read : {16'd0, rgb_bytes_read}));
+  assign input_pixels = (layer_mode == 4) ? dma_pixels : (layer_mode == 3) ? tensor80_pixels_emitted : (layer_mode == 2 ? tensor40_pixels_emitted : (layer_mode == 1 ? tensor_pixels_emitted : rgb_pixels_emitted));
   assign frame_start = (layer_mode == 3) ? tensor80_frame_start : (layer_mode == 2 ? tensor40_frame_start : (layer_mode == 1 ? tensor_frame_start : rgb_frame_start));
-  assign pixel_valid = (layer_mode == 3) ? tensor80_pixel_valid : (layer_mode == 2 ? tensor40_pixel_valid : (layer_mode == 1 ? tensor_pixel_valid : rgb_pixel_valid));
+  assign pixel_valid = (layer_mode == 4) ? 1'b0 : (layer_mode == 3) ? tensor80_pixel_valid : (layer_mode == 2 ? tensor40_pixel_valid : (layer_mode == 1 ? tensor_pixel_valid : rgb_pixel_valid));
   assign tensor_pixel_ready = (layer_mode == 1) ? pixel_ready : 1'b0;
   assign tensor40_pixel_ready = (layer_mode == 2) ? pixel_ready : 1'b0;
   assign tensor80_pixel_ready = (layer_mode == 3) ? pixel_ready : 1'b0;
@@ -161,18 +173,18 @@ module gestureflow_layer_chain_hp0_axil #(
       selected_pixel[0] = rgb_pixel[0]; selected_pixel[1] = rgb_pixel[1]; selected_pixel[2] = rgb_pixel[2];
       for (int lane = 3; lane < MAX_INPUT_CHANNELS; lane++) selected_pixel[lane] = input_zero_point[0];
     end
-    m_axi_araddr = (layer_mode == 3) ? tensor80_araddr : (layer_mode == 2 ? tensor40_araddr : (layer_mode == 1 ? tensor_araddr : rgb_araddr));
-    m_axi_arid = (layer_mode == 3) ? tensor80_arid : (layer_mode == 2 ? tensor40_arid : (layer_mode == 1 ? tensor_arid : rgb_arid));
-    m_axi_arlen = (layer_mode == 3) ? tensor80_arlen : (layer_mode == 2 ? tensor40_arlen : (layer_mode == 1 ? tensor_arlen : rgb_arlen));
-    m_axi_arsize = (layer_mode == 3) ? tensor80_arsize : (layer_mode == 2 ? tensor40_arsize : (layer_mode == 1 ? tensor_arsize : rgb_arsize));
-    m_axi_arburst = (layer_mode == 3) ? tensor80_arburst : (layer_mode == 2 ? tensor40_arburst : (layer_mode == 1 ? tensor_arburst : rgb_arburst));
-    m_axi_arlock = (layer_mode == 3) ? tensor80_arlock : (layer_mode == 2 ? tensor40_arlock : (layer_mode == 1 ? tensor_arlock : rgb_arlock));
-    m_axi_arcache = (layer_mode == 3) ? tensor80_arcache : (layer_mode == 2 ? tensor40_arcache : (layer_mode == 1 ? tensor_arcache : rgb_arcache));
-    m_axi_arprot = (layer_mode == 3) ? tensor80_arprot : (layer_mode == 2 ? tensor40_arprot : (layer_mode == 1 ? tensor_arprot : rgb_arprot));
-    m_axi_arqos = (layer_mode == 3) ? tensor80_arqos : (layer_mode == 2 ? tensor40_arqos : (layer_mode == 1 ? tensor_arqos : rgb_arqos));
-    m_axi_arregion = (layer_mode == 3) ? tensor80_arregion : (layer_mode == 2 ? tensor40_arregion : (layer_mode == 1 ? tensor_arregion : rgb_arregion));
-    m_axi_arvalid = (layer_mode == 3) ? tensor80_arvalid : (layer_mode == 2 ? tensor40_arvalid : (layer_mode == 1 ? tensor_arvalid : rgb_arvalid));
-    m_axi_rready = (layer_mode == 3) ? tensor80_rready : (layer_mode == 2 ? tensor40_rready : (layer_mode == 1 ? tensor_rready : rgb_rready));
+    m_axi_araddr = (layer_mode == 4) ? post_araddr : (layer_mode == 3) ? tensor80_araddr : (layer_mode == 2 ? tensor40_araddr : (layer_mode == 1 ? tensor_araddr : rgb_araddr));
+    m_axi_arid = (layer_mode == 4) ? post_arid : (layer_mode == 3) ? tensor80_arid : (layer_mode == 2 ? tensor40_arid : (layer_mode == 1 ? tensor_arid : rgb_arid));
+    m_axi_arlen = (layer_mode == 4) ? post_arlen : (layer_mode == 3) ? tensor80_arlen : (layer_mode == 2 ? tensor40_arlen : (layer_mode == 1 ? tensor_arlen : rgb_arlen));
+    m_axi_arsize = (layer_mode == 4) ? post_arsize : (layer_mode == 3) ? tensor80_arsize : (layer_mode == 2 ? tensor40_arsize : (layer_mode == 1 ? tensor_arsize : rgb_arsize));
+    m_axi_arburst = (layer_mode == 4) ? post_arburst : (layer_mode == 3) ? tensor80_arburst : (layer_mode == 2 ? tensor40_arburst : (layer_mode == 1 ? tensor_arburst : rgb_arburst));
+    m_axi_arlock = (layer_mode == 4) ? post_arlock : (layer_mode == 3) ? tensor80_arlock : (layer_mode == 2 ? tensor40_arlock : (layer_mode == 1 ? tensor_arlock : rgb_arlock));
+    m_axi_arcache = (layer_mode == 4) ? post_arcache : (layer_mode == 3) ? tensor80_arcache : (layer_mode == 2 ? tensor40_arcache : (layer_mode == 1 ? tensor_arcache : rgb_arcache));
+    m_axi_arprot = (layer_mode == 4) ? post_arprot : (layer_mode == 3) ? tensor80_arprot : (layer_mode == 2 ? tensor40_arprot : (layer_mode == 1 ? tensor_arprot : rgb_arprot));
+    m_axi_arqos = (layer_mode == 4) ? post_arqos : (layer_mode == 3) ? tensor80_arqos : (layer_mode == 2 ? tensor40_arqos : (layer_mode == 1 ? tensor_arqos : rgb_arqos));
+    m_axi_arregion = (layer_mode == 4) ? post_arregion : (layer_mode == 3) ? tensor80_arregion : (layer_mode == 2 ? tensor40_arregion : (layer_mode == 1 ? tensor_arregion : rgb_arregion));
+    m_axi_arvalid = (layer_mode == 4) ? post_arvalid : (layer_mode == 3) ? tensor80_arvalid : (layer_mode == 2 ? tensor40_arvalid : (layer_mode == 1 ? tensor_arvalid : rgb_arvalid));
+    m_axi_rready = (layer_mode == 4) ? post_rready : (layer_mode == 3) ? tensor80_rready : (layer_mode == 2 ? tensor40_rready : (layer_mode == 1 ? tensor_rready : rgb_rready));
   end
   assign pixel_data = selected_pixel;
   assign output_ready = quant_ready;
@@ -224,6 +236,24 @@ module gestureflow_layer_chain_hp0_axil #(
     .m_axi_arqos(tensor80_arqos), .m_axi_arregion(tensor80_arregion), .m_axi_arvalid(tensor80_arvalid), .m_axi_arready(m_axi_arready),
     .m_axi_rid(m_axi_rid), .m_axi_rdata(m_axi_rdata), .m_axi_rresp(m_axi_rresp), .m_axi_rlast(m_axi_rlast),
     .m_axi_rvalid(m_axi_rvalid), .m_axi_rready(tensor80_rready)
+  );
+  gestureflow_hp0_gap_fc postprocess (
+    .clk(aclk), .rst_n(aresetn), .start(post_start), .clear(post_clear),
+    .source_addr(dma_source_addr), .byte_count(dma_bytes), .pixel_count(dma_pixels),
+    .gap_multiplier(post_gap_multiplier), .gap_right_shift(post_gap_right_shift),
+    .gap_input_zero_point(post_gap_input_zero_point), .gap_output_zero_point(post_gap_output_zero_point),
+    .fc_output_zero_point(post_fc_output_zero_point), .fc_weight_write_valid(weight_write_valid),
+    .fc_weight_write_class(weight_write_oc[2:0]), .fc_weight_write_group(weight_write_ic_group),
+    .fc_weight_write_data(weight_write_data), .fc_bias(bias[5:0]),
+    .fc_multiplier(requant_multiplier[5:0]), .fc_right_shift(requant_right_shift[5:0]),
+    .busy(post_busy), .done(post_done), .fault(post_fault), .cycles(post_cycles),
+    .gap_fnv1a(post_gap_fnv1a), .fc_fnv1a(post_fc_fnv1a), .predicted_class(post_predicted_class),
+    .gap_values_done(post_gap_values_done), .fc_values_done(post_fc_values_done),
+    .m_axi_araddr(post_araddr), .m_axi_arid(post_arid), .m_axi_arlen(post_arlen), .m_axi_arsize(post_arsize),
+    .m_axi_arburst(post_arburst), .m_axi_arlock(post_arlock), .m_axi_arcache(post_arcache), .m_axi_arprot(post_arprot),
+    .m_axi_arqos(post_arqos), .m_axi_arregion(post_arregion), .m_axi_arvalid(post_arvalid), .m_axi_arready(m_axi_arready),
+    .m_axi_rid(m_axi_rid), .m_axi_rdata(m_axi_rdata), .m_axi_rresp(m_axi_rresp), .m_axi_rlast(m_axi_rlast),
+    .m_axi_rvalid(m_axi_rvalid), .m_axi_rready(post_rready)
   );
   gestureflow_conv4x4_cin_same_stream #(.IMAGE_WIDTH(IMAGE_WIDTH), .IMAGE_HEIGHT(IMAGE_HEIGHT), .INPUT_CHANNELS(MAX_INPUT_CHANNELS), .OUT_LANES(OUT_LANES)) stream (
     .clk(aclk), .rst_n(aresetn), .image_width(job_width), .image_height(job_height), .frame_start(frame_start), .pixel_valid(pixel_valid), .pixel_ready(pixel_ready),
@@ -278,17 +308,18 @@ module gestureflow_layer_chain_hp0_axil #(
     if (!aresetn) begin
       awaddr<='0; wdata<='0; wstrb<='0; aw_seen<=0; w_seen<=0; s_axi_bvalid<=0; s_axi_bresp<=0;
       s_axi_rvalid<=0; s_axi_rresp<=0; s_axi_rdata<=0; running<=0; done<=0; fault<=0; layer_mode<=0;
-      dma_start<=0; dma_clear<=0; store_start<=0; store_clear<=0; store_enable<=0; store_pool_2x2<=0; dma_source_addr<=0;
+      dma_start<=0; dma_clear<=0; post_start<=0; post_clear<=0; store_start<=0; store_clear<=0; store_enable<=0; store_pool_2x2<=0; dma_source_addr<=0;
       dma_bytes<=0; dma_pixels<=0; store_destination<=0; store_bytes<=0; layer_cycles<=0;
       job_width<=16'(IMAGE_WIDTH); job_height<=16'(IMAGE_HEIGHT);
       store_stride_bytes<=0; store_valid_bytes<=0;
       weight_write_valid<=0; weight_write_oc<=0; weight_write_tap<=0; weight_write_ic_group<=0; weight_write_data<=0;
       bias<='0; bias_index<=0; input_zero_point<='0; output_zero_point<=0; output_lane_enable<=16'hffff;
       requant_enable<=0; requant_relu_enable<=0; requant_index<=0; requant_multiplier<='0; requant_right_shift<='0;
+      post_gap_multiplier<=0; post_gap_right_shift<=0; post_gap_input_zero_point<=0; post_gap_output_zero_point<=0; post_fc_output_zero_point<=0;
       hash_active<=0; last_output_seen<=0; hash_vector<='0; hash_byte_index<=0; hash_value<=FNV_OFFSET;
       completed_hash<=FNV_OFFSET; output_vectors<=0;
     end else begin
-      weight_write_valid<=0; dma_start<=0; dma_clear<=0; store_start<=0; store_clear<=0;
+      weight_write_valid<=0; dma_start<=0; dma_clear<=0; post_start<=0; post_clear<=0; store_start<=0; store_clear<=0;
       if (running) layer_cycles <= layer_cycles + 1'b1;
       if (protocol_error || quant_fault || dma_fault || store_fault) fault <= 1'b1;
       if (hash_active) begin
@@ -310,13 +341,13 @@ module gestureflow_layer_chain_hp0_axil #(
       if (aw_seen && w_seen && !s_axi_bvalid) begin
         case (awaddr[11:0])
           CONTROL: begin
-            if (wdata[0]) begin running<=0; done<=0; fault<=0; dma_clear<=1; store_clear<=1; hash_active<=0; last_output_seen<=0; hash_value<=FNV_OFFSET; completed_hash<=FNV_OFFSET; layer_cycles<=0; output_vectors<=0; end
+            if (wdata[0]) begin running<=0; done<=0; fault<=0; dma_clear<=1; post_clear<=1; store_clear<=1; hash_active<=0; last_output_seen<=0; hash_value<=FNV_OFFSET; completed_hash<=FNV_OFFSET; layer_cycles<=0; output_vectors<=0; end
             if (wdata[1]) begin
               if (running || dma_busy || store_busy || hash_active) fault<=1;
-              else begin running<=1; done<=0; fault<=0; dma_start<=1; hash_active<=0; last_output_seen<=0; hash_value<=FNV_OFFSET; completed_hash<=FNV_OFFSET; layer_cycles<=0; output_vectors<=0; end
+              else begin running<=1; done<=0; fault<=0; if (layer_mode == 4) post_start<=1; else dma_start<=1; hash_active<=0; last_output_seen<=0; hash_value<=FNV_OFFSET; completed_hash<=FNV_OFFSET; layer_cycles<=0; output_vectors<=0; end
             end
           end
-          LAYER_MODE: if (running || dma_busy || store_busy) fault<=1; else layer_mode<=wdata[1:0];
+          LAYER_MODE: if (running || dma_busy || store_busy) fault<=1; else layer_mode<=wdata[2:0];
           JOB_WIDTH: if (running || dma_busy || store_busy) fault<=1; else job_width<=wdata[15:0];
           JOB_HEIGHT: if (running || dma_busy || store_busy) fault<=1; else job_height<=wdata[15:0];
           OUTPUT_LANE_MASK: if (running || dma_busy || store_busy) fault<=1; else output_lane_enable<=wdata[15:0];
@@ -336,6 +367,9 @@ module gestureflow_layer_chain_hp0_axil #(
           STORE_DESTINATION: if (running || store_busy) fault<=1; else store_destination<=wdata;
           STORE_BYTES: if (running || store_busy) fault<=1; else store_bytes<=wdata;
           STORE_CONTROL: if (running || store_busy) fault<=1; else begin store_enable<=wdata[0]; store_pool_2x2<=wdata[1]; end
+          POST_GAP_MULT: if (running) fault<=1; else post_gap_multiplier<=wdata;
+          POST_GAP_SHIFT: if (running) fault<=1; else post_gap_right_shift<=wdata[5:0];
+          POST_QCFG: if (running) fault<=1; else begin post_gap_input_zero_point<=wdata[7:0]; post_gap_output_zero_point<=wdata[15:8]; post_fc_output_zero_point<=wdata[23:16]; end
           default: begin end
         endcase
         if (awaddr[11:0] == WDATA && !(running || dma_busy)) weight_write_valid<=1;
@@ -343,12 +377,13 @@ module gestureflow_layer_chain_hp0_axil #(
       end
       if (s_axi_bvalid && s_axi_bready) s_axi_bvalid<=0;
       if (store_done && store_enable && running) begin running<=0; done<=1; end
+      if (post_done && running && layer_mode == 4) begin running<=0; done<=1; completed_hash<=post_fc_fnv1a; end
       if (s_axi_arvalid && s_axi_arready) begin
         case (s_axi_araddr[11:0])
-          MAGIC: s_axi_rdata<=32'h47464e50; VERSION: s_axi_rdata<=32'h00040003;
+          MAGIC: s_axi_rdata<=32'h47464e50; VERSION: s_axi_rdata<=32'h00040004;
           STATUS: s_axi_rdata<={24'd0,frame_input_done,protocol_error||quant_fault,hash_active,1'b0,dma_busy,fault,done,running};
           QCFG: s_axi_rdata<={14'd0,requant_relu_enable,requant_enable,output_zero_point,input_zero_point[0]};
-          LAYER_MODE: s_axi_rdata<={30'd0,layer_mode}; JOB_WIDTH:s_axi_rdata<={16'd0,job_width}; JOB_HEIGHT:s_axi_rdata<={16'd0,job_height}; OUTPUT_LANE_MASK:s_axi_rdata<={16'd0,output_lane_enable}; CYCLES:s_axi_rdata<=layer_cycles;
+          LAYER_MODE: s_axi_rdata<={29'd0,layer_mode}; JOB_WIDTH:s_axi_rdata<={16'd0,job_width}; JOB_HEIGHT:s_axi_rdata<={16'd0,job_height}; OUTPUT_LANE_MASK:s_axi_rdata<={16'd0,output_lane_enable}; CYCLES:s_axi_rdata<=layer_cycles;
           INPUT_PIXELS:s_axi_rdata<={18'd0,input_pixels}; OUTPUT_VECTORS:s_axi_rdata<={18'd0,output_vectors}; OUTPUT_FNV1A:s_axi_rdata<=completed_hash;
           DMA_SOURCE:s_axi_rdata<=dma_source_addr; DMA_BYTES:s_axi_rdata<=dma_bytes; DMA_PIXELS:s_axi_rdata<={18'd0,dma_pixels};
           // Keep the established [31:3] byte-count field wide enough for a
@@ -357,6 +392,11 @@ module gestureflow_layer_chain_hp0_axil #(
           DMA_STATUS:s_axi_rdata<={dma_bytes_read[28:0],dma_fault,dma_done,dma_busy};
           STORE_DESTINATION:s_axi_rdata<=store_destination; STORE_BYTES:s_axi_rdata<=store_bytes; STORE_CONTROL:s_axi_rdata<={30'd0,store_pool_2x2,store_enable}; STORE_STRIDE:s_axi_rdata<=store_stride_bytes; STORE_VALID_BYTES:s_axi_rdata<={27'd0,store_valid_bytes};
           STORE_STATUS:s_axi_rdata<={store_bytes_written[28:0],store_fault,store_done,store_busy};
+          POST_GAP_MULT:s_axi_rdata<=post_gap_multiplier; POST_GAP_SHIFT:s_axi_rdata<={26'd0,post_gap_right_shift};
+          POST_QCFG:s_axi_rdata<={8'd0,post_fc_output_zero_point,post_gap_output_zero_point,post_gap_input_zero_point};
+          POST_GAP_FNV1A:s_axi_rdata<=post_gap_fnv1a; POST_FC_FNV1A:s_axi_rdata<=post_fc_fnv1a;
+          POST_CLASS:s_axi_rdata<={19'd0,post_fc_values_done,post_gap_values_done,post_predicted_class}; POST_CYCLES:s_axi_rdata<=post_cycles;
+          POST_PROGRESS:s_axi_rdata<={19'd0,post_fc_values_done,post_gap_values_done,post_busy,post_fault,post_done};
           default:s_axi_rdata<=32'hdeadbeef;
         endcase
         s_axi_rvalid<=1; s_axi_rresp<=0;

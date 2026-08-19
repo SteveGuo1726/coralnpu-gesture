@@ -80,8 +80,8 @@ module gestureflow_hp0_tensor_loader #(
   endfunction
 
   initial begin
-    if (CHANNELS > 80 || (CHANNELS % 8) != 0) begin
-      $error("CHANNELS must be an 8-byte multiple not exceeding the 80-byte FIFO");
+    if (CHANNELS > 112 || (CHANNELS % 8) != 0) begin
+      $error("CHANNELS must be an 8-byte multiple not exceeding the 112-byte FIFO");
     end
   end
 
