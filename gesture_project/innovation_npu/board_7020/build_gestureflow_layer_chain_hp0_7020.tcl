@@ -15,7 +15,7 @@ proc package_ip {src_dir project_root} {
   set core [ipx::current_core]
   set_property name gestureflow_layer_chain_hp0_axil $core
   set_property display_name {GestureFlow reusable layer-chain HP0 baseline} $core
-  set_property description {Project-local single 7020 MAC core for RGB first layer and 16-channel body layer DDR handoff.} $core
+  set_property description {Project-local 7020 MAC core for RGB, 16-channel and 40-channel body-layer DDR handoff.} $core
   ipx::save_core $core
   close_project; file delete -force $pack
   return [file dirname $root]

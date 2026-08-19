@@ -26,15 +26,17 @@ configparams force-mem-access 1
 source $ps7_init_path; ps7_init; ps7_post_config; after 1000
 targets -set -nocase -filter {name =~ "*A9*#0"}; dow $elf_path; con
 set final 0
-for {set i 0} {$i < 12000} {incr i} {
+# A normal six-stage layer chain completes well below one second. Keep an
+# explicit two-minute bound so a broken board transaction cannot block a run.
+for {set i 0} {$i < 4800} {incr i} {
   set final [rd32 $probe_base]
   if {$final == 0x600D600D || $final == 0xBAD0BAD0 || $final == 0xDA7AAB01 || $final == 0xDA7AAB02} { break }
   after 25
 }
 puts [format {GESTUREFLOW_LAYER_CHAIN_HP0_FINAL_RESULT = 0x%08X} $final]
-for {set i 0} {$i < 33} {incr i} {
+for {set i 0} {$i < 43} {incr i} {
   puts [format {GESTUREFLOW_LAYER_CHAIN_HP0_PROBE[%02d] = 0x%08X} $i [rd32 [expr {$probe_base + $i * 4}]]]
 }
 if {$final != 0x600D600D} { error "GestureFlow layer-chain HP0 board run failed" }
-puts "GESTUREFLOW_LAYER_CHAIN_HP0_CONV2A_BOARD_PASS"
+puts "GESTUREFLOW_LAYER_CHAIN_HP0_CONV2B_BOARD_PASS"
 disconnect; exit

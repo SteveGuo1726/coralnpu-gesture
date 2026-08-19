@@ -2,7 +2,7 @@
 //
 // HP0 AXI4 reader for an already quantized NHWC feature tensor. Unlike the
 // camera RGB loader, payload bytes are consumed as signed INT8 verbatim: this
-// is the required format for layer-to-layer DDR handoff. One 16-byte feature
+// is the required format for layer-to-layer DDR handoff. One complete feature
 // vector is emitted only when all of its channels are present in the elastic
 // byte FIFO, preserving pixel atomicity under MAC backpressure.
 `timescale 1ns/1ps
@@ -46,18 +46,24 @@ module gestureflow_hp0_tensor_loader #(
   output logic m_axi_rready
 );
   typedef enum logic [1:0] {IDLE, ISSUE_AR, RECEIVE_R, DRAIN} state_t;
-  localparam logic [4:0] CHANNEL_BYTES = 5'(CHANNELS);
+  localparam int FIFO_BYTES = CHANNELS;
+  localparam int FIFO_BYTES_W = (FIFO_BYTES < 2) ? 1 : $clog2(FIFO_BYTES + 1);
+  localparam logic [FIFO_BYTES_W-1:0] FIFO_LIMIT = FIFO_BYTES_W'(FIFO_BYTES - 8);
+  // Keep the compare/subtract operand sized to this instance's FIFO counter.
+  // The 16-channel reader has a 5-bit counter while the 40-channel reader
+  // needs six bits; a universal 6-bit constant would truncate in the former.
+  localparam logic [FIFO_BYTES_W-1:0] CHANNEL_BYTES = FIFO_BYTES_W'(CHANNELS);
   state_t state;
   logic [31:0] next_addr;
   logic [31:0] bytes_remaining;
-  logic [4:0] beats_remaining;
-  logic [127:0] byte_fifo;
-  logic [4:0] fifo_bytes;
+  logic [5:0] beats_remaining;
+  logic [FIFO_BYTES*8-1:0] byte_fifo;
+  logic [FIFO_BYTES_W-1:0] fifo_bytes;
   logic stream_started;
-  logic [4:0] requested_beats;
+  logic [5:0] requested_beats;
   logic pixel_fire;
 
-  function automatic [4:0] choose_burst_beats(
+  function automatic [5:0] choose_burst_beats(
     input logic [31:0] remaining,
     input logic [11:0] low_addr
   );
@@ -69,13 +75,13 @@ module gestureflow_hp0_tensor_loader #(
       if (until_boundary == 0) until_boundary = 512;
       if (requested > 16) requested = 16;
       if (requested > until_boundary) requested = until_boundary;
-      choose_burst_beats = requested[4:0];
+      choose_burst_beats = requested[5:0];
     end
   endfunction
 
   initial begin
-    if (CHANNELS > 16 || (CHANNELS % 8) != 0) begin
-      $error("CHANNELS must be an 8-byte multiple not exceeding the 16-byte FIFO");
+    if (CHANNELS > 64 || (CHANNELS % 8) != 0) begin
+      $error("CHANNELS must be an 8-byte multiple not exceeding the 64-byte FIFO");
     end
   end
 
@@ -90,7 +96,7 @@ module gestureflow_hp0_tensor_loader #(
   always_comb begin
     m_axi_araddr = next_addr;
     m_axi_arid = 6'd0;
-    m_axi_arlen = {3'd0, requested_beats} - 8'd1;
+    m_axi_arlen = {2'b0, requested_beats} - 8'd1;
     m_axi_arsize = 3'd3;
     m_axi_arburst = 2'b01;
     m_axi_arlock = 1'b0;
@@ -99,10 +105,10 @@ module gestureflow_hp0_tensor_loader #(
     m_axi_arqos = 4'd0;
     m_axi_arregion = 4'd0;
     m_axi_arvalid = (state == ISSUE_AR);
-    // A 16-byte vector consumes the full FIFO atomically. Permit a response
+    // A complete vector consumes the FIFO atomically. Permit a response
     // only when the next 64-bit beat cannot overflow it and never append on
     // the same cycle in which the FIFO shifts by a feature vector.
-    m_axi_rready = (state == RECEIVE_R) && (fifo_bytes <= 8) && !pixel_fire;
+    m_axi_rready = (state == RECEIVE_R) && (fifo_bytes <= FIFO_LIMIT) && !pixel_fire;
   end
 
   always_ff @(posedge clk) begin
@@ -169,7 +175,7 @@ module gestureflow_hp0_tensor_loader #(
               state <= IDLE;
             end else begin
               beats_remaining <= requested_beats;
-              next_addr <= next_addr + ({27'd0, requested_beats} << 3);
+              next_addr <= next_addr + ({26'd0, requested_beats} << 3);
               state <= RECEIVE_R;
             end
           end
