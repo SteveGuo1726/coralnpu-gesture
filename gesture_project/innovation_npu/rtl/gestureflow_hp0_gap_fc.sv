@@ -35,6 +35,8 @@ module gestureflow_hp0_gap_fc (
   output logic [2:0] predicted_class,
   output logic [6:0] gap_values_done,
   output logic [2:0] fc_values_done,
+  output logic signed [31:0] debug_gap_sum0,
+  output logic signed [31:0] debug_gap_sum6,
 
   output logic [31:0] m_axi_araddr,
   output logic [5:0] m_axi_arid,
@@ -57,6 +59,7 @@ module gestureflow_hp0_gap_fc (
 );
   localparam int CHANNELS = 112;
   localparam int ELEMENTS = 144;
+  localparam logic signed [31:0] GAP_ELEMENTS = 32'sd144;
   localparam logic [31:0] FNV_OFFSET = 32'h811c9dc5;
   localparam logic [31:0] FNV_PRIME = 32'h01000193;
 
@@ -142,6 +145,10 @@ module gestureflow_hp0_gap_fc (
     end
   endfunction
 
+  function automatic logic signed [31:0] sign_extend_int8(input logic signed [7:0] value);
+    sign_extend_int8 = {{24{value[7]}}, value};
+  endfunction
+
   function automatic logic [2:0] argmax6(input logic signed [5:0][7:0] values);
     logic signed [7:0] best_value;
     logic [2:0] best_index;
@@ -156,6 +163,8 @@ module gestureflow_hp0_gap_fc (
 
   assign loader_pixel_ready = (state == LOAD);
   assign busy = (state != IDLE);
+  assign debug_gap_sum0 = gap_sum[0];
+  assign debug_gap_sum6 = gap_sum[6];
 
   gestureflow_hp0_tensor_loader #(.CHANNELS(CHANNELS)) loader (
     .clk(clk), .rst_n(rst_n), .start(loader_start), .clear(loader_clear),
@@ -203,13 +212,13 @@ module gestureflow_hp0_gap_fc (
             end
           end
           GAP: begin
-            gap_value[gap_index] <= requantize(gap_sum[gap_index] - gap_input_zero_point * ELEMENTS,
+            gap_value[gap_index] <= requantize(gap_sum[gap_index] - sign_extend_int8(gap_input_zero_point) * GAP_ELEMENTS,
                                                 gap_multiplier, gap_right_shift, gap_output_zero_point);
-            gap_hash_work <= fnv_step(gap_hash_work, requantize(gap_sum[gap_index] - gap_input_zero_point * ELEMENTS,
+            gap_hash_work <= fnv_step(gap_hash_work, requantize(gap_sum[gap_index] - sign_extend_int8(gap_input_zero_point) * GAP_ELEMENTS,
                                                                  gap_multiplier, gap_right_shift, gap_output_zero_point));
             gap_values_done <= gap_index + 1'b1;
             if (gap_index == 7'(CHANNELS - 1)) begin
-              gap_fnv1a <= fnv_step(gap_hash_work, requantize(gap_sum[gap_index] - gap_input_zero_point * ELEMENTS,
+              gap_fnv1a <= fnv_step(gap_hash_work, requantize(gap_sum[gap_index] - sign_extend_int8(gap_input_zero_point) * GAP_ELEMENTS,
                                                                gap_multiplier, gap_right_shift, gap_output_zero_point));
               state <= FC_INIT;
             end else gap_index <= gap_index + 1'b1;
