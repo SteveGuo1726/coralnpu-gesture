@@ -8,6 +8,34 @@ proc select_target_with_recovery {filter description} {
   error "failed to select $description with filter '$filter'"
 }
 proc rd32 {address} { return [mrd -value $address] }
+proc dump_postprocess_diagnostics {} {
+  puts "GESTUREFLOW_POSTPROCESS_DIAGNOSTICS_BEGIN"
+  foreach {name address} {
+    LAYER_MODE 0x43c00064
+    DMA_SOURCE 0x43c00044
+    DMA_BYTES 0x43c00048
+    DMA_STATUS 0x43c00050
+    POST_GAP_MULT 0x43c00080
+    POST_GAP_SHIFT 0x43c00084
+    POST_QCFG 0x43c00088
+    POST_GAP_FNV 0x43c0008c
+    POST_FC_FNV 0x43c00090
+    POST_CLASS 0x43c00094
+    POST_CYCLES 0x43c00098
+    POST_PROGRESS 0x43c0009c
+    POST_DEBUG_GAP_SUM0 0x43c000a0
+    POST_DEBUG_GAP_SUM6 0x43c000a4
+    POST_DEBUG_FC0 0x43c000a8
+    POST_DEBUG_FC1 0x43c000ac
+    POST_DEBUG_FC2 0x43c000b0
+    POST_DEBUG_FC3 0x43c000b4
+    POST_DEBUG_FC4 0x43c000b8
+    POST_DEBUG_FC5 0x43c000bc
+  } {
+    puts [format {%s = 0x%08X} $name [mrd -value $address]]
+  }
+  puts "GESTUREFLOW_POSTPROCESS_DIAGNOSTICS_END"
+}
 set project_root "E:/coralnpu_vivado/projects/gestureflow_layer_chain_hp0_7020_v1"
 set bit_path [file join $project_root axi_gpio.runs impl_1 system_wrapper.bit]
 set xsa_path [file join $project_root logs gestureflow_layer_chain_hp0_7020.xsa]
@@ -37,6 +65,11 @@ puts [format {GESTUREFLOW_LAYER_CHAIN_HP0_FINAL_RESULT = 0x%08X} $final]
 for {set i 0} {$i < 130} {incr i} {
   puts [format {GESTUREFLOW_LAYER_CHAIN_HP0_PROBE[%02d] = 0x%08X} $i [rd32 [expr {$probe_base + $i * 4}]]]
 }
-if {$final != 0x600D600D} { error "GestureFlow layer-chain HP0 board run failed" }
+if {$final != 0x600D600D} {
+  # Keep the first failing transaction self-contained. The register values
+  # distinguish DDR/loader failure from GAP and FC arithmetic divergence.
+  dump_postprocess_diagnostics
+  error "GestureFlow layer-chain HP0 board run failed"
+}
 puts "GESTUREFLOW_LAYER_CHAIN_HP0_FULL_NETWORK_BOARD_PASS"
 disconnect; exit

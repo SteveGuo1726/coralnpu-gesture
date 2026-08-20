@@ -74,7 +74,9 @@ module gestureflow_layer_chain_hp0_axil #(
     STORE_VALID_BYTES=12'h078, POST_GAP_MULT=12'h080, POST_GAP_SHIFT=12'h084,
     POST_QCFG=12'h088, POST_GAP_FNV1A=12'h08c, POST_FC_FNV1A=12'h090,
     POST_CLASS=12'h094, POST_CYCLES=12'h098, POST_PROGRESS=12'h09c,
-    POST_DEBUG_GAP_SUM0=12'h0a0, POST_DEBUG_GAP_SUM6=12'h0a4;
+    POST_DEBUG_GAP_SUM0=12'h0a0, POST_DEBUG_GAP_SUM6=12'h0a4,
+    POST_DEBUG_FC0=12'h0a8, POST_DEBUG_FC1=12'h0ac, POST_DEBUG_FC2=12'h0b0,
+    POST_DEBUG_FC3=12'h0b4, POST_DEBUG_FC4=12'h0b8, POST_DEBUG_FC5=12'h0bc;
   localparam logic [31:0] FNV_OFFSET=32'h811c9dc5, FNV_PRIME=32'h01000193;
   // The physical 16x4 DSP tile remains fixed. Mode 3 only widens the
   // ingress/window storage so 20 Cin groups accumulate locally before one
@@ -109,6 +111,7 @@ module gestureflow_layer_chain_hp0_axil #(
   logic signed [7:0] post_gap_input_zero_point, post_gap_output_zero_point, post_fc_output_zero_point;
   logic [31:0] post_gap_fnv1a, post_fc_fnv1a, post_cycles;
   logic signed [31:0] post_debug_gap_sum0, post_debug_gap_sum6;
+  logic signed [5:0][7:0] post_debug_fc_value;
   logic [2:0] post_predicted_class, post_fc_values_done;
   logic [6:0] post_gap_values_done;
 
@@ -252,6 +255,7 @@ module gestureflow_layer_chain_hp0_axil #(
     .gap_fnv1a(post_gap_fnv1a), .fc_fnv1a(post_fc_fnv1a), .predicted_class(post_predicted_class),
     .gap_values_done(post_gap_values_done), .fc_values_done(post_fc_values_done),
     .debug_gap_sum0(post_debug_gap_sum0), .debug_gap_sum6(post_debug_gap_sum6),
+    .debug_fc_value(post_debug_fc_value),
     .m_axi_araddr(post_araddr), .m_axi_arid(post_arid), .m_axi_arlen(post_arlen), .m_axi_arsize(post_arsize),
     .m_axi_arburst(post_arburst), .m_axi_arlock(post_arlock), .m_axi_arcache(post_arcache), .m_axi_arprot(post_arprot),
     .m_axi_arqos(post_arqos), .m_axi_arregion(post_arregion), .m_axi_arvalid(post_arvalid), .m_axi_arready(m_axi_arready),
@@ -401,6 +405,12 @@ module gestureflow_layer_chain_hp0_axil #(
           POST_CLASS:s_axi_rdata<={19'd0,post_fc_values_done,post_gap_values_done,post_predicted_class}; POST_CYCLES:s_axi_rdata<=post_cycles;
           POST_PROGRESS:s_axi_rdata<={19'd0,post_fc_values_done,post_gap_values_done,post_busy,post_fault,post_done};
           POST_DEBUG_GAP_SUM0:s_axi_rdata<=post_debug_gap_sum0; POST_DEBUG_GAP_SUM6:s_axi_rdata<=post_debug_gap_sum6;
+          POST_DEBUG_FC0:s_axi_rdata<={{24{post_debug_fc_value[0][7]}},post_debug_fc_value[0]};
+          POST_DEBUG_FC1:s_axi_rdata<={{24{post_debug_fc_value[1][7]}},post_debug_fc_value[1]};
+          POST_DEBUG_FC2:s_axi_rdata<={{24{post_debug_fc_value[2][7]}},post_debug_fc_value[2]};
+          POST_DEBUG_FC3:s_axi_rdata<={{24{post_debug_fc_value[3][7]}},post_debug_fc_value[3]};
+          POST_DEBUG_FC4:s_axi_rdata<={{24{post_debug_fc_value[4][7]}},post_debug_fc_value[4]};
+          POST_DEBUG_FC5:s_axi_rdata<={{24{post_debug_fc_value[5][7]}},post_debug_fc_value[5]};
           default:s_axi_rdata<=32'hdeadbeef;
         endcase
         s_axi_rvalid<=1; s_axi_rresp<=0;

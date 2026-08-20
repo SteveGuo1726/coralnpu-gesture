@@ -37,6 +37,7 @@ module gestureflow_hp0_gap_fc (
   output logic [2:0] fc_values_done,
   output logic signed [31:0] debug_gap_sum0,
   output logic signed [31:0] debug_gap_sum6,
+  output logic signed [5:0][7:0] debug_fc_value,
 
   output logic [31:0] m_axi_araddr,
   output logic [5:0] m_axi_arid,
@@ -149,14 +150,32 @@ module gestureflow_hp0_gap_fc (
     sign_extend_int8 = {{24{value[7]}}, value};
   endfunction
 
+  // Keep the FC MAC product width and signedness explicit. This avoids
+  // tool-dependent sizing of a packed-array element multiplication before it
+  // joins the INT32 accumulator expression.
+  function automatic logic signed [31:0] int8_product(
+    input logic signed [7:0] left,
+    input logic signed [7:0] right
+  );
+    logic signed [15:0] product;
+    begin
+      product = left * right;
+      int8_product = {{16{product[15]}}, product};
+    end
+  endfunction
+
   function automatic logic [2:0] argmax6(input logic signed [5:0][7:0] values);
     logic signed [7:0] best_value;
     logic [2:0] best_index;
     begin
-      best_value = values[0]; best_index = 0;
-      for (int index = 1; index < 6; index++) begin
-        if (values[index] > best_value) begin best_value = values[index]; best_index = index[2:0]; end
-      end
+      // Keep the comparison explicitly signed and use strict greater-than so
+      // ties retain the lowest class index, matching software argmax.
+      best_value = $signed(values[0]); best_index = 3'd0;
+      if ($signed(values[1]) > best_value) begin best_value = $signed(values[1]); best_index = 3'd1; end
+      if ($signed(values[2]) > best_value) begin best_value = $signed(values[2]); best_index = 3'd2; end
+      if ($signed(values[3]) > best_value) begin best_value = $signed(values[3]); best_index = 3'd3; end
+      if ($signed(values[4]) > best_value) begin best_value = $signed(values[4]); best_index = 3'd4; end
+      if ($signed(values[5]) > best_value) begin best_value = $signed(values[5]); best_index = 3'd5; end
       argmax6 = best_index;
     end
   endfunction
@@ -165,6 +184,7 @@ module gestureflow_hp0_gap_fc (
   assign busy = (state != IDLE);
   assign debug_gap_sum0 = gap_sum[0];
   assign debug_gap_sum6 = gap_sum[6];
+  assign debug_fc_value = fc_value;
 
   gestureflow_hp0_tensor_loader #(.CHANNELS(CHANNELS)) loader (
     .clk(clk), .rst_n(rst_n), .start(loader_start), .clear(loader_clear),
@@ -228,11 +248,11 @@ module gestureflow_hp0_gap_fc (
             // One four-lane MAC is time-shared across six outputs. It adds
             // only 168 cycles after the DDR/GAP tail, while retaining DSP
             // margin required for reliable XC7Z020 implementation.
-            fc_sum[fc_class] <= fc_sum[fc_class]
-              + gap_value[fc_group*4] * fc_weight[fc_class][fc_group][0]
-              + gap_value[fc_group*4+1] * fc_weight[fc_class][fc_group][1]
-              + gap_value[fc_group*4+2] * fc_weight[fc_class][fc_group][2]
-              + gap_value[fc_group*4+3] * fc_weight[fc_class][fc_group][3];
+            fc_sum[fc_class] <= $signed(fc_sum[fc_class])
+              + int8_product($signed(gap_value[fc_group*4]),   $signed(fc_weight[fc_class][fc_group][0]))
+              + int8_product($signed(gap_value[fc_group*4+1]), $signed(fc_weight[fc_class][fc_group][1]))
+              + int8_product($signed(gap_value[fc_group*4+2]), $signed(fc_weight[fc_class][fc_group][2]))
+              + int8_product($signed(gap_value[fc_group*4+3]), $signed(fc_weight[fc_class][fc_group][3]));
             if (fc_group == 27) begin
               if (fc_class == 5) begin fc_index <= 0; state <= FC_QUANT; end
               else begin fc_class <= fc_class + 1'b1; fc_group <= 0; end

@@ -15,6 +15,7 @@ module tb_gestureflow_hp0_gap_fc_real;
   logic signed [5:0][31:0] fc_bias, fc_multiplier; logic [5:0][5:0] fc_right_shift;
   logic busy, done, fault; logic [31:0] cycles, gap_fnv1a, fc_fnv1a; logic [2:0] predicted_class, fc_values_done; logic [6:0] gap_values_done;
   logic signed [31:0] debug_gap_sum0, debug_gap_sum6;
+  logic signed [5:0][7:0] debug_fc_value;
   logic [31:0] araddr; logic [5:0] arid; logic [7:0] arlen; logic [2:0] arsize; logic [1:0] arburst; logic arlock; logic [3:0] arcache; logic [2:0] arprot; logic [3:0] arqos, arregion; logic arvalid, arready = 1;
   logic [5:0] rid = 0; logic [63:0] rdata; logic [1:0] rresp = 0; logic rlast, rvalid, rready;
   logic [5:0] response_left; logic [31:0] response_addr;

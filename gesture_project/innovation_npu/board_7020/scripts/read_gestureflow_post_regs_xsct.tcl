@@ -5,7 +5,9 @@ proc select_target_with_recovery {filter description} {
     error "failed to select $description with filter '$filter'"
   }
 }
-connect -url tcp:127.0.0.1:3334
+set hw_server_url "tcp:127.0.0.1:3334"
+if {[info exists ::env(GESTUREFLOW_HW_SERVER_URL)]} { set hw_server_url $::env(GESTUREFLOW_HW_SERVER_URL) }
+connect -url $hw_server_url
 select_target_with_recovery {name =~ "APU*"} {APU target}
 configparams force-mem-access 1
 foreach {name address} {
@@ -22,6 +24,12 @@ foreach {name address} {
   POST_PROGRESS 0x43c0009c
   POST_DEBUG_GAP_SUM0 0x43c000a0
   POST_DEBUG_GAP_SUM6 0x43c000a4
+  POST_DEBUG_FC0 0x43c000a8
+  POST_DEBUG_FC1 0x43c000ac
+  POST_DEBUG_FC2 0x43c000b0
+  POST_DEBUG_FC3 0x43c000b4
+  POST_DEBUG_FC4 0x43c000b8
+  POST_DEBUG_FC5 0x43c000bc
   DMA_STATUS 0x43c00050
 } {
   puts [format {%s = 0x%08X} $name [mrd -value $address]]
