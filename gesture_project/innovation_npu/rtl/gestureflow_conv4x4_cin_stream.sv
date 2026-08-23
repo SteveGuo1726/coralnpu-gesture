@@ -35,7 +35,7 @@ module gestureflow_conv4x4_cin_stream #(
   for (genvar c = 0; c < INPUT_CHANNELS; c++) begin : channel_windows
     gestureflow_line_window #(.IMAGE_WIDTH(IMAGE_WIDTH), .KERNEL_SIZE(4)) line_window (
       .clk(clk), .rst_n(rst_n), .frame_start(frame_start),
-      .frame_width(IMAGE_WIDTH),
+      .frame_width(16'(IMAGE_WIDTH)),
       .pixel_valid(pixel_valid && core_pixel_ready), .pixel_data(pixel_data[c]),
       .pixel_ready(line_pixel_ready[c]),
       .window_ready(1'b1),

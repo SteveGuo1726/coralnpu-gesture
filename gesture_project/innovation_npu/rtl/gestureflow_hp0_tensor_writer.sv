@@ -59,10 +59,17 @@ module gestureflow_hp0_tensor_writer #(
     IDLE, ISSUE_READ, CAPTURE_READ, ISSUE_AW, SEND_W, WAIT_B
   } state_t;
   state_t state;
+  localparam int MAX_BURST_VECTORS = 4;
   logic [VECTOR_ADDR_W-1:0] vector_index;
   logic [31:0] next_addr;
   logic [VECTOR_BYTES*8-1:0] vector_data;
   logic beat_index;
+  logic contiguous_burst;
+  logic [2:0] burst_vectors;
+  logic [3:0] burst_beats;
+  logic [2:0] burst_read_index;
+  logic [3:0] burst_beat_index;
+  logic [VECTOR_BYTES*8-1:0] burst_data [0:MAX_BURST_VECTORS-1];
   logic pool_active;
   logic [1:0] pool_phase;
   logic [31:0] pool_read_address;
@@ -71,6 +78,29 @@ module gestureflow_hp0_tensor_writer #(
   logic [15:0] pool_column_base;
   logic [31:0] effective_stride_bytes, effective_valid_bytes;
   logic [31:0] effective_vector_count, effective_pooled_vector_count;
+
+  function automatic [2:0] choose_burst_vectors(
+    input logic [31:0] remaining_vectors,
+    input logic [11:0] low_addr
+  );
+    integer available;
+    integer until_boundary;
+    begin
+      available = int'(remaining_vectors);
+      until_boundary = (4096 - int'(low_addr)) / VECTOR_BYTES;
+      if (until_boundary == 0) until_boundary = 2048;
+      if (available > MAX_BURST_VECTORS) available = MAX_BURST_VECTORS;
+      if (available > until_boundary) available = until_boundary;
+      choose_burst_vectors = available[2:0];
+    end
+  endfunction
+
+  logic [2:0] candidate_burst_vectors;
+  logic [2:0] initial_burst_vectors;
+  logic [3:0] candidate_burst_beats;
+  logic [3:0] initial_burst_beats;
+  logic [31:0] burst_step_bytes;
+  logic [31:0] vectors_in_transaction;
 
   function automatic logic [VECTOR_BYTES*8-1:0] max4_vectors(
     input logic [VECTOR_BYTES*8-1:0] a, input logic [VECTOR_BYTES*8-1:0] b,
@@ -93,17 +123,29 @@ module gestureflow_hp0_tensor_writer #(
     effective_valid_bytes = valid_vector_bytes == 0 ? 32'(VECTOR_BYTES) : {27'd0, valid_vector_bytes};
     effective_vector_count = vector_count == 0 ? 32'(VECTOR_COUNT) : {18'd0, vector_count};
     effective_pooled_vector_count = effective_vector_count >> 2;
+    candidate_burst_vectors = choose_burst_vectors(
+      effective_vector_count - 32'(vector_index), next_addr[11:0]);
+    initial_burst_vectors = choose_burst_vectors(
+      effective_vector_count, destination_addr[11:0]);
+    candidate_burst_beats = {1'b0, candidate_burst_vectors} << 1;
+    initial_burst_beats = {1'b0, initial_burst_vectors} << 1;
+    // This value is consumed only in the contiguous 16-byte-vector mode.
+    // Keep it as a shift so the burst controller does not infer a multiplier.
+    burst_step_bytes = {25'd0, burst_vectors, 4'b0};
+    vectors_in_transaction = contiguous_burst ? 32'(burst_vectors) : 32'd1;
     // This is intentionally counter based rather than vector_index divided
     // by runtime width. A dynamic divider would be an avoidable LUT/timing
     // hotspot on the 7020 write path.
     pool_read_address = pool_row_base + {16'd0, pool_column_base} +
       (pool_phase[1] ? {16'd0, input_width} : 32'd0) + {31'd0, pool_phase[0]};
     if (pool_active) bank_read_addr = VECTOR_ADDR_W'(pool_read_address);
+    else if (contiguous_burst) bank_read_addr = VECTOR_ADDR_W'(int'(vector_index) + int'(burst_read_index));
     else bank_read_addr = vector_index;
     bank_read_enable = (state == ISSUE_READ);
     m_axi_awaddr = next_addr;
     m_axi_awid = 6'd0;
-    m_axi_awlen = effective_valid_bytes <= 8 ? 8'd0 : 8'd1;
+    m_axi_awlen = contiguous_burst ? (8'(burst_beats) - 8'd1) :
+      (effective_valid_bytes <= 8 ? 8'd0 : 8'd1);
     m_axi_awsize = 3'd3;
     m_axi_awburst = 2'b01;
     m_axi_awlock = 1'b0;
@@ -113,7 +155,11 @@ module gestureflow_hp0_tensor_writer #(
     m_axi_awregion = 4'd0;
     m_axi_awvalid = (state == ISSUE_AW);
     m_axi_wdata = beat_index ? vector_data[127:64] : vector_data[63:0];
-    if (!beat_index) begin
+    if (contiguous_burst) begin
+      if (burst_beat_index[0]) m_axi_wdata = burst_data[burst_beat_index[2:1]][127:64];
+      else m_axi_wdata = burst_data[burst_beat_index[2:1]][63:0];
+      m_axi_wstrb = 8'hff;
+    end else if (!beat_index) begin
       if (effective_valid_bytes >= 8) m_axi_wstrb = 8'hff;
       else m_axi_wstrb = (8'h01 << effective_valid_bytes) - 1'b1;
     end else if (effective_valid_bytes >= 16) begin
@@ -121,7 +167,9 @@ module gestureflow_hp0_tensor_writer #(
     end else begin
       m_axi_wstrb = (8'h01 << (effective_valid_bytes - 8)) - 1'b1;
     end
-    m_axi_wlast = (state == SEND_W) && (beat_index || effective_valid_bytes <= 8);
+    m_axi_wlast = (state == SEND_W) && (contiguous_burst ?
+      (burst_beat_index == burst_beats - 1'b1) :
+      (beat_index || effective_valid_bytes <= 8));
     m_axi_wvalid = (state == SEND_W);
     m_axi_bready = (state == WAIT_B);
   end
@@ -133,6 +181,12 @@ module gestureflow_hp0_tensor_writer #(
       next_addr <= '0;
       vector_data <= '0;
       beat_index <= 1'b0;
+      contiguous_burst <= 1'b0;
+      burst_vectors <= 3'd1;
+      burst_beats <= 4'd2;
+      burst_read_index <= '0;
+      burst_beat_index <= '0;
+      for (int burst = 0; burst < MAX_BURST_VECTORS; burst++) burst_data[burst] <= '0;
       pool_active <= 1'b0;
       pool_phase <= '0;
       pool_data0 <= '0; pool_data1 <= '0; pool_data2 <= '0;
@@ -147,6 +201,11 @@ module gestureflow_hp0_tensor_writer #(
       fault <= 1'b0;
       vector_index <= '0;
       beat_index <= 1'b0;
+      contiguous_burst <= 1'b0;
+      burst_vectors <= 3'd1;
+      burst_beats <= 4'd2;
+      burst_read_index <= '0;
+      burst_beat_index <= '0;
       pool_active <= 1'b0;
       pool_phase <= '0;
       pool_row_base <= '0; pool_column_base <= '0;
@@ -159,6 +218,17 @@ module gestureflow_hp0_tensor_writer #(
           fault <= 1'b0;
           vector_index <= '0;
           beat_index <= 1'b0;
+          contiguous_burst <= !pool_2x2 && (VECTOR_BYTES == 16) &&
+            (effective_stride_bytes == VECTOR_BYTES) &&
+            (effective_valid_bytes == VECTOR_BYTES);
+          burst_vectors <= (!pool_2x2 && (VECTOR_BYTES == 16) &&
+            (effective_stride_bytes == VECTOR_BYTES) &&
+            (effective_valid_bytes == VECTOR_BYTES)) ? initial_burst_vectors : 3'd1;
+          burst_beats <= (!pool_2x2 && (VECTOR_BYTES == 16) &&
+            (effective_stride_bytes == VECTOR_BYTES) &&
+            (effective_valid_bytes == VECTOR_BYTES)) ? initial_burst_beats : 4'd2;
+          burst_read_index <= '0;
+          burst_beat_index <= '0;
           vectors_written <= '0;
           bytes_written <= '0;
           pool_active <= pool_2x2;
@@ -181,7 +251,16 @@ module gestureflow_hp0_tensor_writer #(
           end
         end
         ISSUE_READ: state <= CAPTURE_READ;
-        CAPTURE_READ: if (!pool_active) begin
+        CAPTURE_READ: if (!pool_active && contiguous_burst) begin
+          burst_data[burst_read_index[1:0]] <= bank_read_data;
+          if (burst_read_index == burst_vectors - 1'b1) begin
+            burst_beat_index <= '0;
+            state <= ISSUE_AW;
+          end else begin
+            burst_read_index <= burst_read_index + 1'b1;
+            state <= ISSUE_READ;
+          end
+        end else if (!pool_active) begin
           vector_data <= bank_read_data;
           state <= ISSUE_AW;
         end else begin
@@ -197,7 +276,10 @@ module gestureflow_hp0_tensor_writer #(
           state <= SEND_W;
         end
         SEND_W: if (m_axi_wvalid && m_axi_wready) begin
-          if (!beat_index) begin
+          if (contiguous_burst) begin
+            if (burst_beat_index == burst_beats - 1'b1) state <= WAIT_B;
+            else burst_beat_index <= burst_beat_index + 1'b1;
+          end else if (!beat_index) begin
             if (effective_valid_bytes <= 8) state <= WAIT_B;
             else beat_index <= 1'b1;
           end else begin
@@ -206,15 +288,27 @@ module gestureflow_hp0_tensor_writer #(
         end
         WAIT_B: if (m_axi_bvalid && m_axi_bready) begin
           if ((m_axi_bid != 0) || (m_axi_bresp != 0)) fault <= 1'b1;
-          vectors_written <= vectors_written + 1'b1;
-          bytes_written <= bytes_written + effective_valid_bytes;
-          if (vector_index == VECTOR_ADDR_W'((pool_active ? effective_pooled_vector_count : effective_vector_count) - 1)) begin
+          vectors_written <= vectors_written + VECTOR_ADDR_W'(int'(vectors_in_transaction));
+          bytes_written <= bytes_written + effective_valid_bytes * vectors_in_transaction;
+          if (32'(vector_index) + vectors_in_transaction >=
+              (pool_active ? effective_pooled_vector_count : effective_vector_count)) begin
             done <= 1'b1;
             state <= IDLE;
           end else begin
-            vector_index <= vector_index + 1'b1;
+            vector_index <= VECTOR_ADDR_W'(int'(vector_index) +
+              (contiguous_burst ? int'(burst_vectors) : 1));
             pool_phase <= '0;
-            next_addr <= next_addr + effective_stride_bytes;
+            next_addr <= next_addr + (contiguous_burst ? burst_step_bytes : effective_stride_bytes);
+            if (contiguous_burst) begin
+              burst_vectors <= choose_burst_vectors(
+                effective_vector_count - 32'(vector_index) - 32'(burst_vectors),
+                next_addr[11:0] + burst_step_bytes[11:0]);
+              burst_beats <= {1'b0, choose_burst_vectors(
+                effective_vector_count - 32'(vector_index) - 32'(burst_vectors),
+                next_addr[11:0] + burst_step_bytes[11:0])} << 1;
+              burst_read_index <= '0;
+              burst_beat_index <= '0;
+            end
             if (pool_active) begin
               if (pool_column_base == input_width - 2) begin
                 pool_column_base <= '0;

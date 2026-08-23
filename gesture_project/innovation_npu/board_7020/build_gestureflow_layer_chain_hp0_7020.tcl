@@ -4,7 +4,7 @@ proc package_ip {src_dir project_root} {
   set pack [file join $project_root .tmp_gestureflow_layer_chain_hp0_pack]
   file delete -force $root; file delete -force $pack; file mkdir [file dirname $root]
   create_project -force gestureflow_layer_chain_hp0_pack $pack -part xc7z020clg400-2
-  foreach src {gestureflow_line_delay_bank.sv gestureflow_line_window.sv gestureflow_line_delay_vector_bank.sv gestureflow_line_window_vector.sv gestureflow_same4x4_cin_window.sv gestureflow_weight_bank.sv gestureflow_mac_tile.sv gestureflow_conv4x4_cin_same_stream.sv gestureflow_requant_relu.sv gestureflow_output_bank.sv gestureflow_hp0_rgb_loader.sv gestureflow_hp0_tensor_loader.sv gestureflow_hp0_gap_fc.sv gestureflow_hp0_tensor_writer.sv gestureflow_layer_chain_hp0_axil.sv} {
+  foreach src {gestureflow_line_delay_bank.sv gestureflow_line_window.sv gestureflow_line_delay_vector_bank.sv gestureflow_line_window_vector.sv gestureflow_same4x4_cin_window.sv gestureflow_weight_bank.sv gestureflow_mac_tile.sv gestureflow_conv4x4_cin_same_stream.sv gestureflow_requant_relu.sv gestureflow_output_bank.sv gestureflow_hp0_rgb_loader.sv gestureflow_hp0_tensor_loader.sv gestureflow_hp0_tensor_loader_banked.sv gestureflow_hp0_weight_dma_loader.sv gestureflow_hp0_gap_fc.sv gestureflow_hp0_tensor_writer.sv gestureflow_layer_chain_hp0_axil.sv} {
     set path [file join $src_dir $src]
     if {![file exists $path]} { error "Missing GestureFlow source: $path" }
     add_files -norecurse $path; set_property file_type SystemVerilog [get_files $path]
@@ -14,8 +14,8 @@ proc package_ip {src_dir project_root} {
   ipx::package_project -root_dir $root -vendor user.org -library user -taxonomy /UserIP -import_files -force
   set core [ipx::current_core]
   set_property name gestureflow_layer_chain_hp0_axil $core
-  set_property display_name {GestureFlow reusable layer-chain HP0 baseline} $core
-  set_property description {Project-local 7020 MAC core for RGB, 16-channel and 40-channel body-layer DDR handoff.} $core
+  set_property display_name {GestureFlow descriptor-driven layer-chain HP0} $core
+  set_property description {Project-local 7020 MAC core with descriptor doorbell replay; not Google CoralNPU RTL.} $core
   ipx::save_core $core
   close_project; file delete -force $pack
   return [file dirname $root]
@@ -65,8 +65,9 @@ reset_run synth_1; reset_run impl_1
 launch_runs impl_1 -to_step write_bitstream -jobs 8; wait_on_run impl_1
 if {[get_property PROGRESS [get_runs impl_1]] ne "100%"} { error "Implementation failed: [get_property STATUS [get_runs impl_1]]" }
 open_run [get_runs impl_1]
-report_utilization -hierarchical -file [file join $log_dir gestureflow_layer_chain_hp0_7020_utilization_impl.rpt]
-report_timing_summary -file [file join $log_dir gestureflow_layer_chain_hp0_7020_timing_impl.rpt]
-write_hw_platform -fixed -include_bit -force -file [file join $log_dir gestureflow_layer_chain_hp0_7020.xsa]
-puts "GESTUREFLOW_LAYER_CHAIN_HP0_7020_BITSTREAM_PASS project=$project_root"
+report_utilization -hierarchical -file [file join $log_dir gestureflow_layer_chain_descriptor_hp0_7020_utilization_impl.rpt]
+report_timing_summary -file [file join $log_dir gestureflow_layer_chain_descriptor_hp0_7020_timing_impl.rpt]
+write_hw_platform -fixed -include_bit -force -file [file join $log_dir gestureflow_layer_chain_descriptor_hp0_7020.xsa]
+file copy -force [file join $project_root axi_gpio.runs impl_1 system_wrapper.bit] [file join $log_dir gestureflow_layer_chain_descriptor_hp0_7020.bit]
+puts "GESTUREFLOW_LAYER_CHAIN_DESCRIPTOR_HP0_7020_BITSTREAM_PASS project=$project_root"
 close_project; exit

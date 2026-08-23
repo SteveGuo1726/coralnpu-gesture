@@ -77,6 +77,24 @@ module gestureflow_layer_chain_hp0_axil #(
     POST_DEBUG_GAP_SUM0=12'h0a0, POST_DEBUG_GAP_SUM6=12'h0a4,
     POST_DEBUG_FC0=12'h0a8, POST_DEBUG_FC1=12'h0ac, POST_DEBUG_FC2=12'h0b0,
     POST_DEBUG_FC3=12'h0b4, POST_DEBUG_FC4=12'h0b8, POST_DEBUG_FC5=12'h0bc;
+  // PROJECT_LOCAL_SELF_RESEARCH_NOT_GOOGLE_OFFICIAL
+  // Weight residency ABI.  The legacy AXI-Lite programming path remains
+  // valid when WEIGHT_KEY is never written; keyed mode requires a commit
+  // before CONTROL.start and exposes measurable hit/miss/write statistics.
+  localparam logic [11:0] WEIGHT_KEY=12'h0c0, WEIGHT_RESIDENT_KEY=12'h0c4,
+    WEIGHT_WRITE_COUNT=12'h0c8, WEIGHT_HIT_COUNT=12'h0cc,
+    WEIGHT_BYTES=12'h0d0, WEIGHT_STATUS=12'h0d4, WEIGHT_COMMIT=12'h0d8,
+    WEIGHT_MISS_COUNT=12'h0dc, WEIGHT_DMA_SOURCE=12'h0e0,
+    WEIGHT_DMA_BYTES=12'h0e4, WEIGHT_DMA_CFG=12'h0e8,
+    WEIGHT_DMA_CONTROL=12'h0ec, WEIGHT_DMA_STATUS=12'h0f0,
+    WEIGHT_DMA_BYTES_READ=12'h0f4, WEIGHT_DMA_WRITE_COUNT=12'h0f8,
+    DESC_SELECT=12'h100, DESC_MODE=12'h104, DESC_JOB_SHAPE=12'h108,
+    DESC_DMA_SOURCE=12'h10c, DESC_DMA_BYTES=12'h110, DESC_DMA_PIXELS=12'h114,
+    DESC_STORE_DESTINATION=12'h118, DESC_STORE_BYTES=12'h11c,
+    DESC_STORE_CONTROL=12'h120, DESC_STORE_STRIDE=12'h124,
+    DESC_STORE_VALID_BYTES=12'h128, DESC_QCFG=12'h12c,
+    DESC_LANE_MASK=12'h130, DESC_COUNT=12'h134, DESC_CONTROL=12'h138,
+    DESC_STATUS=12'h13c, DESC_ISSUED=12'h140, DESC_COMPLETED=12'h144;
   localparam logic [31:0] FNV_OFFSET=32'h811c9dc5, FNV_PRIME=32'h01000193;
   // The physical 16x4 DSP tile remains fixed. Mode 3 only widens the
   // ingress/window storage so 20 Cin groups accumulate locally before one
@@ -96,10 +114,24 @@ module gestureflow_layer_chain_hp0_axil #(
   logic [31:0] store_stride_bytes;
   logic [4:0] store_valid_bytes;
   logic [31:0] layer_cycles;
-  logic weight_write_valid;
+  logic weight_write_valid, ps_weight_write_valid, weight_dma_write_valid;
+  logic [3:0] ps_weight_write_oc, ps_weight_write_tap;
+  logic [4:0] ps_weight_write_ic_group;
+  logic signed [3:0][7:0] ps_weight_write_data;
+  logic [31:0] weight_key, weight_resident_key, weight_write_count;
+  logic [31:0] weight_hit_count, weight_miss_count, weight_bytes;
+  logic weight_keyed_mode, weight_resident_valid, weight_key_hit;
   logic [3:0] weight_write_oc, weight_write_tap, bias_index, requant_index;
   logic [4:0] weight_write_ic_group;
   logic signed [3:0][7:0] weight_write_data;
+  logic weight_dma_start, weight_dma_clear, weight_dma_busy, weight_dma_done, weight_dma_fault;
+  logic [31:0] weight_dma_source, weight_dma_bytes, weight_dma_bytes_read, weight_dma_write_count;
+  logic [4:0] weight_dma_taps, weight_dma_groups;
+  logic [31:0] weight_dma_araddr; logic [5:0] weight_dma_arid; logic [7:0] weight_dma_arlen;
+  logic [2:0] weight_dma_arsize; logic [1:0] weight_dma_arburst; logic weight_dma_arlock, weight_dma_arvalid, weight_dma_rready;
+  logic [3:0] weight_dma_arcache, weight_dma_arqos, weight_dma_arregion; logic [2:0] weight_dma_arprot;
+  logic [3:0] weight_dma_oc, weight_dma_tap; logic [4:0] weight_dma_ic_group;
+  logic signed [3:0][7:0] weight_dma_data;
   logic signed [15:0][31:0] bias, requant_multiplier;
   logic [15:0][5:0] requant_right_shift;
   logic [15:0] output_lane_enable;
@@ -148,10 +180,36 @@ module gestureflow_layer_chain_hp0_axil #(
   logic [31:0] hash_value, completed_hash; logic hash_active, last_output_seen; logic [13:0] output_vectors;
   logic store_busy, store_done, store_fault; logic [13:0] store_vectors_written;
   logic [31:0] store_bytes_written; logic [13:0] output_read_addr; logic output_read_enable;
+  // PROJECT_LOCAL_SELF_RESEARCH_NOT_GOOGLE_OFFICIAL
+  // Four compact execution descriptors let PS submit a layer/tile batch with
+  // one doorbell. They deliberately reuse the existing resident weight bank;
+  // weight DMA remains a separate model-load operation until bias/requant
+  // metadata is added to the model descriptor format.
+  localparam int DESC_DEPTH = 4;
+  typedef enum logic [2:0] {DESC_IDLE, DESC_LOAD, DESC_START, DESC_WAIT} desc_state_t;
+  desc_state_t desc_state;
+  logic descriptor_active;
+  logic [1:0] desc_select, desc_read_index;
+  logic [2:0] desc_count;
+  logic [31:0] desc_issued, desc_completed;
+  logic [2:0] desc_mode_mem [0:DESC_DEPTH-1];
+  logic [15:0] desc_width_mem [0:DESC_DEPTH-1], desc_height_mem [0:DESC_DEPTH-1];
+  logic [31:0] desc_dma_source_mem [0:DESC_DEPTH-1], desc_dma_bytes_mem [0:DESC_DEPTH-1];
+  logic [13:0] desc_dma_pixels_mem [0:DESC_DEPTH-1];
+  logic [31:0] desc_store_destination_mem [0:DESC_DEPTH-1], desc_store_bytes_mem [0:DESC_DEPTH-1];
+  logic desc_store_enable_mem [0:DESC_DEPTH-1], desc_store_pool_mem [0:DESC_DEPTH-1];
+  logic [31:0] desc_store_stride_mem [0:DESC_DEPTH-1];
+  logic [4:0] desc_store_valid_mem [0:DESC_DEPTH-1];
+  logic [31:0] desc_qcfg_mem [0:DESC_DEPTH-1];
+  logic [15:0] desc_lane_mask_mem [0:DESC_DEPTH-1];
+  logic backend_complete, backend_fault;
 
   function automatic logic [31:0] fnv_step(input logic [31:0] current, input logic [7:0] byte_value);
     fnv_step = (current ^ {24'd0, byte_value}) * FNV_PRIME;
   endfunction
+  assign backend_complete = (store_done && store_enable && running) ||
+                            (post_done && running && layer_mode == 4);
+  assign backend_fault = protocol_error || quant_fault || dma_fault || store_fault;
 
   assign dma_busy = (layer_mode == 4) ? post_busy : (layer_mode == 3) ? tensor80_busy : (layer_mode == 2 ? tensor40_busy : (layer_mode == 1 ? tensor_busy : rgb_busy));
   assign dma_done = (layer_mode == 4) ? post_done : (layer_mode == 3) ? tensor80_done : (layer_mode == 2 ? tensor40_done : (layer_mode == 1 ? tensor_done : rgb_done));
@@ -164,6 +222,20 @@ module gestureflow_layer_chain_hp0_axil #(
   assign tensor40_pixel_ready = (layer_mode == 2) ? pixel_ready : 1'b0;
   assign tensor80_pixel_ready = (layer_mode == 3) ? pixel_ready : 1'b0;
   assign rgb_pixel_ready = (layer_mode == 0) ? pixel_ready : 1'b0;
+  assign weight_write_valid = ps_weight_write_valid | weight_dma_write_valid;
+  always_comb begin
+    if (weight_dma_write_valid) begin
+      weight_write_oc = weight_dma_oc;
+      weight_write_tap = weight_dma_tap;
+      weight_write_ic_group = weight_dma_ic_group;
+      weight_write_data = weight_dma_data;
+    end else begin
+      weight_write_oc = ps_weight_write_oc;
+      weight_write_tap = ps_weight_write_tap;
+      weight_write_ic_group = ps_weight_write_ic_group;
+      weight_write_data = ps_weight_write_data;
+    end
+  end
   always_comb begin
     selected_pixel = '0;
     if (layer_mode == 3) begin
@@ -178,18 +250,18 @@ module gestureflow_layer_chain_hp0_axil #(
       selected_pixel[0] = rgb_pixel[0]; selected_pixel[1] = rgb_pixel[1]; selected_pixel[2] = rgb_pixel[2];
       for (int lane = 3; lane < MAX_INPUT_CHANNELS; lane++) selected_pixel[lane] = input_zero_point[0];
     end
-    m_axi_araddr = (layer_mode == 4) ? post_araddr : (layer_mode == 3) ? tensor80_araddr : (layer_mode == 2 ? tensor40_araddr : (layer_mode == 1 ? tensor_araddr : rgb_araddr));
-    m_axi_arid = (layer_mode == 4) ? post_arid : (layer_mode == 3) ? tensor80_arid : (layer_mode == 2 ? tensor40_arid : (layer_mode == 1 ? tensor_arid : rgb_arid));
-    m_axi_arlen = (layer_mode == 4) ? post_arlen : (layer_mode == 3) ? tensor80_arlen : (layer_mode == 2 ? tensor40_arlen : (layer_mode == 1 ? tensor_arlen : rgb_arlen));
-    m_axi_arsize = (layer_mode == 4) ? post_arsize : (layer_mode == 3) ? tensor80_arsize : (layer_mode == 2 ? tensor40_arsize : (layer_mode == 1 ? tensor_arsize : rgb_arsize));
-    m_axi_arburst = (layer_mode == 4) ? post_arburst : (layer_mode == 3) ? tensor80_arburst : (layer_mode == 2 ? tensor40_arburst : (layer_mode == 1 ? tensor_arburst : rgb_arburst));
-    m_axi_arlock = (layer_mode == 4) ? post_arlock : (layer_mode == 3) ? tensor80_arlock : (layer_mode == 2 ? tensor40_arlock : (layer_mode == 1 ? tensor_arlock : rgb_arlock));
-    m_axi_arcache = (layer_mode == 4) ? post_arcache : (layer_mode == 3) ? tensor80_arcache : (layer_mode == 2 ? tensor40_arcache : (layer_mode == 1 ? tensor_arcache : rgb_arcache));
-    m_axi_arprot = (layer_mode == 4) ? post_arprot : (layer_mode == 3) ? tensor80_arprot : (layer_mode == 2 ? tensor40_arprot : (layer_mode == 1 ? tensor_arprot : rgb_arprot));
-    m_axi_arqos = (layer_mode == 4) ? post_arqos : (layer_mode == 3) ? tensor80_arqos : (layer_mode == 2 ? tensor40_arqos : (layer_mode == 1 ? tensor_arqos : rgb_arqos));
-    m_axi_arregion = (layer_mode == 4) ? post_arregion : (layer_mode == 3) ? tensor80_arregion : (layer_mode == 2 ? tensor40_arregion : (layer_mode == 1 ? tensor_arregion : rgb_arregion));
-    m_axi_arvalid = (layer_mode == 4) ? post_arvalid : (layer_mode == 3) ? tensor80_arvalid : (layer_mode == 2 ? tensor40_arvalid : (layer_mode == 1 ? tensor_arvalid : rgb_arvalid));
-    m_axi_rready = (layer_mode == 4) ? post_rready : (layer_mode == 3) ? tensor80_rready : (layer_mode == 2 ? tensor40_rready : (layer_mode == 1 ? tensor_rready : rgb_rready));
+    m_axi_araddr = weight_dma_busy ? weight_dma_araddr : ((layer_mode == 4) ? post_araddr : (layer_mode == 3) ? tensor80_araddr : (layer_mode == 2 ? tensor40_araddr : (layer_mode == 1 ? tensor_araddr : rgb_araddr)));
+    m_axi_arid = weight_dma_busy ? weight_dma_arid : ((layer_mode == 4) ? post_arid : (layer_mode == 3) ? tensor80_arid : (layer_mode == 2 ? tensor40_arid : (layer_mode == 1 ? tensor_arid : rgb_arid)));
+    m_axi_arlen = weight_dma_busy ? weight_dma_arlen : ((layer_mode == 4) ? post_arlen : (layer_mode == 3) ? tensor80_arlen : (layer_mode == 2 ? tensor40_arlen : (layer_mode == 1 ? tensor_arlen : rgb_arlen)));
+    m_axi_arsize = weight_dma_busy ? weight_dma_arsize : ((layer_mode == 4) ? post_arsize : (layer_mode == 3) ? tensor80_arsize : (layer_mode == 2 ? tensor40_arsize : (layer_mode == 1 ? tensor_arsize : rgb_arsize)));
+    m_axi_arburst = weight_dma_busy ? weight_dma_arburst : ((layer_mode == 4) ? post_arburst : (layer_mode == 3) ? tensor80_arburst : (layer_mode == 2 ? tensor40_arburst : (layer_mode == 1 ? tensor_arburst : rgb_arburst)));
+    m_axi_arlock = weight_dma_busy ? weight_dma_arlock : ((layer_mode == 4) ? post_arlock : (layer_mode == 3) ? tensor80_arlock : (layer_mode == 2 ? tensor40_arlock : (layer_mode == 1 ? tensor_arlock : rgb_arlock)));
+    m_axi_arcache = weight_dma_busy ? weight_dma_arcache : ((layer_mode == 4) ? post_arcache : (layer_mode == 3) ? tensor80_arcache : (layer_mode == 2 ? tensor40_arcache : (layer_mode == 1 ? tensor_arcache : rgb_arcache)));
+    m_axi_arprot = weight_dma_busy ? weight_dma_arprot : ((layer_mode == 4) ? post_arprot : (layer_mode == 3) ? tensor80_arprot : (layer_mode == 2 ? tensor40_arprot : (layer_mode == 1 ? tensor_arprot : rgb_arprot)));
+    m_axi_arqos = weight_dma_busy ? weight_dma_arqos : ((layer_mode == 4) ? post_arqos : (layer_mode == 3) ? tensor80_arqos : (layer_mode == 2 ? tensor40_arqos : (layer_mode == 1 ? tensor_arqos : rgb_arqos)));
+    m_axi_arregion = weight_dma_busy ? weight_dma_arregion : ((layer_mode == 4) ? post_arregion : (layer_mode == 3) ? tensor80_arregion : (layer_mode == 2 ? tensor40_arregion : (layer_mode == 1 ? tensor_arregion : rgb_arregion)));
+    m_axi_arvalid = weight_dma_busy ? weight_dma_arvalid : ((layer_mode == 4) ? post_arvalid : (layer_mode == 3) ? tensor80_arvalid : (layer_mode == 2 ? tensor40_arvalid : (layer_mode == 1 ? tensor_arvalid : rgb_arvalid)));
+    m_axi_rready = weight_dma_busy ? weight_dma_rready : ((layer_mode == 4) ? post_rready : (layer_mode == 3) ? tensor80_rready : (layer_mode == 2 ? tensor40_rready : (layer_mode == 1 ? tensor_rready : rgb_rready)));
   end
   assign pixel_data = selected_pixel;
   assign output_ready = quant_ready;
@@ -206,7 +278,7 @@ module gestureflow_layer_chain_hp0_axil #(
     .m_axi_rid(m_axi_rid), .m_axi_rdata(m_axi_rdata), .m_axi_rresp(m_axi_rresp), .m_axi_rlast(m_axi_rlast),
     .m_axi_rvalid(m_axi_rvalid), .m_axi_rready(rgb_rready)
   );
-  gestureflow_hp0_tensor_loader #(.CHANNELS(16)) tensor_loader (
+  gestureflow_hp0_tensor_loader_banked #(.CHANNELS(16)) tensor_loader (
     .clk(aclk), .rst_n(aresetn), .start(dma_start && (layer_mode == 1)), .clear(dma_clear),
     .source_addr(dma_source_addr), .byte_count(dma_bytes), .pixel_count(dma_pixels),
     .busy(tensor_busy), .done(tensor_done), .fault(tensor_fault), .frame_start(tensor_frame_start),
@@ -218,7 +290,7 @@ module gestureflow_layer_chain_hp0_axil #(
     .m_axi_rid(m_axi_rid), .m_axi_rdata(m_axi_rdata), .m_axi_rresp(m_axi_rresp), .m_axi_rlast(m_axi_rlast),
     .m_axi_rvalid(m_axi_rvalid), .m_axi_rready(tensor_rready)
   );
-  gestureflow_hp0_tensor_loader #(.CHANNELS(40)) tensor40_loader (
+  gestureflow_hp0_tensor_loader_banked #(.CHANNELS(40)) tensor40_loader (
     .clk(aclk), .rst_n(aresetn), .start(dma_start && (layer_mode == 2)), .clear(dma_clear),
     .source_addr(dma_source_addr), .byte_count(dma_bytes), .pixel_count(dma_pixels),
     .busy(tensor40_busy), .done(tensor40_done), .fault(tensor40_fault), .frame_start(tensor40_frame_start),
@@ -230,7 +302,7 @@ module gestureflow_layer_chain_hp0_axil #(
     .m_axi_rid(m_axi_rid), .m_axi_rdata(m_axi_rdata), .m_axi_rresp(m_axi_rresp), .m_axi_rlast(m_axi_rlast),
     .m_axi_rvalid(m_axi_rvalid), .m_axi_rready(tensor40_rready)
   );
-  gestureflow_hp0_tensor_loader #(.CHANNELS(80)) tensor80_loader (
+  gestureflow_hp0_tensor_loader_banked #(.CHANNELS(80)) tensor80_loader (
     .clk(aclk), .rst_n(aresetn), .start(dma_start && (layer_mode == 3)), .clear(dma_clear),
     .source_addr(dma_source_addr), .byte_count(dma_bytes), .pixel_count(dma_pixels),
     .busy(tensor80_busy), .done(tensor80_done), .fault(tensor80_fault), .frame_start(tensor80_frame_start),
@@ -241,6 +313,27 @@ module gestureflow_layer_chain_hp0_axil #(
     .m_axi_arqos(tensor80_arqos), .m_axi_arregion(tensor80_arregion), .m_axi_arvalid(tensor80_arvalid), .m_axi_arready(m_axi_arready),
     .m_axi_rid(m_axi_rid), .m_axi_rdata(m_axi_rdata), .m_axi_rresp(m_axi_rresp), .m_axi_rlast(m_axi_rlast),
     .m_axi_rvalid(m_axi_rvalid), .m_axi_rready(tensor80_rready)
+  );
+  // PROJECT_LOCAL_SELF_RESEARCH_NOT_GOOGLE_OFFICIAL
+  // Descriptor weight path.  It is idle in the legacy AXI-Lite mode and is
+  // selected on the shared HP0 read channel only while this loader owns a
+  // burst.  The MAC bank sees the same write protocol in either mode.
+  gestureflow_hp0_weight_dma_loader #(.FIFO_BEATS(16), .MAX_TAPS(16), .MAX_GROUPS(20)) weight_dma_loader (
+    .clk(aclk), .rst_n(aresetn), .start(weight_dma_start), .clear(weight_dma_clear),
+    .source_addr(weight_dma_source), .byte_count(weight_dma_bytes),
+    .taps_per_output(weight_dma_taps), .groups_per_tap(weight_dma_groups),
+    .busy(weight_dma_busy), .done(weight_dma_done), .fault(weight_dma_fault),
+    .bytes_read(weight_dma_bytes_read), .write_count(weight_dma_write_count),
+    .weight_write_valid(weight_dma_write_valid), .weight_write_oc(weight_dma_oc),
+    .weight_write_tap(weight_dma_tap), .weight_write_ic_group(weight_dma_ic_group),
+    .weight_write_data(weight_dma_data), .m_axi_araddr(weight_dma_araddr),
+    .m_axi_arid(weight_dma_arid), .m_axi_arlen(weight_dma_arlen), .m_axi_arsize(weight_dma_arsize),
+    .m_axi_arburst(weight_dma_arburst), .m_axi_arlock(weight_dma_arlock),
+    .m_axi_arcache(weight_dma_arcache), .m_axi_arprot(weight_dma_arprot),
+    .m_axi_arqos(weight_dma_arqos), .m_axi_arregion(weight_dma_arregion),
+    .m_axi_arvalid(weight_dma_arvalid), .m_axi_arready(m_axi_arready),
+    .m_axi_rid(m_axi_rid), .m_axi_rdata(m_axi_rdata), .m_axi_rresp(m_axi_rresp),
+    .m_axi_rlast(m_axi_rlast), .m_axi_rvalid(m_axi_rvalid), .m_axi_rready(weight_dma_rready)
   );
   gestureflow_hp0_gap_fc postprocess (
     .clk(aclk), .rst_n(aresetn), .start(post_start), .clear(post_clear),
@@ -264,7 +357,10 @@ module gestureflow_layer_chain_hp0_axil #(
   );
   gestureflow_conv4x4_cin_same_stream #(.IMAGE_WIDTH(IMAGE_WIDTH), .IMAGE_HEIGHT(IMAGE_HEIGHT), .INPUT_CHANNELS(MAX_INPUT_CHANNELS), .OUT_LANES(OUT_LANES)) stream (
     .clk(aclk), .rst_n(aresetn), .image_width(job_width), .image_height(job_height), .frame_start(frame_start), .pixel_valid(pixel_valid), .pixel_ready(pixel_ready),
-    .pixel_data(pixel_data), .input_zero_point(input_zero_point), .input_group_count(layer_mode == 3 ? 5'd20 : (layer_mode == 2 ? 5'd10 : 5'd4)),
+    // RGB has 3 active input channels and therefore needs one 4-lane group;
+    // the fourth lane is masked by input_lane_enable.  Body layers use the
+    // full 16/40/80-channel group counts below.  PROJECT_LOCAL_SELF_RESEARCH.
+    .pixel_data(pixel_data), .input_zero_point(input_zero_point), .input_group_count(layer_mode == 3 ? 5'd20 : (layer_mode == 2 ? 5'd10 : (layer_mode == 1 ? 5'd4 : 5'd1))),
     .input_lane_enable(layer_mode == 0 ? 4'b0111 : 4'hf),
     .weight_write_valid(weight_write_valid), .weight_write_oc(weight_write_oc), .weight_write_tap(weight_write_tap),
     .weight_write_ic_group(weight_write_ic_group), .weight_write_data(weight_write_data), .bias(bias),
@@ -319,16 +415,84 @@ module gestureflow_layer_chain_hp0_axil #(
       dma_bytes<=0; dma_pixels<=0; store_destination<=0; store_bytes<=0; layer_cycles<=0;
       job_width<=16'(IMAGE_WIDTH); job_height<=16'(IMAGE_HEIGHT);
       store_stride_bytes<=0; store_valid_bytes<=0;
-      weight_write_valid<=0; weight_write_oc<=0; weight_write_tap<=0; weight_write_ic_group<=0; weight_write_data<=0;
+      ps_weight_write_valid<=0; ps_weight_write_oc<=0; ps_weight_write_tap<=0; ps_weight_write_ic_group<=0; ps_weight_write_data<=0;
+      weight_dma_start<=0; weight_dma_clear<=0; weight_dma_source<=0; weight_dma_bytes<=0; weight_dma_taps<=0; weight_dma_groups<=0;
       bias<='0; bias_index<=0; input_zero_point<='0; output_zero_point<=0; output_lane_enable<=16'hffff;
       requant_enable<=0; requant_relu_enable<=0; requant_index<=0; requant_multiplier<='0; requant_right_shift<='0;
       post_gap_multiplier<=0; post_gap_right_shift<=0; post_gap_input_zero_point<=0; post_gap_output_zero_point<=0; post_fc_output_zero_point<=0;
       hash_active<=0; last_output_seen<=0; hash_vector<='0; hash_byte_index<=0; hash_value<=FNV_OFFSET;
       completed_hash<=FNV_OFFSET; output_vectors<=0;
+      weight_key<=0; weight_resident_key<=0; weight_write_count<=0; weight_hit_count<=0;
+      weight_miss_count<=0; weight_bytes<=0; weight_keyed_mode<=0; weight_resident_valid<=0; weight_key_hit<=0;
+      desc_state<=DESC_IDLE; descriptor_active<=0; desc_select<=0; desc_read_index<=0; desc_count<=0;
+      desc_issued<=0; desc_completed<=0;
+      for (int desc_slot=0; desc_slot<DESC_DEPTH; desc_slot++) begin
+        desc_mode_mem[desc_slot]<=0; desc_width_mem[desc_slot]<=0; desc_height_mem[desc_slot]<=0;
+        desc_dma_source_mem[desc_slot]<=0; desc_dma_bytes_mem[desc_slot]<=0; desc_dma_pixels_mem[desc_slot]<=0;
+        desc_store_destination_mem[desc_slot]<=0; desc_store_bytes_mem[desc_slot]<=0;
+        desc_store_enable_mem[desc_slot]<=0; desc_store_pool_mem[desc_slot]<=0;
+        desc_store_stride_mem[desc_slot]<=0; desc_store_valid_mem[desc_slot]<=0;
+        desc_qcfg_mem[desc_slot]<=0; desc_lane_mask_mem[desc_slot]<=0;
+      end
     end else begin
-      weight_write_valid<=0; dma_start<=0; dma_clear<=0; post_start<=0; post_clear<=0; store_start<=0; store_clear<=0;
+      ps_weight_write_valid<=0; weight_dma_start<=0; weight_dma_clear<=0; dma_start<=0; dma_clear<=0; post_start<=0; post_clear<=0; store_start<=0; store_clear<=0;
+      // Descriptor mode owns the existing backend only after CONTROL.doorbell.
+      // LOAD clears the reusable pipeline, START launches it with the stable
+      // descriptor registers from the prior cycle, and WAIT advances only on
+      // a real writer/postprocess completion.
+      case (desc_state)
+        DESC_LOAD: begin
+          layer_mode <= desc_mode_mem[desc_read_index];
+          job_width <= desc_width_mem[desc_read_index];
+          job_height <= desc_height_mem[desc_read_index];
+          dma_source_addr <= desc_dma_source_mem[desc_read_index];
+          dma_bytes <= desc_dma_bytes_mem[desc_read_index];
+          dma_pixels <= desc_dma_pixels_mem[desc_read_index];
+          store_destination <= desc_store_destination_mem[desc_read_index];
+          store_bytes <= desc_store_bytes_mem[desc_read_index];
+          store_enable <= desc_store_enable_mem[desc_read_index];
+          store_pool_2x2 <= desc_store_pool_mem[desc_read_index];
+          store_stride_bytes <= desc_store_stride_mem[desc_read_index];
+          store_valid_bytes <= desc_store_valid_mem[desc_read_index];
+          input_zero_point <= {MAX_INPUT_CHANNELS{desc_qcfg_mem[desc_read_index][7:0]}};
+          output_zero_point <= desc_qcfg_mem[desc_read_index][15:8];
+          requant_enable <= desc_qcfg_mem[desc_read_index][16];
+          requant_relu_enable <= desc_qcfg_mem[desc_read_index][17];
+          output_lane_enable <= desc_lane_mask_mem[desc_read_index];
+          dma_clear <= 1'b1; post_clear <= 1'b1; store_clear <= 1'b1;
+          hash_active <= 1'b0; last_output_seen <= 1'b0; hash_value <= FNV_OFFSET;
+          completed_hash <= FNV_OFFSET; layer_cycles <= 0; output_vectors <= 0; done <= 0;
+          desc_state <= DESC_START;
+        end
+        DESC_START: begin
+          if (weight_dma_busy || (weight_keyed_mode && !weight_resident_valid) ||
+              ((layer_mode != 4) && !store_enable)) begin
+            fault <= 1'b1; descriptor_active <= 1'b0; desc_state <= DESC_IDLE;
+          end else begin
+            running <= 1'b1; done <= 1'b0; fault <= 1'b0;
+            if (layer_mode == 4) post_start <= 1'b1; else dma_start <= 1'b1;
+            desc_issued <= desc_issued + 1'b1;
+            desc_state <= DESC_WAIT;
+          end
+        end
+        DESC_WAIT: begin
+          if (backend_fault) begin
+            descriptor_active <= 1'b0; desc_state <= DESC_IDLE;
+          end else if (backend_complete) begin
+            desc_completed <= desc_completed + 1'b1;
+            if (desc_read_index + 1'b1 < desc_count) begin
+              desc_read_index <= desc_read_index + 1'b1;
+              desc_state <= DESC_LOAD;
+            end else begin
+              descriptor_active <= 1'b0;
+              desc_state <= DESC_IDLE;
+            end
+          end
+        end
+        default: begin end
+      endcase
       if (running) layer_cycles <= layer_cycles + 1'b1;
-      if (protocol_error || quant_fault || dma_fault || store_fault) fault <= 1'b1;
+      if (protocol_error || quant_fault || dma_fault || store_fault || weight_dma_fault) fault <= 1'b1;
       if (hash_active) begin
         hash_value <= fnv_step(hash_value, hash_vector[hash_byte_index*8 +: 8]);
         if (hash_byte_index == 15) begin
@@ -348,9 +512,14 @@ module gestureflow_layer_chain_hp0_axil #(
       if (aw_seen && w_seen && !s_axi_bvalid) begin
         case (awaddr[11:0])
           CONTROL: begin
-            if (wdata[0]) begin running<=0; done<=0; fault<=0; dma_clear<=1; post_clear<=1; store_clear<=1; hash_active<=0; last_output_seen<=0; hash_value<=FNV_OFFSET; completed_hash<=FNV_OFFSET; layer_cycles<=0; output_vectors<=0; end
+            if (wdata[0]) begin
+              running<=0; done<=0; fault<=0; dma_clear<=1; post_clear<=1; store_clear<=1;
+              hash_active<=0; last_output_seen<=0; hash_value<=FNV_OFFSET; completed_hash<=FNV_OFFSET;
+              layer_cycles<=0; output_vectors<=0; descriptor_active<=0; desc_state<=DESC_IDLE;
+            end
             if (wdata[1]) begin
-              if (running || dma_busy || store_busy || hash_active) fault<=1;
+              if (descriptor_active || running || dma_busy || store_busy || hash_active) fault<=1;
+              else if (weight_keyed_mode && !weight_resident_valid) fault<=1;
               else begin running<=1; done<=0; fault<=0; if (layer_mode == 4) post_start<=1; else dma_start<=1; hash_active<=0; last_output_seen<=0; hash_value<=FNV_OFFSET; completed_hash<=FNV_OFFSET; layer_cycles<=0; output_vectors<=0; end
             end
           end
@@ -360,14 +529,37 @@ module gestureflow_layer_chain_hp0_axil #(
           OUTPUT_LANE_MASK: if (running || dma_busy || store_busy) fault<=1; else output_lane_enable<=wdata[15:0];
           STORE_STRIDE: if (running || store_busy) fault<=1; else store_stride_bytes<=wdata;
           STORE_VALID_BYTES: if (running || store_busy) fault<=1; else store_valid_bytes<=wdata[4:0];
-          QCFG: begin input_zero_point<={MAX_INPUT_CHANNELS{wdata[7:0]}}; output_zero_point<=wdata[15:8]; requant_enable<=wdata[16]; requant_relu_enable<=wdata[17]; end
-          WCTRL: begin weight_write_oc<=wdata[3:0]; weight_write_tap<=wdata[7:4]; weight_write_ic_group<=wdata[12:8]; end
-          WDATA: if (running || dma_busy) fault<=1; else weight_write_data<=wdata;
-          BIDX: bias_index<=wdata[3:0];
-          BDATA: if (running) fault<=1; else bias[bias_index]<=wdata;
-          RQIDX: requant_index<=wdata[3:0];
-          RQMULT: if (running) fault<=1; else requant_multiplier[requant_index]<=wdata;
-          RQSHIFT: if (running) fault<=1; else requant_right_shift[requant_index]<=wdata[5:0];
+          QCFG: if (running || dma_busy) fault<=1; else begin input_zero_point<={MAX_INPUT_CHANNELS{wdata[7:0]}}; output_zero_point<=wdata[15:8]; requant_enable<=wdata[16]; requant_relu_enable<=wdata[17]; end
+          WEIGHT_KEY: if (running || dma_busy || store_busy) fault<=1; else begin
+            weight_key<=wdata; weight_keyed_mode<=1;
+            weight_key_hit<=weight_resident_valid && (weight_resident_key == wdata);
+            if (weight_resident_valid && (weight_resident_key == wdata)) begin
+              weight_hit_count<=weight_hit_count+1'b1;
+            end else begin
+              weight_miss_count<=weight_miss_count+1'b1; weight_resident_valid<=0;
+            end
+          end
+          WCTRL: if (running || dma_busy || weight_dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else begin ps_weight_write_oc<=wdata[3:0]; ps_weight_write_tap<=wdata[7:4]; ps_weight_write_ic_group<=wdata[12:8]; end
+          WDATA: if (running || dma_busy || weight_dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else ps_weight_write_data<=wdata;
+          BIDX: if (running || dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else bias_index<=wdata[3:0];
+          BDATA: if (running || dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else bias[bias_index]<=wdata;
+          RQIDX: if (running || dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else requant_index<=wdata[3:0];
+          RQMULT: if (running || dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else requant_multiplier[requant_index]<=wdata;
+          RQSHIFT: if (running || dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else requant_right_shift[requant_index]<=wdata[5:0];
+          WEIGHT_COMMIT: if (running || dma_busy || store_busy) fault<=1; else if (wdata[0]) begin
+            if (!weight_keyed_mode) fault<=1;
+            else if (!weight_key_hit) begin weight_resident_key<=weight_key; weight_resident_valid<=1; end
+          end
+          WEIGHT_DMA_SOURCE: if (running || dma_busy || weight_dma_busy || store_busy) fault<=1; else weight_dma_source<=wdata;
+          WEIGHT_DMA_BYTES: if (running || dma_busy || weight_dma_busy || store_busy) fault<=1; else weight_dma_bytes<=wdata;
+          WEIGHT_DMA_CFG: if (running || dma_busy || weight_dma_busy || store_busy) fault<=1; else begin weight_dma_taps<=wdata[4:0]; weight_dma_groups<=wdata[12:8]; end
+          WEIGHT_DMA_CONTROL: begin
+            if (wdata[0]) begin weight_dma_clear<=1; end
+            if (wdata[1]) begin
+              if (running || dma_busy || weight_dma_busy || store_busy || hash_active) fault<=1;
+              else weight_dma_start<=1;
+            end
+          end
           DMA_SOURCE: if (running || dma_busy) fault<=1; else dma_source_addr<=wdata;
           DMA_BYTES: if (running || dma_busy) fault<=1; else dma_bytes<=wdata;
           DMA_PIXELS: if (running || dma_busy) fault<=1; else dma_pixels<=wdata[13:0];
@@ -377,14 +569,48 @@ module gestureflow_layer_chain_hp0_axil #(
           POST_GAP_MULT: if (running) fault<=1; else post_gap_multiplier<=wdata;
           POST_GAP_SHIFT: if (running) fault<=1; else post_gap_right_shift<=wdata[5:0];
           POST_QCFG: if (running) fault<=1; else begin post_gap_input_zero_point<=wdata[7:0]; post_gap_output_zero_point<=wdata[15:8]; post_fc_output_zero_point<=wdata[23:16]; end
+          // Descriptor staging is intentionally separate from the legacy
+          // registers. Commit the data by writing DESC_CONTROL.doorbell;
+          // the PL then replays it without per-layer CONTROL.start writes.
+          DESC_SELECT: if (descriptor_active || running) fault<=1; else desc_select<=wdata[1:0];
+          DESC_MODE: if (descriptor_active || running) fault<=1; else desc_mode_mem[desc_select]<=wdata[2:0];
+          DESC_JOB_SHAPE: if (descriptor_active || running) fault<=1; else begin desc_width_mem[desc_select]<=wdata[15:0]; desc_height_mem[desc_select]<=wdata[31:16]; end
+          DESC_DMA_SOURCE: if (descriptor_active || running) fault<=1; else desc_dma_source_mem[desc_select]<=wdata;
+          DESC_DMA_BYTES: if (descriptor_active || running) fault<=1; else desc_dma_bytes_mem[desc_select]<=wdata;
+          DESC_DMA_PIXELS: if (descriptor_active || running) fault<=1; else desc_dma_pixels_mem[desc_select]<=wdata[13:0];
+          DESC_STORE_DESTINATION: if (descriptor_active || running) fault<=1; else desc_store_destination_mem[desc_select]<=wdata;
+          DESC_STORE_BYTES: if (descriptor_active || running) fault<=1; else desc_store_bytes_mem[desc_select]<=wdata;
+          DESC_STORE_CONTROL: if (descriptor_active || running) fault<=1; else begin desc_store_enable_mem[desc_select]<=wdata[0]; desc_store_pool_mem[desc_select]<=wdata[1]; end
+          DESC_STORE_STRIDE: if (descriptor_active || running) fault<=1; else desc_store_stride_mem[desc_select]<=wdata;
+          DESC_STORE_VALID_BYTES: if (descriptor_active || running) fault<=1; else desc_store_valid_mem[desc_select]<=wdata[4:0];
+          DESC_QCFG: if (descriptor_active || running) fault<=1; else desc_qcfg_mem[desc_select]<=wdata;
+          DESC_LANE_MASK: if (descriptor_active || running) fault<=1; else desc_lane_mask_mem[desc_select]<=wdata[15:0];
+          DESC_COUNT: if (descriptor_active || running || wdata > 32'd4) fault<=1; else desc_count<=wdata[2:0];
+          DESC_CONTROL: begin
+            if (wdata[0]) begin descriptor_active<=0; desc_state<=DESC_IDLE; desc_issued<=0; desc_completed<=0; done<=0; end
+            if (wdata[1]) begin
+              if (descriptor_active || running || dma_busy || store_busy || hash_active || weight_dma_busy || desc_count==0) fault<=1;
+              else begin descriptor_active<=1; desc_read_index<=0; desc_issued<=0; desc_completed<=0; done<=0; fault<=0; desc_state<=DESC_LOAD; end
+            end
+          end
           default: begin end
         endcase
-        if (awaddr[11:0] == WDATA && !(running || dma_busy)) weight_write_valid<=1;
+        if (awaddr[11:0] == WDATA && !(running || dma_busy) && !(weight_keyed_mode && weight_key_hit)) begin
+          ps_weight_write_valid<=1; weight_write_count<=weight_write_count+1'b1; weight_bytes<=weight_bytes+32'd4;
+        end
         s_axi_bvalid<=1; s_axi_bresp<=0; aw_seen<=0; w_seen<=0;
       end
       if (s_axi_bvalid && s_axi_bready) s_axi_bvalid<=0;
-      if (store_done && store_enable && running) begin running<=0; done<=1; end
-      if (post_done && running && layer_mode == 4) begin running<=0; done<=1; completed_hash<=post_fc_fnv1a; end
+      if (store_done && store_enable && running) begin
+        running<=0;
+        if (!descriptor_active || (desc_state == DESC_WAIT && desc_read_index + 1'b1 >= desc_count)) done<=1;
+        else done<=0;
+      end
+      if (post_done && running && layer_mode == 4) begin
+        running<=0; completed_hash<=post_fc_fnv1a;
+        if (!descriptor_active || (desc_state == DESC_WAIT && desc_read_index + 1'b1 >= desc_count)) done<=1;
+        else done<=0;
+      end
       if (s_axi_arvalid && s_axi_arready) begin
         case (s_axi_araddr[11:0])
           MAGIC: s_axi_rdata<=32'h47464e50; VERSION: s_axi_rdata<=32'h00040004;
@@ -411,6 +637,26 @@ module gestureflow_layer_chain_hp0_axil #(
           POST_DEBUG_FC3:s_axi_rdata<={{24{post_debug_fc_value[3][7]}},post_debug_fc_value[3]};
           POST_DEBUG_FC4:s_axi_rdata<={{24{post_debug_fc_value[4][7]}},post_debug_fc_value[4]};
           POST_DEBUG_FC5:s_axi_rdata<={{24{post_debug_fc_value[5][7]}},post_debug_fc_value[5]};
+          WEIGHT_KEY:s_axi_rdata<=weight_key; WEIGHT_RESIDENT_KEY:s_axi_rdata<=weight_resident_key;
+          WEIGHT_WRITE_COUNT:s_axi_rdata<=weight_write_count; WEIGHT_HIT_COUNT:s_axi_rdata<=weight_hit_count;
+          WEIGHT_BYTES:s_axi_rdata<=weight_bytes; WEIGHT_MISS_COUNT:s_axi_rdata<=weight_miss_count;
+          WEIGHT_STATUS:s_axi_rdata<={27'd0,weight_key_hit,weight_keyed_mode,weight_resident_valid,weight_resident_valid && (weight_resident_key == weight_key),fault};
+          WEIGHT_DMA_SOURCE:s_axi_rdata<=weight_dma_source; WEIGHT_DMA_BYTES:s_axi_rdata<=weight_dma_bytes;
+          WEIGHT_DMA_CFG:s_axi_rdata<={19'd0,weight_dma_groups,3'd0,weight_dma_taps};
+          WEIGHT_DMA_STATUS:s_axi_rdata<={29'd0,weight_dma_fault,weight_dma_done,weight_dma_busy};
+          WEIGHT_DMA_BYTES_READ:s_axi_rdata<=weight_dma_bytes_read; WEIGHT_DMA_WRITE_COUNT:s_axi_rdata<=weight_dma_write_count;
+          DESC_SELECT:s_axi_rdata<={30'd0,desc_select};
+          DESC_MODE:s_axi_rdata<={29'd0,desc_mode_mem[desc_select]};
+          DESC_JOB_SHAPE:s_axi_rdata<={desc_height_mem[desc_select],desc_width_mem[desc_select]};
+          DESC_DMA_SOURCE:s_axi_rdata<=desc_dma_source_mem[desc_select]; DESC_DMA_BYTES:s_axi_rdata<=desc_dma_bytes_mem[desc_select];
+          DESC_DMA_PIXELS:s_axi_rdata<={18'd0,desc_dma_pixels_mem[desc_select]};
+          DESC_STORE_DESTINATION:s_axi_rdata<=desc_store_destination_mem[desc_select]; DESC_STORE_BYTES:s_axi_rdata<=desc_store_bytes_mem[desc_select];
+          DESC_STORE_CONTROL:s_axi_rdata<={30'd0,desc_store_pool_mem[desc_select],desc_store_enable_mem[desc_select]};
+          DESC_STORE_STRIDE:s_axi_rdata<=desc_store_stride_mem[desc_select]; DESC_STORE_VALID_BYTES:s_axi_rdata<={27'd0,desc_store_valid_mem[desc_select]};
+          DESC_QCFG:s_axi_rdata<=desc_qcfg_mem[desc_select]; DESC_LANE_MASK:s_axi_rdata<={16'd0,desc_lane_mask_mem[desc_select]};
+          DESC_COUNT:s_axi_rdata<={29'd0,desc_count};
+          DESC_STATUS:s_axi_rdata<={24'd0,desc_read_index,desc_state,descriptor_active,done,fault};
+          DESC_ISSUED:s_axi_rdata<=desc_issued; DESC_COMPLETED:s_axi_rdata<=desc_completed;
           default:s_axi_rdata<=32'hdeadbeef;
         endcase
         s_axi_rvalid<=1; s_axi_rresp<=0;
