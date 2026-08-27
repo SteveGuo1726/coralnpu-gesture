@@ -46,7 +46,7 @@ create_bd_cell -type ip -vlnv user.org:user:gestureflow_layer_chain_hp0_axil:1.0
 set_property -dict [list CONFIG.MAX_INPUT_CHANNELS {40} CONFIG.ENABLE_WIDE_MODES {1} CONFIG.ENABLE_POSTPROCESS {0} CONFIG.ENABLE_RELAY {0}] [get_bd_cells gestureflow_0]
 create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_smc
 set_property -dict [list CONFIG.NUM_SI {1} CONFIG.NUM_MI {1}] [get_bd_cells axi_smc]
-set_property -dict [list CONFIG.PCW_FPGA0_PERIPHERAL_FREQMHZ {33} CONFIG.PCW_USE_S_AXI_HP0 {1} CONFIG.PCW_S_AXI_HP0_DATA_WIDTH {64} CONFIG.PCW_S_AXI_HP0_ID_WIDTH {6}] [get_bd_cells processing_system7_0]
+set_property -dict [list CONFIG.PCW_FPGA0_PERIPHERAL_FREQMHZ {40} CONFIG.PCW_USE_S_AXI_HP0 {1} CONFIG.PCW_S_AXI_HP0_DATA_WIDTH {64} CONFIG.PCW_S_AXI_HP0_ID_WIDTH {6}] [get_bd_cells processing_system7_0]
 connect_bd_net [get_bd_pins processing_system7_0/FCLK_CLK0] [get_bd_pins gestureflow_0/aclk] [get_bd_pins processing_system7_0/S_AXI_HP0_ACLK] [get_bd_pins axi_smc/aclk]
 set reset_pin [lindex [get_bd_pins -quiet */peripheral_aresetn] 0]
 if {$reset_pin eq ""} { error "Could not find PS peripheral_aresetn" }

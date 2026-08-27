@@ -65,7 +65,7 @@ module gestureflow_hp0_gap_fc (
   localparam logic [31:0] FNV_PRIME = 32'h01000193;
 
   typedef enum logic [3:0] {
-    IDLE, LOAD, GAP_MUL, GAP_QUANT, GAP_HASH, FC_INIT, FC_ACC, FC_MUL, FC_QUANT, FC_HASH
+    IDLE, LOAD, GAP_ADJ, GAP_MUL, GAP_QUANT, GAP_HASH, FC_INIT, FC_ACC, FC_MUL, FC_QUANT, FC_HASH
   } state_t;
   state_t state;
   logic loader_start, loader_clear, loader_busy, loader_done, loader_fault;
@@ -75,6 +75,7 @@ module gestureflow_hp0_gap_fc (
   logic [31:0] loader_bytes_read;
   logic signed [CHANNELS-1:0][31:0] gap_sum;
   logic signed [CHANNELS-1:0][7:0] gap_value;
+  logic signed [31:0] gap_adjusted;
   logic signed [31:0] gap_mul_result;
   logic signed [5:0][31:0] fc_sum;
   logic signed [5:0][31:0] fc_mul_result;
@@ -238,7 +239,7 @@ module gestureflow_hp0_gap_fc (
   always_ff @(posedge clk) begin
     if (!rst_n) begin
       state <= IDLE; loader_start <= 0; loader_clear <= 0; done <= 0; fault <= 0; cycles <= 0;
-      gap_sum <= '0; gap_value <= '0; gap_mul_result <= '0; fc_sum <= '0; fc_mul_result <= '0; fc_value <= '0; gap_index <= 0; fc_group <= 0; fc_class <= 0; fc_index <= 0;
+      gap_sum <= '0; gap_value <= '0; gap_adjusted <= '0; gap_mul_result <= '0; fc_sum <= '0; fc_mul_result <= '0; fc_value <= '0; gap_index <= 0; fc_group <= 0; fc_class <= 0; fc_index <= 0;
       gap_quantized_pending <= '0;
       gap_hash_work <= FNV_OFFSET; fc_hash_work <= FNV_OFFSET; gap_fnv1a <= FNV_OFFSET; fc_fnv1a <= FNV_OFFSET;
       predicted_class <= 0; gap_values_done <= 0; fc_values_done <= 0;
@@ -249,7 +250,7 @@ module gestureflow_hp0_gap_fc (
       end
       if (clear) begin
         state <= IDLE; loader_clear <= 1; done <= 0; fault <= 0; cycles <= 0; gap_index <= 0; fc_group <= 0; fc_class <= 0; fc_index <= 0;
-        gap_mul_result <= '0; gap_quantized_pending <= '0; fc_mul_result <= '0;
+        gap_adjusted <= '0; gap_mul_result <= '0; gap_quantized_pending <= '0; fc_mul_result <= '0;
         gap_hash_work <= FNV_OFFSET; fc_hash_work <= FNV_OFFSET; gap_fnv1a <= FNV_OFFSET; fc_fnv1a <= FNV_OFFSET;
         predicted_class <= 0; gap_values_done <= 0; fc_values_done <= 0;
       end else begin
@@ -257,7 +258,7 @@ module gestureflow_hp0_gap_fc (
         case (state)
           IDLE: if (start) begin
             done <= 0; fault <= 0; cycles <= 0; gap_sum <= '0; gap_index <= 0; fc_group <= 0; fc_class <= 0; fc_index <= 0;
-            gap_mul_result <= '0; gap_quantized_pending <= '0; fc_mul_result <= '0;
+            gap_adjusted <= '0; gap_mul_result <= '0; gap_quantized_pending <= '0; fc_mul_result <= '0;
             gap_hash_work <= FNV_OFFSET; fc_hash_work <= FNV_OFFSET; gap_fnv1a <= FNV_OFFSET; fc_fnv1a <= FNV_OFFSET;
             gap_values_done <= 0; fc_values_done <= 0; loader_start <= 1; state <= LOAD;
           end
@@ -267,14 +268,17 @@ module gestureflow_hp0_gap_fc (
               for (int channel = 0; channel < CHANNELS; channel++) begin
                 gap_sum[channel] <= gap_sum[channel] + {{24{loader_pixel[channel][7]}}, loader_pixel[channel]};
               end
-              if (loader_pixels_emitted == 14'(ELEMENTS - 1)) begin gap_index <= 0; state <= GAP_MUL; end
+              if (loader_pixels_emitted == 14'(ELEMENTS - 1)) begin gap_index <= 0; state <= GAP_ADJ; end
             end
           end
+          GAP_ADJ: begin
+            // Split the zero-point subtraction from the DSP48 high_mul so the
+            // 32-bit subtract chain is not on the multiply cascade.
+            gap_adjusted <= gap_sum[gap_index] - sign_extend_int8(gap_input_zero_point) * GAP_ELEMENTS;
+            state <= GAP_MUL;
+          end
           GAP_MUL: begin
-            gap_mul_result <= high_mul(
-              gap_sum[gap_index] - sign_extend_int8(gap_input_zero_point) * GAP_ELEMENTS,
-              gap_multiplier
-            );
+            gap_mul_result <= high_mul(gap_adjusted, gap_multiplier);
             state <= GAP_QUANT;
           end
           GAP_QUANT: begin
@@ -293,7 +297,7 @@ module gestureflow_hp0_gap_fc (
               state <= FC_INIT;
             end else begin
               gap_index <= gap_index + 1'b1;
-              state <= GAP_MUL;
+              state <= GAP_ADJ;
             end
           end
           FC_INIT: begin fc_sum <= fc_bias; fc_group <= 0; fc_class <= 0; state <= FC_ACC; end
