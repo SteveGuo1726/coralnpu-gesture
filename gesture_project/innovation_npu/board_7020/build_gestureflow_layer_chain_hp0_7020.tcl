@@ -4,7 +4,7 @@ proc package_ip {src_dir project_root} {
   set pack [file join $project_root .tmp_gestureflow_layer_chain_hp0_pack]
   file delete -force $root; file delete -force $pack; file mkdir [file dirname $root]
   create_project -force gestureflow_layer_chain_hp0_pack $pack -part xc7z020clg400-2
-  foreach src {gestureflow_line_delay_bank.sv gestureflow_line_window.sv gestureflow_line_delay_vector_bank.sv gestureflow_line_window_vector.sv gestureflow_same4x4_cin_window.sv gestureflow_weight_bank.sv gestureflow_mac_tile.sv gestureflow_conv4x4_cin_same_stream.sv gestureflow_requant_relu.sv gestureflow_output_bank.sv gestureflow_hp0_rgb_loader.sv gestureflow_hp0_tensor_loader.sv gestureflow_hp0_tensor_loader_banked.sv gestureflow_hp0_weight_dma_loader.sv gestureflow_hp0_gap_fc.sv gestureflow_hp0_tensor_writer.sv gestureflow_layer_chain_hp0_axil.sv} {
+  foreach src {gestureflow_line_delay_bank.sv gestureflow_line_window.sv gestureflow_line_delay_vector_bank.sv gestureflow_line_window_vector.sv gestureflow_same4x4_cin_window.sv gestureflow_weight_bank.sv gestureflow_mac_tile.sv gestureflow_conv4x4_cin_same_stream.sv gestureflow_requant_relu.sv gestureflow_output_bank.sv gestureflow_output_bank_relay_loader.sv gestureflow_output_bank_pool_relay_loader.sv gestureflow_hp0_rgb_loader.sv gestureflow_hp0_tensor_loader.sv gestureflow_hp0_tensor_loader_banked.sv gestureflow_hp0_weight_dma_loader.sv gestureflow_hp0_gap_fc.sv gestureflow_hp0_tensor_writer.sv gestureflow_layer_chain_hp0_axil.sv} {
     set path [file join $src_dir $src]
     if {![file exists $path]} { error "Missing GestureFlow source: $path" }
     add_files -norecurse $path; set_property file_type SystemVerilog [get_files $path]
@@ -39,9 +39,14 @@ foreach cell_name {axi_gpio_0 coralnpu_coremini_axi_0 crvv_axi_0 crvvflat_0 crvv
 set gpio_port [get_bd_intf_ports -quiet AXI_GPIO_KEY]
 if {[llength $gpio_port]} { delete_bd_objs $gpio_port }
 create_bd_cell -type ip -vlnv user.org:user:gestureflow_layer_chain_hp0_axil:1.0 gestureflow_0
+# PROJECT_LOCAL_SELF_RESEARCH_NOT_GOOGLE_OFFICIAL
+# The descriptor 7020 production path now needs the already-validated
+# 40-channel tensor reader for conv2_b. Keep one physical MAC tile; widening
+# this parameter enables mode 2 and does not instantiate a second accelerator.
+set_property -dict [list CONFIG.MAX_INPUT_CHANNELS {40} CONFIG.ENABLE_WIDE_MODES {1} CONFIG.ENABLE_POSTPROCESS {0} CONFIG.ENABLE_RELAY {0}] [get_bd_cells gestureflow_0]
 create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_smc
 set_property -dict [list CONFIG.NUM_SI {1} CONFIG.NUM_MI {1}] [get_bd_cells axi_smc]
-set_property -dict [list CONFIG.PCW_FPGA0_PERIPHERAL_FREQMHZ {25} CONFIG.PCW_USE_S_AXI_HP0 {1} CONFIG.PCW_S_AXI_HP0_DATA_WIDTH {64} CONFIG.PCW_S_AXI_HP0_ID_WIDTH {6}] [get_bd_cells processing_system7_0]
+set_property -dict [list CONFIG.PCW_FPGA0_PERIPHERAL_FREQMHZ {30} CONFIG.PCW_USE_S_AXI_HP0 {1} CONFIG.PCW_S_AXI_HP0_DATA_WIDTH {64} CONFIG.PCW_S_AXI_HP0_ID_WIDTH {6}] [get_bd_cells processing_system7_0]
 connect_bd_net [get_bd_pins processing_system7_0/FCLK_CLK0] [get_bd_pins gestureflow_0/aclk] [get_bd_pins processing_system7_0/S_AXI_HP0_ACLK] [get_bd_pins axi_smc/aclk]
 set reset_pin [lindex [get_bd_pins -quiet */peripheral_aresetn] 0]
 if {$reset_pin eq ""} { error "Could not find PS peripheral_aresetn" }

@@ -64,7 +64,9 @@ module gestureflow_hp0_gap_fc (
   localparam logic [31:0] FNV_OFFSET = 32'h811c9dc5;
   localparam logic [31:0] FNV_PRIME = 32'h01000193;
 
-  typedef enum logic [2:0] {IDLE, LOAD, GAP, FC_INIT, FC_ACC, FC_QUANT, FC_FNV} state_t;
+  typedef enum logic [3:0] {
+    IDLE, LOAD, GAP_MUL, GAP_QUANT, GAP_HASH, FC_INIT, FC_ACC, FC_MUL, FC_QUANT, FC_HASH
+  } state_t;
   state_t state;
   logic loader_start, loader_clear, loader_busy, loader_done, loader_fault;
   logic loader_frame_start, loader_pixel_valid, loader_pixel_ready;
@@ -73,7 +75,9 @@ module gestureflow_hp0_gap_fc (
   logic [31:0] loader_bytes_read;
   logic signed [CHANNELS-1:0][31:0] gap_sum;
   logic signed [CHANNELS-1:0][7:0] gap_value;
+  logic signed [31:0] gap_mul_result;
   logic signed [5:0][31:0] fc_sum;
+  logic signed [5:0][31:0] fc_mul_result;
   logic signed [5:0][7:0] fc_value;
   logic signed [7:0] fc_weight [0:5][0:27][0:3];
   logic [6:0] gap_index;
@@ -81,6 +85,9 @@ module gestureflow_hp0_gap_fc (
   logic [2:0] fc_class;
   logic [2:0] fc_index;
   logic [31:0] gap_hash_work, fc_hash_work;
+  logic signed [7:0] gap_quantized_pending;
+  logic signed [7:0] gap_requant_value;
+  logic signed [7:0] fc_requant_value;
 
   function automatic logic [31:0] fnv_step(
     input logic [31:0] current,
@@ -146,6 +153,26 @@ module gestureflow_hp0_gap_fc (
     end
   endfunction
 
+  // PROJECT_LOCAL_SELF_RESEARCH_NOT_GOOGLE_OFFICIAL
+  // Second half of the GAP requantizer, applied after high_mul is registered.
+  // Keeping round_div_pot/saturate in a separate pipeline stage cuts the
+  // 32-bit ripple-carry chain off the DSP48 high_mul cascade and removes it
+  // from the top routed setup path.
+  function automatic logic signed [7:0] requantize_after_mul(
+    input logic signed [31:0] mul_result,
+    input logic [5:0] right_shift,
+    input logic signed [7:0] zero_point
+  );
+    logic signed [31:0] result, with_zero_point;
+    begin
+      result = round_div_pot(mul_result, right_shift);
+      with_zero_point = result + {{24{zero_point[7]}}, zero_point};
+      if (with_zero_point > 127) requantize_after_mul = 8'sh7f;
+      else if (with_zero_point < -128) requantize_after_mul = -8'sh80;
+      else requantize_after_mul = with_zero_point[7:0];
+    end
+  endfunction
+
   function automatic logic signed [31:0] sign_extend_int8(input logic signed [7:0] value);
     sign_extend_int8 = {{24{value[7]}}, value};
   endfunction
@@ -185,6 +212,15 @@ module gestureflow_hp0_gap_fc (
   assign debug_gap_sum0 = gap_sum[0];
   assign debug_gap_sum6 = gap_sum[6];
   assign debug_fc_value = fc_value;
+  assign gap_requant_value = requantize_after_mul(gap_mul_result, gap_right_shift, gap_output_zero_point);
+  // PROJECT_LOCAL_SELF_RESEARCH_NOT_GOOGLE_OFFICIAL
+  // The FC requantizer is split into high_mul (registered in FC_MUL) and
+  // round_div_pot/saturate (FC_QUANT), mirroring the GAP_MUL/GAP_QUANT split.
+  // This removes the long 32-bit ripple-carry chain from the DSP48 high_mul
+  // cascade and takes it off the top routed setup path.
+  assign fc_requant_value = requantize_after_mul(
+    fc_mul_result[fc_index], fc_right_shift[fc_index], fc_output_zero_point
+  );
 
   gestureflow_hp0_tensor_loader #(.CHANNELS(CHANNELS)) loader (
     .clk(clk), .rst_n(rst_n), .start(loader_start), .clear(loader_clear),
@@ -202,7 +238,8 @@ module gestureflow_hp0_gap_fc (
   always_ff @(posedge clk) begin
     if (!rst_n) begin
       state <= IDLE; loader_start <= 0; loader_clear <= 0; done <= 0; fault <= 0; cycles <= 0;
-      gap_sum <= '0; gap_value <= '0; fc_sum <= '0; fc_value <= '0; gap_index <= 0; fc_group <= 0; fc_class <= 0; fc_index <= 0;
+      gap_sum <= '0; gap_value <= '0; gap_mul_result <= '0; fc_sum <= '0; fc_mul_result <= '0; fc_value <= '0; gap_index <= 0; fc_group <= 0; fc_class <= 0; fc_index <= 0;
+      gap_quantized_pending <= '0;
       gap_hash_work <= FNV_OFFSET; fc_hash_work <= FNV_OFFSET; gap_fnv1a <= FNV_OFFSET; fc_fnv1a <= FNV_OFFSET;
       predicted_class <= 0; gap_values_done <= 0; fc_values_done <= 0;
     end else begin
@@ -212,6 +249,7 @@ module gestureflow_hp0_gap_fc (
       end
       if (clear) begin
         state <= IDLE; loader_clear <= 1; done <= 0; fault <= 0; cycles <= 0; gap_index <= 0; fc_group <= 0; fc_class <= 0; fc_index <= 0;
+        gap_mul_result <= '0; gap_quantized_pending <= '0; fc_mul_result <= '0;
         gap_hash_work <= FNV_OFFSET; fc_hash_work <= FNV_OFFSET; gap_fnv1a <= FNV_OFFSET; fc_fnv1a <= FNV_OFFSET;
         predicted_class <= 0; gap_values_done <= 0; fc_values_done <= 0;
       end else begin
@@ -219,6 +257,7 @@ module gestureflow_hp0_gap_fc (
         case (state)
           IDLE: if (start) begin
             done <= 0; fault <= 0; cycles <= 0; gap_sum <= '0; gap_index <= 0; fc_group <= 0; fc_class <= 0; fc_index <= 0;
+            gap_mul_result <= '0; gap_quantized_pending <= '0; fc_mul_result <= '0;
             gap_hash_work <= FNV_OFFSET; fc_hash_work <= FNV_OFFSET; gap_fnv1a <= FNV_OFFSET; fc_fnv1a <= FNV_OFFSET;
             gap_values_done <= 0; fc_values_done <= 0; loader_start <= 1; state <= LOAD;
           end
@@ -228,20 +267,34 @@ module gestureflow_hp0_gap_fc (
               for (int channel = 0; channel < CHANNELS; channel++) begin
                 gap_sum[channel] <= gap_sum[channel] + {{24{loader_pixel[channel][7]}}, loader_pixel[channel]};
               end
-              if (loader_pixels_emitted == 14'(ELEMENTS - 1)) begin gap_index <= 0; state <= GAP; end
+              if (loader_pixels_emitted == 14'(ELEMENTS - 1)) begin gap_index <= 0; state <= GAP_MUL; end
             end
           end
-          GAP: begin
-            gap_value[gap_index] <= requantize(gap_sum[gap_index] - sign_extend_int8(gap_input_zero_point) * GAP_ELEMENTS,
-                                                gap_multiplier, gap_right_shift, gap_output_zero_point);
-            gap_hash_work <= fnv_step(gap_hash_work, requantize(gap_sum[gap_index] - sign_extend_int8(gap_input_zero_point) * GAP_ELEMENTS,
-                                                                 gap_multiplier, gap_right_shift, gap_output_zero_point));
+          GAP_MUL: begin
+            gap_mul_result <= high_mul(
+              gap_sum[gap_index] - sign_extend_int8(gap_input_zero_point) * GAP_ELEMENTS,
+              gap_multiplier
+            );
+            state <= GAP_QUANT;
+          end
+          GAP_QUANT: begin
+            // Split requantization and FNV hashing into separate cycles. The
+            // previous version chained requantize()->fnv_step() in one state
+            // and became the top routed setup path on 7020.
+            gap_quantized_pending <= gap_requant_value;
+            gap_value[gap_index] <= gap_requant_value;
             gap_values_done <= gap_index + 1'b1;
+            state <= GAP_HASH;
+          end
+          GAP_HASH: begin
+            gap_hash_work <= fnv_step(gap_hash_work, gap_quantized_pending);
             if (gap_index == 7'(CHANNELS - 1)) begin
-              gap_fnv1a <= fnv_step(gap_hash_work, requantize(gap_sum[gap_index] - sign_extend_int8(gap_input_zero_point) * GAP_ELEMENTS,
-                                                               gap_multiplier, gap_right_shift, gap_output_zero_point));
+              gap_fnv1a <= fnv_step(gap_hash_work, gap_quantized_pending);
               state <= FC_INIT;
-            end else gap_index <= gap_index + 1'b1;
+            end else begin
+              gap_index <= gap_index + 1'b1;
+              state <= GAP_MUL;
+            end
           end
           FC_INIT: begin fc_sum <= fc_bias; fc_group <= 0; fc_class <= 0; state <= FC_ACC; end
           FC_ACC: begin
@@ -254,20 +307,36 @@ module gestureflow_hp0_gap_fc (
               + int8_product($signed(gap_value[fc_group*4+2]), $signed(fc_weight[fc_class][fc_group][2]))
               + int8_product($signed(gap_value[fc_group*4+3]), $signed(fc_weight[fc_class][fc_group][3]));
             if (fc_group == 27) begin
-              if (fc_class == 5) begin fc_index <= 0; state <= FC_QUANT; end
+              if (fc_class == 5) begin fc_index <= 0; state <= FC_MUL; end
               else begin fc_class <= fc_class + 1'b1; fc_group <= 0; end
             end else fc_group <= fc_group + 1'b1;
           end
-          FC_QUANT: begin
-            fc_value[fc_index] <= requantize(fc_sum[fc_index], fc_multiplier[fc_index], fc_right_shift[fc_index], fc_output_zero_point);
-            if (fc_index == 5) begin fc_index <= 0; fc_hash_work <= FNV_OFFSET; state <= FC_FNV; end
-            else fc_index <= fc_index + 1'b1;
+          FC_MUL: begin
+            fc_mul_result[fc_index] <= high_mul(fc_sum[fc_index], fc_multiplier[fc_index]);
+            state <= FC_QUANT;
           end
-          FC_FNV: begin
-            fc_hash_work <= fnv_step(fc_hash_work, fc_value[fc_index]); fc_values_done <= fc_index + 1'b1;
+          FC_QUANT: begin
+            fc_value[fc_index] <= fc_requant_value;
             if (fc_index == 5) begin
-              fc_fnv1a <= fnv_step(fc_hash_work, fc_value[fc_index]); predicted_class <= argmax6(fc_value); done <= 1; state <= IDLE;
-            end else fc_index <= fc_index + 1'b1;
+              fc_index <= 0;
+              fc_hash_work <= FNV_OFFSET;
+              state <= FC_HASH;
+            end else begin
+              fc_index <= fc_index + 1'b1;
+              state <= FC_MUL;
+            end
+          end
+          FC_HASH: begin
+            fc_hash_work <= fnv_step(fc_hash_work, fc_value[fc_index]);
+            fc_values_done <= fc_index + 1'b1;
+            if (fc_index == 5) begin
+              fc_fnv1a <= fnv_step(fc_hash_work, fc_value[fc_index]);
+              predicted_class <= argmax6(fc_value);
+              done <= 1;
+              state <= IDLE;
+            end else begin
+              fc_index <= fc_index + 1'b1;
+            end
           end
           default: begin fault <= 1; state <= IDLE; end
         endcase

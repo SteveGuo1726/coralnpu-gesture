@@ -51,7 +51,7 @@ module gestureflow_axil_microkernel (
   logic [7:0] dma_stage_addr,dma_stage_write_addr;
   assign s_axi_awready=!aw_seen&&!s_axi_bvalid; assign s_axi_wready=!w_seen&&!s_axi_bvalid; assign s_axi_arready=!s_axi_rvalid;
   gestureflow_mac_tile #(.OUT_LANES(16),.INPUT_LANES(4),.MAX_TAPS(16),.MAX_IC_GROUPS(16)) tile(
-    .clk(aclk),.rst_n(aresetn),.weight_write_valid(weight_we),.weight_write_oc(w_oc),.weight_write_tap(w_tap),.weight_write_ic_group(w_group),.weight_write_data(weight_data),.start_valid(start_v),.start_ready(tile_start_ready),.bias(bias),.output_lane_enable(job_output_lane_enable),.mac_valid(mac_v),.mac_ready(tile_mac_ready),.mac_tap(mac_tap),.mac_ic_group(mac_group),.activation(activation),.input_lane_enable(mac_input_lane_enable),.mac_last(mac_last),.result_valid(tile_result_valid),.result_ready(requant_in_ready),.result_psum(tile_result),.result_lane_enable(tile_result_mask),.busy(tile_busy),.protocol_error(tile_fault));
+    .clk(aclk),.rst_n(aresetn),.weight_write_valid(weight_we),.weight_write_oc(w_oc),.weight_write_tap(w_tap),.weight_write_ic_group(w_group),.weight_write_data(weight_data),.weight_bank_select(1'b0),.start_valid(start_v),.start_ready(tile_start_ready),.bias(bias),.output_lane_enable(job_output_lane_enable),.mac_valid(mac_v),.mac_ready(tile_mac_ready),.mac_tap(mac_tap),.mac_ic_group(mac_group),.activation(activation),.input_lane_enable(mac_input_lane_enable),.mac_last(mac_last),.result_valid(tile_result_valid),.result_ready(requant_in_ready),.result_psum(tile_result),.result_lane_enable(tile_result_mask),.busy(tile_busy),.protocol_error(tile_fault));
   gestureflow_activation_bank #(.ADDR_W(8),.DATA_W(32)) activation_bank(
     .clk(aclk),.write_enable(stage_write_enable||dma_stage_write_enable),.write_addr(dma_stage_write_enable?dma_stage_write_addr:stage_write_addr),.write_data(dma_stage_write_enable?dma_stage_write_data:stage_write_data),.read_enable(stage_read_enable),.read_addr(stage_read_addr),.read_data(stage_read_data));
   gestureflow_hp0_read_loader hp0_read_loader(
@@ -60,7 +60,8 @@ module gestureflow_axil_microkernel (
   gestureflow_requant_relu #(.LANES(16)) requant(
     .clk(aclk),.rst_n(aresetn),.in_valid(tile_result_valid),.in_ready(requant_in_ready),.in_psum(tile_result),.in_lane_enable(tile_result_mask),.enable(requant_enable),.relu_enable(requant_relu_enable),.output_zero_point(requant_zero_point),.multiplier(requant_multiplier),.right_shift(requant_right_shift),.out_valid(requant_out_valid),.out_ready(1'b1),.out_data(quant_result),.out_lane_enable(quant_result_mask),.config_error(requant_config_error));
   gestureflow_output_bank #(.ADDR_W(8),.DATA_W(128)) output_bank(
-    .clk(aclk),.write_enable(requant_out_valid),.write_addr(output_write_addr),.write_data(quant_result),.read_enable(output_read_enable),.read_addr(output_read_addr),.read_data(output_read_data));
+    .clk(aclk),.write_enable(requant_out_valid),.write_addr(output_write_addr),.write_data(quant_result),
+    .read_enable(output_read_enable),.read_addr(output_read_addr),.read_data(output_read_data));
   // This shell feeds BRAM address/control signals through the tile. Use a
   // synchronous reset so the PS7 reset cannot asynchronously disturb RAMB
   // address/enable inputs during configuration.
