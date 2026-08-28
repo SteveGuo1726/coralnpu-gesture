@@ -138,8 +138,7 @@ static int8_t gf_conv4[GF_CONV4_BYTES] __attribute__((aligned(64)));
 static int8_t gf_conv5[GF_CONV5_BYTES] __attribute__((aligned(64)));
 static int8_t gf_pool3[GF_POOL3_BYTES] __attribute__((aligned(64)));
 static int8_t gf_head1x1[GF_HEAD1X1_BYTES] __attribute__((aligned(64)));
-static uint32_t gf_weight_dma_buf[16U * 16U * 12U] __attribute__((aligned(64)));
-static uint32_t gf_weight_dma_words;
+static XTime g_weight_dma_ticks;
 
 static void store_probe(u32 index, u32 value)
 {
@@ -195,105 +194,83 @@ static void wait_layer_done(void)
     terminal_failure(0x4002U, status);
 }
 
-static void weight_dma_start(uint32_t taps, uint32_t groups)
+static void weight_dma_load(const uint32_t *src, uint32_t words, uint32_t taps, uint32_t groups)
 {
     uint32_t status;
-    uint32_t bytes = gf_weight_dma_words * 4U;
-    Xil_Out32(GF_BASE + GF_WEIGHT_DMA_SOURCE, (uint32_t)(UINTPTR)gf_weight_dma_buf);
+    XTime dma_t0, dma_t1;
+    uint32_t bytes = words * 4U;
+    /* The exported packed weight image is in .rodata and may be cached. */
+    Xil_DCacheFlushRange((UINTPTR)src, bytes);
+    Xil_Out32(GF_BASE + GF_WEIGHT_DMA_SOURCE, (uint32_t)(UINTPTR)src);
     Xil_Out32(GF_BASE + GF_WEIGHT_DMA_BYTES, bytes);
     Xil_Out32(GF_BASE + GF_WEIGHT_DMA_CFG, taps | (groups << 8U));
     Xil_Out32(GF_BASE + GF_WEIGHT_DMA_CONTROL, 2U);
+    XTime_GetTime(&dma_t0);
     do {
         status = Xil_In32(GF_BASE + GF_WEIGHT_DMA_STATUS);
     } while (status & GF_WEIGHT_DMA_BUSY_BIT);
+    XTime_GetTime(&dma_t1);
     if (!(status & GF_WEIGHT_DMA_DONE_BIT) || (status & GF_WEIGHT_DMA_FAULT_BIT)) {
         terminal_failure(0x4D01U, status);
     }
+    g_weight_dma_ticks += dma_t1 - dma_t0;
 }
 
-/* Generic spatial 4x4 tile loader. weight_stride = 16 taps * input_channels.
- * groups = input_channels/4. */
-static void load_conv_tile(u32 mode, u32 domain, u32 first_oc, u32 lane_mask,
-                           const int8_t *weights, const int32_t *folded_bias,
+/* Generic spatial 4x4 tile loader. dma_weights is the pre-packed WEIGHT_DMA
+ * image (oc -> tap -> 4-lane group) emitted by the exporter, so the ARM
+ * driver does no uncached byte-packing loop. groups = ceil(input_channels/4). */
+static void load_conv_tile(u32 mode, u32 first_oc, u32 lane_mask,
+                           const uint32_t *dma_weights, const int32_t *folded_bias,
                            const int32_t *multiplier, const uint8_t *right_shift,
-                           u32 output_lanes, u32 weight_stride, u32 groups)
+                           u32 output_lanes, u32 groups)
 {
-    u32 physical_oc, model_oc, tap, group, lane, wi, packed;
-    (void)domain;
+    u32 physical_oc, model_oc;
     Xil_Out32(GF_BASE + GF_LAYER_MODE, mode);
     Xil_Out32(GF_BASE + GF_QCFG, 0x00038080U);
     Xil_Out32(GF_BASE + GF_OUTPUT_LANE_MASK, lane_mask);
-    gf_weight_dma_words = 0U;
     for (physical_oc = 0U; physical_oc < 16U; ++physical_oc) {
         model_oc = first_oc + physical_oc;
         if (model_oc >= output_lanes) {
             Xil_Out32(GF_BASE + GF_BIDX, physical_oc); Xil_Out32(GF_BASE + GF_BDATA, 0U);
             Xil_Out32(GF_BASE + GF_RQIDX, physical_oc); Xil_Out32(GF_BASE + GF_RQMULT, 0U); Xil_Out32(GF_BASE + GF_RQSHIFT, 0U);
-            for (tap = 0U; tap < 16U; ++tap) for (group = 0U; group < groups; ++group)
-                gf_weight_dma_buf[gf_weight_dma_words++] = 0U;
             continue;
         }
         Xil_Out32(GF_BASE + GF_BIDX, physical_oc); Xil_Out32(GF_BASE + GF_BDATA, (u32)folded_bias[model_oc]);
         Xil_Out32(GF_BASE + GF_RQIDX, physical_oc); Xil_Out32(GF_BASE + GF_RQMULT, (u32)multiplier[model_oc]);
         Xil_Out32(GF_BASE + GF_RQSHIFT, (u32)right_shift[model_oc]);
-        for (tap = 0U; tap < 16U; ++tap) for (group = 0U; group < groups; ++group) {
-            packed = 0U;
-            for (lane = 0U; lane < 4U; ++lane) {
-                wi = model_oc * weight_stride + tap * (groups * 4U) + group * 4U + lane;
-                packed |= (uint32_t)(uint8_t)weights[wi] << (lane * 8U);
-            }
-            gf_weight_dma_buf[gf_weight_dma_words++] = packed;
-        }
     }
-    weight_dma_start(16U, groups);
+    weight_dma_load(dma_weights + (uint32_t)first_oc * 16U * groups, 16U * 16U * groups, 16U, groups);
 }
 
 /* First layer: RGB 3->16, one 4-lane group with lane 3 masked. */
 static void load_first_layer(void)
 {
-    u32 oc, tap, wi, packed;
+    u32 oc;
     Xil_Out32(GF_BASE + GF_LAYER_MODE, 0U);
     Xil_Out32(GF_BASE + GF_QCFG, 0x00038080U);
     Xil_Out32(GF_BASE + GF_OUTPUT_LANE_MASK, 0xffffU);
-    gf_weight_dma_words = 0U;
     for (oc = 0U; oc < 16U; ++oc) {
         Xil_Out32(GF_BASE + GF_BIDX, oc); Xil_Out32(GF_BASE + GF_BDATA, (u32)gf_full_folded_bias[oc]);
         Xil_Out32(GF_BASE + GF_RQIDX, oc); Xil_Out32(GF_BASE + GF_RQMULT, (u32)gf_full_requant_multiplier[oc]);
         Xil_Out32(GF_BASE + GF_RQSHIFT, (u32)gf_full_requant_right_shift[oc]);
-        for (tap = 0U; tap < 16U; ++tap) {
-            wi = oc * 48U + tap * 3U;
-            packed = (uint32_t)(uint8_t)gf_full_weights[wi] |
-                     ((uint32_t)(uint8_t)gf_full_weights[wi + 1U] << 8) |
-                     ((uint32_t)(uint8_t)gf_full_weights[wi + 2U] << 16);
-            gf_weight_dma_buf[gf_weight_dma_words++] = packed;
-        }
     }
-    weight_dma_start(16U, 1U);
+    weight_dma_load(gf_full_weights_dma, 16U * 16U * 1U, 16U, 1U);
 }
 
 /* Head 1x1: only the embedded center tap (1,1) is nonzero. */
 static void load_head1x1_tile(uint32_t first_oc)
 {
-    u32 physical_oc, model_oc, group, lane, wi, packed;
+    u32 physical_oc, model_oc;
     Xil_Out32(GF_BASE + GF_LAYER_MODE, 5U);
     Xil_Out32(GF_BASE + GF_QCFG, 0x00038080U);
     Xil_Out32(GF_BASE + GF_OUTPUT_LANE_MASK, 0xffffU);
-    gf_weight_dma_words = 0U;
     for (physical_oc = 0U; physical_oc < 16U; ++physical_oc) {
         model_oc = first_oc + physical_oc;
         Xil_Out32(GF_BASE + GF_BIDX, physical_oc); Xil_Out32(GF_BASE + GF_BDATA, (u32)gf_head1x1_folded_bias[model_oc]);
         Xil_Out32(GF_BASE + GF_RQIDX, physical_oc); Xil_Out32(GF_BASE + GF_RQMULT, (u32)gf_head1x1_requant_multiplier[model_oc]);
         Xil_Out32(GF_BASE + GF_RQSHIFT, (u32)gf_head1x1_requant_right_shift[model_oc]);
-        for (group = 0U; group < 12U; ++group) {
-            packed = 0U;
-            for (lane = 0U; lane < 4U; ++lane) {
-                wi = model_oc * 768U + GF_HEAD1X1_EMBEDDED_CENTER_TAP * 48U + group * 4U + lane;
-                packed |= (uint32_t)(uint8_t)gf_head1x1_weights[wi] << (lane * 8U);
-            }
-            gf_weight_dma_buf[gf_weight_dma_words++] = packed;
-        }
     }
-    weight_dma_start(1U, 12U);
+    weight_dma_load(gf_head1x1_weights_dma + (uint32_t)first_oc * 12U, 16U * 12U, 1U, 12U);
 }
 
 static u32 run_layer(uint32_t mode, uint32_t source, uint32_t bytes, uint32_t destination,
@@ -389,7 +366,7 @@ int main(void)
         weight_ticks += weight_end - weight_start; \
     } while (0)
 
-    Xil_DCacheDisable(); Xil_ICacheDisable();
+    Xil_ICacheDisable();
     Xil_SetTlbAttributes(GF_BASE, DEVICE_MEMORY); Xil_SetTlbAttributes(PROBE_BASE, DEVICE_MEMORY);
     Xil_SetTlbAttributes((UINTPTR)gf_rgb, DEVICE_MEMORY);
     Xil_SetTlbAttributes((UINTPTR)gf_activation_1, DEVICE_MEMORY);
@@ -437,8 +414,8 @@ int main(void)
 
     /* conv1 (body): 16->16 fused with pool1 */
     stage = 0x40U; Xil_Out32(GF_BASE + GF_CONTROL, 1U);
-    GF_TIME_WEIGHT_LOAD(load_conv_tile(1U, 0U, 0U, 0xffffU, gf_body2_weights, gf_body2_folded_bias,
-                                       gf_body2_requant_multiplier, gf_body2_requant_right_shift, 16U, 256U, 4U));
+    GF_TIME_WEIGHT_LOAD(load_conv_tile(1U, 0U, 0xffffU, gf_body2_weights_dma, gf_body2_folded_bias,
+                                       gf_body2_requant_multiplier, gf_body2_requant_right_shift, 16U, 4U));
     pool_cycles = run_layer(1U, (u32)(UINTPTR)gf_activation_1, GF_ACTIVATION_BYTES, (u32)(UINTPTR)gf_pool1, GF_POOL1_BYTES, 3U, 96U, 96U, 16U, 16U);
     status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS);
     hash = Xil_In32(GF_BASE + GF_OUTPUT_FNV1A);
@@ -453,8 +430,8 @@ int main(void)
         u32 first_oc = index * 16U;
         stage = 0x50U + index;
         Xil_Out32(GF_BASE + GF_CONTROL, 1U);
-        GF_TIME_WEIGHT_LOAD(load_conv_tile(1U, 0U, first_oc, 0xffffU, gf_conv2a_weights, gf_conv2a_folded_bias,
-                                           gf_conv2a_requant_multiplier, gf_conv2a_requant_right_shift, GF_CONV2A_OUTPUT_LANES, 256U, 4U));
+        GF_TIME_WEIGHT_LOAD(load_conv_tile(1U, first_oc, 0xffffU, gf_conv2a_weights_dma, gf_conv2a_folded_bias,
+                                           gf_conv2a_requant_multiplier, gf_conv2a_requant_right_shift, GF_CONV2A_OUTPUT_LANES, 4U));
         conv2_cycles[index] = run_layer(1U, (u32)(UINTPTR)gf_pool1, GF_POOL1_BYTES, (u32)(UINTPTR)gf_conv2 + first_oc, GF_CONV2_TILE_BYTES, 1U, 48U, 48U, 32U, 16U);
         status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS);
         if ((status & (GF_FAULT_BIT|GF_LAYER_FAULT_BIT)) || (dma_status & GF_DMA_FAULT_BIT) || !(dma_status & GF_DMA_DONE_BIT) ||
@@ -468,8 +445,8 @@ int main(void)
         u32 first_oc = index * 16U;
         stage = 0x70U + index;
         Xil_Out32(GF_BASE + GF_CONTROL, 1U);
-        GF_TIME_WEIGHT_LOAD(load_conv_tile(2U, 0U, first_oc, 0xffffU, gf_conv2b_weights, gf_conv2b_folded_bias,
-                                           gf_conv2b_requant_multiplier, gf_conv2b_requant_right_shift, GF_CONV2B_OUTPUT_LANES, 512U, 8U));
+        GF_TIME_WEIGHT_LOAD(load_conv_tile(2U, first_oc, 0xffffU, gf_conv2b_weights_dma, gf_conv2b_folded_bias,
+                                           gf_conv2b_requant_multiplier, gf_conv2b_requant_right_shift, GF_CONV2B_OUTPUT_LANES, 8U));
         pool2_cycles[index] = run_layer(2U, (u32)(UINTPTR)gf_conv2, GF_CONV2_BYTES, (u32)(UINTPTR)gf_pool2 + first_oc, GF_POOL2_TILE_BYTES, 3U, 48U, 48U, 32U, 16U);
         status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS);
         if ((status & (GF_FAULT_BIT|GF_LAYER_FAULT_BIT)) || (dma_status & GF_DMA_FAULT_BIT) || !(dma_status & GF_DMA_DONE_BIT) ||
@@ -483,8 +460,8 @@ int main(void)
         u32 first_oc = index * 16U;
         stage = 0x80U + index;
         Xil_Out32(GF_BASE + GF_CONTROL, 1U);
-        GF_TIME_WEIGHT_LOAD(load_conv_tile(2U, 0U, first_oc, 0xffffU, gf_conv3a_weights, gf_conv3a_folded_bias,
-                                           gf_conv3a_requant_multiplier, gf_conv3a_requant_right_shift, GF_CONV3A_OUTPUT_LANES, 512U, 8U));
+        GF_TIME_WEIGHT_LOAD(load_conv_tile(2U, first_oc, 0xffffU, gf_conv3a_weights_dma, gf_conv3a_folded_bias,
+                                           gf_conv3a_requant_multiplier, gf_conv3a_requant_right_shift, GF_CONV3A_OUTPUT_LANES, 8U));
         conv4_cycles[index] = run_layer(2U, (u32)(UINTPTR)gf_pool2, GF_POOL2_BYTES, (u32)(UINTPTR)gf_conv4 + first_oc, GF_CONV4_TILE_BYTES, 1U, 24U, 24U, 48U, 16U);
         status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS);
         if ((status & (GF_FAULT_BIT|GF_LAYER_FAULT_BIT)) || (dma_status & GF_DMA_FAULT_BIT) || !(dma_status & GF_DMA_DONE_BIT) ||
@@ -498,8 +475,8 @@ int main(void)
         u32 first_oc = index * 16U;
         stage = 0x90U + index;
         Xil_Out32(GF_BASE + GF_CONTROL, 1U);
-        GF_TIME_WEIGHT_LOAD(load_conv_tile(3U, 0U, first_oc, 0xffffU, gf_conv3b_weights, gf_conv3b_folded_bias,
-                                           gf_conv3b_requant_multiplier, gf_conv3b_requant_right_shift, GF_CONV3B_OUTPUT_LANES, 768U, 12U));
+        GF_TIME_WEIGHT_LOAD(load_conv_tile(3U, first_oc, 0xffffU, gf_conv3b_weights_dma, gf_conv3b_folded_bias,
+                                           gf_conv3b_requant_multiplier, gf_conv3b_requant_right_shift, GF_CONV3B_OUTPUT_LANES, 12U));
         pool3_cycles[index] = run_layer(3U, (u32)(UINTPTR)gf_conv4, GF_CONV4_BYTES, (u32)(UINTPTR)gf_pool3 + first_oc, GF_POOL3_TILE_BYTES, 3U, 24U, 24U, 48U, 16U);
         status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS);
         if ((status & (GF_FAULT_BIT|GF_LAYER_FAULT_BIT)) || (dma_status & GF_DMA_FAULT_BIT) || !(dma_status & GF_DMA_DONE_BIT) ||
@@ -540,6 +517,7 @@ int main(void)
     XTime_GetTime(&frame_end);
     frame_ticks = (u32)(frame_end - frame_start);
     weight_ticks32 = (u32)weight_ticks;
+    store_probe(132U, (u32)g_weight_dma_ticks);
     pl_cycles_total = cycles0 + pool_cycles + gap_fc_cycles;
     for (index = 0U; index < 2U; ++index) pl_cycles_total += conv2_cycles[index] + pool2_cycles[index];
     for (index = 0U; index < 3U; ++index) pl_cycles_total += conv4_cycles[index] + pool3_cycles[index];

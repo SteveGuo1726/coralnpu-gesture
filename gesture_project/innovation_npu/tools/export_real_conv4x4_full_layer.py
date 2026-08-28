@@ -81,6 +81,18 @@ def c_array(values: np.ndarray, c_type: str, name: str, columns: int = 16) -> st
     return f"static const {c_type} {name}[{len(flat)}] = {{\n" + ",\n".join(rows) + "\n};\n"
 
 
+def c_array_aligned(values: np.ndarray, c_type: str, name: str, columns: int = 16, alignment: int = 64) -> str:
+    flat = values.reshape(-1).tolist()
+    rows = [
+        "    " + ", ".join(str(int(item)) for item in flat[index : index + columns])
+        for index in range(0, len(flat), columns)
+    ]
+    return (
+        f"static const {c_type} {name}[{len(flat)}] __attribute__((aligned({alignment}))) = {{\n"
+        + ",\n".join(rows) + "\n};\n"
+    )
+
+
 def sv_array(values: np.ndarray, name: str, columns: int = 16) -> str:
     def signed_literal(value: int, width: int = 8) -> str:
         # Unary minus precedes a sized literal in legal SystemVerilog. The
@@ -143,7 +155,8 @@ def main() -> None:
     # the existing resident 4x4 bank by placing its only kernel coefficient
     # at (1,1) and zeroing the other 15 taps. This preserves the one-tile,
     # local-INT32 accumulation dataflow instead of introducing a second core.
-    if tuple(weights.shape[1:3]) == (1, 1):
+    pointwise = tuple(weights.shape[1:3]) == (1, 1)
+    if pointwise:
         embedded_weights = np.zeros((weights.shape[0], 4, 4, weights.shape[3]), dtype=np.int8)
         embedded_weights[:, 1, 1, :] = weights[:, 0, 0, :]
         weights = embedded_weights
@@ -155,6 +168,32 @@ def main() -> None:
     image_height, image_width = input_shape[1:3]
     if input_shape[3] != input_channels or output_shape[3] != output_lanes:
         raise SystemExit(f"Tensor/channel mismatch {input_shape}, {weights.shape}, {output_shape}")
+
+    # PROJECT_LOCAL_SELF_RESEARCH_NOT_GOOGLE_OFFICIAL
+    # Emit the exact WEIGHT_DMA packed image (oc -> tap -> 4-lane group) so the
+    # ARM driver can burst-load weights without a slow uncached byte-packing
+    # loop. layout: [oc][16 tap][ceil(cin/4)], each word = 4 int8 lanes little
+    # endian. For the 1x1 head the 16-tap image is still emitted, but only the
+    # embedded center tap is nonzero, matching the 4x4-bank placement.
+    w_reshaped = weights.reshape(output_lanes, 16, input_channels)
+    dma_groups = max(1, (input_channels + 3) // 4)
+    dma_packed = np.zeros((output_lanes, 16, dma_groups), dtype=np.uint32)
+    for oc in range(output_lanes):
+        for tap in range(16):
+            for group in range(dma_groups):
+                word = 0
+                for lane in range(4):
+                    ci = group * 4 + lane
+                    if ci < input_channels:
+                        word |= int(np.uint8(w_reshaped[oc, tap, ci])) << (lane * 8)
+                dma_packed[oc, tap, group] = word
+    # Pointwise mode reads tap 0 in the RTL backend. Emit only the embedded
+    # center tap into tap 0 so the C driver can use the same one-tap WEIGHT_DMA
+    # descriptor as the proven baseline instead of a 16-tap image.
+    if pointwise:
+        dma_packed = dma_packed.reshape(output_lanes, 16, dma_groups)[:, 5, :].reshape(
+            output_lanes, dma_groups
+        )
 
     input_scale, input_zp = input_detail["quantization"]
     output_scale, output_zp = output_detail["quantization"]
@@ -249,6 +288,7 @@ def main() -> None:
     else:
         c_text += c_array(layer_input, "int8_t", "gf_full_layer_input")
     c_text += c_array(weights, "int8_t", "gf_full_weights")
+    c_text += c_array_aligned(dma_packed, "uint32_t", "gf_full_weights_dma", alignment=64)
     c_text += c_array(bias, "int32_t", "gf_full_original_bias")
     c_text += c_array(folded_bias, "int32_t", "gf_full_folded_bias")
     c_text += c_array(multipliers, "int32_t", "gf_full_requant_multiplier")
