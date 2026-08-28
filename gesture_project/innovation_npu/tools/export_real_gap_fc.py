@@ -114,15 +114,25 @@ def main() -> None:
     q27 = np.asarray(interpreter.get_tensor(head_index), dtype=np.int8)[0]
     q28 = np.asarray(interpreter.get_tensor(gap_index), dtype=np.int8)[0]
     q29 = np.asarray(interpreter.get_tensor(int(fc["outputs"][0])), dtype=np.int8)[0]
-    if q27.shape != (12, 12, 112) or q28.shape != (112,) or q29.shape != (6,):
-        raise SystemExit(f"Unexpected postprocess tensors: {q27.shape}, {q28.shape}, {q29.shape}")
+    # PROJECT_LOCAL_SELF_RESEARCH_NOT_GOOGLE_OFFICIAL
+    # Infer GAP channel count and class count from the model itself instead of
+    # hard-coding the 6-class/112-channel mainline. The 18-class student has a
+    # 12x12x64 head, a 64-wide GAP and an 18-output FC; all sizes follow the
+    # tensors so one exporter serves every static classifier.
+    if q27.ndim != 3 or q27.shape[0] != q27.shape[1] or q27.shape[2] <= 0:
+        raise SystemExit(f"Unexpected head tensor shape: {q27.shape}")
+    gap_channels = int(q27.shape[2])
+    gap_elements = int(q27.shape[0] * q27.shape[1])
+    if q28.shape != (gap_channels,) or q29.ndim != 1 or q29.size <= 0:
+        raise SystemExit(f"Unexpected GAP/FC tensors: {q28.shape}, {q29.shape}")
+    fc_outputs = int(q29.size)
 
     head_scale, head_zp = details[head_index]["quantization"]
     gap_scale, gap_zp = details[gap_index]["quantization"]
-    gap_multiplier, gap_shift = mean_multiplier(float(head_scale), float(gap_scale), 144)
+    gap_multiplier, gap_shift = mean_multiplier(float(head_scale), float(gap_scale), gap_elements)
     gap_sums = q27.astype(np.int64).sum(axis=(0, 1)).astype(np.int32)
     gap_values = np.asarray([
-        saturate_int8(multiply_by_quantized_multiplier(int(total) - int(head_zp) * 144,
+        saturate_int8(multiply_by_quantized_multiplier(int(total) - int(head_zp) * gap_elements,
                                                         gap_multiplier, gap_shift) + int(gap_zp))
         for total in gap_sums
     ], dtype=np.int8)
@@ -132,18 +142,18 @@ def main() -> None:
 
     fc_weights = np.asarray(interpreter.get_tensor(int(fc["inputs"][1])), dtype=np.int8)
     fc_bias = np.asarray(interpreter.get_tensor(int(fc["inputs"][2])), dtype=np.int32)
-    if fc_weights.shape != (6, 112) or fc_bias.shape != (6,):
+    if fc_weights.shape != (fc_outputs, gap_channels) or fc_bias.shape != (fc_outputs,):
         raise SystemExit(f"Unexpected FC parameter shapes {fc_weights.shape}, {fc_bias.shape}")
     fc_scale, fc_zp = details[int(fc["outputs"][0])]["quantization"]
     fc_weight_scales = details[int(fc["inputs"][1])]["quantization_parameters"]["scales"]
     fc_weight_zps = details[int(fc["inputs"][1])]["quantization_parameters"]["zero_points"]
     if not np.all(fc_weight_zps == 0):
         raise SystemExit(f"Unsupported nonzero FC weight zero points {fc_weight_zps}")
-    fc_multipliers = np.empty(6, dtype=np.int32)
-    fc_right_shifts = np.empty(6, dtype=np.uint8)
+    fc_multipliers = np.empty(fc_outputs, dtype=np.int32)
+    fc_right_shifts = np.empty(fc_outputs, dtype=np.uint8)
     fc_folded_bias = fc_bias.astype(np.int64) - int(gap_zp) * fc_weights.astype(np.int64).sum(axis=1)
-    fc_quantized = np.empty(6, dtype=np.int8)
-    for output in range(6):
+    fc_quantized = np.empty(fc_outputs, dtype=np.int8)
+    for output in range(fc_outputs):
         multiplier, shift = quantize_multiplier(float(gap_scale) * float(fc_weight_scales[output]) / float(fc_scale))
         if shift > 0 or shift < -31:
             raise SystemExit(f"Unsupported FC shift {shift} for output {output}")
@@ -162,11 +172,11 @@ def main() -> None:
 #ifndef GESTUREFLOW_REAL_GAP_FC_H
 #define GESTUREFLOW_REAL_GAP_FC_H
 #include <stdint.h>
-#define GF_POST_HEAD_HEIGHT 12U
-#define GF_POST_HEAD_WIDTH 12U
-#define GF_POST_GAP_CHANNELS 112U
-#define GF_POST_GAP_ELEMENTS 144U
-#define GF_POST_FC_OUTPUTS 6U
+#define GF_POST_HEAD_HEIGHT %dU
+#define GF_POST_HEAD_WIDTH %dU
+#define GF_POST_GAP_CHANNELS %dU
+#define GF_POST_GAP_ELEMENTS %dU
+#define GF_POST_FC_OUTPUTS %dU
 #define GF_POST_GAP_INPUT_ZERO_POINT (%d)
 #define GF_POST_GAP_OUTPUT_ZERO_POINT (%d)
 #define GF_POST_FC_OUTPUT_ZERO_POINT (%d)
@@ -176,7 +186,8 @@ def main() -> None:
 #define GF_POST_GAP_EXPECTED_FNV1A 0x%08XU
 #define GF_POST_FC_EXPECTED_FNV1A 0x%08XU
 #define GF_POST_EXPECTED_CLASS (%dU)
-""" % (int(head_zp), int(gap_zp), int(fc_zp), gap_multiplier, -gap_shift,
+""" % (int(q27.shape[0]), int(q27.shape[1]), gap_channels, gap_elements, fc_outputs,
+       int(head_zp), int(gap_zp), int(fc_zp), gap_multiplier, -gap_shift,
        fnv1a32(q27), fnv1a32(q28), fnv1a32(q29), int(np.argmax(q29)))
     text += c_array(fc_weights, "int8_t", "gf_post_fc_weights")
     text += c_array(fc_folded_bias.astype(np.int32), "int32_t", "gf_post_fc_folded_bias")

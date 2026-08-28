@@ -1,12 +1,19 @@
 // PROJECT_LOCAL_SELF_RESEARCH_NOT_GOOGLE_OFFICIAL
 //
 // Quantized postprocess engine for the deployed GestureFlow static CNN.
-// It fetches the 12x12x112 head tensor from DDR through HP0, retains all
-// 112 INT32 GAP sums locally, follows LiteRT's integer Mean scaling exactly,
-// then executes the 112x6 classifier with six x four INT8 MAC lanes. No GAP
-// or FC partial result is written to DDR and ARM only loads descriptors.
+// It fetches a 12x12xCHANNELS head tensor from DDR through HP0, retains all
+// CHANNELS INT32 GAP sums locally, follows LiteRT's integer Mean scaling
+// exactly, then executes the CHANNELS->CLASSES classifier with CLASSES x
+// four INT8 MAC lanes. No GAP or FC partial result is written to DDR and ARM
+// only loads descriptors. CHANNELS/CLASSES are parameters so one module
+// serves both the 112->6 mainline and the 64->18 HaGRID student.
 `timescale 1ns/1ps
-module gestureflow_hp0_gap_fc (
+module gestureflow_hp0_gap_fc #(
+  parameter int CHANNELS = 112,
+  parameter int CLASSES = 6,
+  parameter int ELEMENTS = 144,
+  parameter int FC_GROUPS = CHANNELS / 4
+) (
   input logic clk,
   input logic rst_n,
   input logic start,
@@ -20,24 +27,24 @@ module gestureflow_hp0_gap_fc (
   input logic signed [7:0] gap_output_zero_point,
   input logic signed [7:0] fc_output_zero_point,
   input logic fc_weight_write_valid,
-  input logic [2:0] fc_weight_write_class,
-  input logic [4:0] fc_weight_write_group,
+  input logic [$clog2(CLASSES)-1:0] fc_weight_write_class,
+  input logic [$clog2(FC_GROUPS)-1:0] fc_weight_write_group,
   input logic signed [3:0][7:0] fc_weight_write_data,
-  input logic signed [5:0][31:0] fc_bias,
-  input logic signed [5:0][31:0] fc_multiplier,
-  input logic [5:0][5:0] fc_right_shift,
+  input logic signed [CLASSES-1:0][31:0] fc_bias,
+  input logic signed [CLASSES-1:0][31:0] fc_multiplier,
+  input logic [CLASSES-1:0][5:0] fc_right_shift,
   output logic busy,
   output logic done,
   output logic fault,
   output logic [31:0] cycles,
   output logic [31:0] gap_fnv1a,
   output logic [31:0] fc_fnv1a,
-  output logic [2:0] predicted_class,
-  output logic [6:0] gap_values_done,
-  output logic [2:0] fc_values_done,
+  output logic [$clog2(CLASSES)-1:0] predicted_class,
+  output logic [$clog2(CHANNELS+1)-1:0] gap_values_done,
+  output logic [$clog2(CLASSES+1)-1:0] fc_values_done,
   output logic signed [31:0] debug_gap_sum0,
   output logic signed [31:0] debug_gap_sum6,
-  output logic signed [5:0][7:0] debug_fc_value,
+  output logic signed [CLASSES-1:0][7:0] debug_fc_value,
 
   output logic [31:0] m_axi_araddr,
   output logic [5:0] m_axi_arid,
@@ -58,9 +65,7 @@ module gestureflow_hp0_gap_fc (
   input wire m_axi_rvalid,
   output logic m_axi_rready
 );
-  localparam int CHANNELS = 112;
-  localparam int ELEMENTS = 144;
-  localparam logic signed [31:0] GAP_ELEMENTS = 32'sd144;
+  localparam logic signed [31:0] GAP_ELEMENTS = ELEMENTS;
   localparam logic [31:0] FNV_OFFSET = 32'h811c9dc5;
   localparam logic [31:0] FNV_PRIME = 32'h01000193;
 
@@ -77,14 +82,14 @@ module gestureflow_hp0_gap_fc (
   logic signed [CHANNELS-1:0][7:0] gap_value;
   logic signed [31:0] gap_adjusted;
   logic signed [31:0] gap_mul_result;
-  logic signed [5:0][31:0] fc_sum;
-  logic signed [5:0][31:0] fc_mul_result;
-  logic signed [5:0][7:0] fc_value;
-  logic signed [7:0] fc_weight [0:5][0:27][0:3];
-  logic [6:0] gap_index;
-  logic [4:0] fc_group;
-  logic [2:0] fc_class;
-  logic [2:0] fc_index;
+  logic signed [CLASSES-1:0][31:0] fc_sum;
+  logic signed [CLASSES-1:0][31:0] fc_mul_result;
+  logic signed [CLASSES-1:0][7:0] fc_value;
+  logic signed [7:0] fc_weight [0:CLASSES-1][0:FC_GROUPS-1][0:3];
+  logic [$clog2(CHANNELS)-1:0] gap_index;
+  logic [$clog2(FC_GROUPS)-1:0] fc_group;
+  logic [$clog2(CLASSES)-1:0] fc_class;
+  logic [$clog2(CLASSES)-1:0] fc_index;
   logic [31:0] gap_hash_work, fc_hash_work;
   logic signed [7:0] gap_quantized_pending;
   logic signed [7:0] gap_requant_value;
@@ -192,19 +197,26 @@ module gestureflow_hp0_gap_fc (
     end
   endfunction
 
-  function automatic logic [2:0] argmax6(input logic signed [5:0][7:0] values);
+  // PROJECT_LOCAL_SELF_RESEARCH_NOT_GOOGLE_OFFICIAL
+  // Parameterized argmax so CLASSES is no longer pinned to six. Strict
+  // greater-than keeps the lowest index on ties, matching software argmax.
+  function automatic logic [$clog2(CLASSES)-1:0] argmax_n(
+    input logic signed [CLASSES-1:0][7:0] values
+  );
     logic signed [7:0] best_value;
-    logic [2:0] best_index;
+    logic [$clog2(CLASSES)-1:0] best_index;
     begin
       // Keep the comparison explicitly signed and use strict greater-than so
       // ties retain the lowest class index, matching software argmax.
-      best_value = $signed(values[0]); best_index = 3'd0;
-      if ($signed(values[1]) > best_value) begin best_value = $signed(values[1]); best_index = 3'd1; end
-      if ($signed(values[2]) > best_value) begin best_value = $signed(values[2]); best_index = 3'd2; end
-      if ($signed(values[3]) > best_value) begin best_value = $signed(values[3]); best_index = 3'd3; end
-      if ($signed(values[4]) > best_value) begin best_value = $signed(values[4]); best_index = 3'd4; end
-      if ($signed(values[5]) > best_value) begin best_value = $signed(values[5]); best_index = 3'd5; end
-      argmax6 = best_index;
+      best_value = $signed(values[0]);
+      best_index = '0;
+      for (int index = 1; index < CLASSES; index++) begin
+        if ($signed(values[index]) > best_value) begin
+          best_value = $signed(values[index]);
+          best_index = index[$clog2(CLASSES)-1:0];
+        end
+      end
+      argmax_n = best_index;
     end
   endfunction
 
@@ -245,7 +257,7 @@ module gestureflow_hp0_gap_fc (
       predicted_class <= 0; gap_values_done <= 0; fc_values_done <= 0;
     end else begin
       loader_start <= 0; loader_clear <= 0;
-      if (fc_weight_write_valid && (fc_weight_write_class < 6) && (fc_weight_write_group < 28)) begin
+      if (fc_weight_write_valid && (int'(fc_weight_write_class) < CLASSES) && (int'(fc_weight_write_group) < FC_GROUPS)) begin
         for (int lane = 0; lane < 4; lane++) fc_weight[fc_weight_write_class][fc_weight_write_group][lane] <= fc_weight_write_data[lane];
       end
       if (clear) begin
@@ -292,7 +304,7 @@ module gestureflow_hp0_gap_fc (
           end
           GAP_HASH: begin
             gap_hash_work <= fnv_step(gap_hash_work, gap_quantized_pending);
-            if (gap_index == 7'(CHANNELS - 1)) begin
+            if (gap_index == $clog2(CHANNELS)'(CHANNELS - 1)) begin
               gap_fnv1a <= fnv_step(gap_hash_work, gap_quantized_pending);
               state <= FC_INIT;
             end else begin
@@ -310,8 +322,8 @@ module gestureflow_hp0_gap_fc (
               + int8_product($signed(gap_value[fc_group*4+1]), $signed(fc_weight[fc_class][fc_group][1]))
               + int8_product($signed(gap_value[fc_group*4+2]), $signed(fc_weight[fc_class][fc_group][2]))
               + int8_product($signed(gap_value[fc_group*4+3]), $signed(fc_weight[fc_class][fc_group][3]));
-            if (fc_group == 27) begin
-              if (fc_class == 5) begin fc_index <= 0; state <= FC_MUL; end
+            if (fc_group == $clog2(FC_GROUPS)'(FC_GROUPS - 1)) begin
+              if (fc_class == $clog2(CLASSES)'(CLASSES - 1)) begin fc_index <= 0; state <= FC_MUL; end
               else begin fc_class <= fc_class + 1'b1; fc_group <= 0; end
             end else fc_group <= fc_group + 1'b1;
           end
@@ -321,7 +333,7 @@ module gestureflow_hp0_gap_fc (
           end
           FC_QUANT: begin
             fc_value[fc_index] <= fc_requant_value;
-            if (fc_index == 5) begin
+            if (fc_index == $clog2(CLASSES)'(CLASSES - 1)) begin
               fc_index <= 0;
               fc_hash_work <= FNV_OFFSET;
               state <= FC_HASH;
@@ -333,9 +345,9 @@ module gestureflow_hp0_gap_fc (
           FC_HASH: begin
             fc_hash_work <= fnv_step(fc_hash_work, fc_value[fc_index]);
             fc_values_done <= fc_index + 1'b1;
-            if (fc_index == 5) begin
+            if (fc_index == $clog2(CLASSES)'(CLASSES - 1)) begin
               fc_fnv1a <= fnv_step(fc_hash_work, fc_value[fc_index]);
-              predicted_class <= argmax6(fc_value);
+              predicted_class <= argmax_n(fc_value);
               done <= 1;
               state <= IDLE;
             end else begin
