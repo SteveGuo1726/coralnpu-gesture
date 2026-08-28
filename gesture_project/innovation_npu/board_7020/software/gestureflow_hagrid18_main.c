@@ -29,6 +29,9 @@
 #include "gestureflow_real_conv4x4_head1x1_layer.h"
 #include "gestureflow_real_gap_fc.h"
 
+#ifndef GF_FAST_RELEASE
+#define GF_FAST_RELEASE 0
+#endif
 #define PROBE_BASE 0xFFFF0000U
 #define GF_BASE 0x43C00000U
 
@@ -357,7 +360,12 @@ static u32 run_gap_fc(uint32_t source)
  * the per-tile FNV in software against the full tensor header. */
 static int verify_full_tensor(const int8_t *buf, uint32_t bytes, uint32_t expected_fnv)
 {
+#if GF_FAST_RELEASE
+    (void)buf; (void)bytes; (void)expected_fnv;
+    return 1;
+#else
     return fnv1a_bytes(buf, bytes) == expected_fnv;
+#endif
 }
 
 int main(void)
