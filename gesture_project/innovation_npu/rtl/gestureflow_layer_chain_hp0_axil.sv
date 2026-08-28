@@ -115,9 +115,9 @@ module gestureflow_layer_chain_hp0_axil #(
     DESC_RELAY_CONTROL=12'h158;
   localparam logic [31:0] FNV_OFFSET=32'h811c9dc5, FNV_PRIME=32'h01000193;
   // The physical 16x4 DSP tile remains fixed. Mode 3 only widens the
-  // ingress/window storage so 20 Cin groups accumulate locally before one
+  // ingress/window storage so 12 Cin groups accumulate locally before one
   // requantized output is emitted; no second MAC array or DDR partial sum is
-  // introduced for conv3_b.
+  // introduced for the widest 48-channel layer.
   localparam int PIXELS = IMAGE_WIDTH * IMAGE_HEIGHT;
 
   logic [31:0] awaddr, wdata; logic [3:0] wstrb; logic aw_seen, w_seen;
@@ -183,16 +183,16 @@ module gestureflow_layer_chain_hp0_axil #(
   logic [13:0] relay_pool_pixels_emitted;
   logic tensor_busy, tensor_done, tensor_fault, tensor_frame_start, tensor_pixel_valid, tensor_pixel_ready;
   logic signed [15:0][7:0] tensor_pixel; logic [13:0] tensor_pixels_emitted; logic [31:0] tensor_bytes_read;
-  logic tensor40_busy, tensor40_done, tensor40_fault, tensor40_frame_start, tensor40_pixel_valid, tensor40_pixel_ready;
-  logic signed [39:0][7:0] tensor40_pixel; logic [13:0] tensor40_pixels_emitted; logic [31:0] tensor40_bytes_read;
-  logic tensor80_busy, tensor80_done, tensor80_fault, tensor80_frame_start, tensor80_pixel_valid, tensor80_pixel_ready;
-  logic signed [79:0][7:0] tensor80_pixel; logic [13:0] tensor80_pixels_emitted; logic [31:0] tensor80_bytes_read;
-  logic [31:0] rgb_araddr, tensor_araddr, tensor40_araddr, tensor80_araddr; logic [5:0] rgb_arid, tensor_arid, tensor40_arid, tensor80_arid;
-  logic [7:0] rgb_arlen, tensor_arlen, tensor40_arlen, tensor80_arlen; logic [2:0] rgb_arsize, tensor_arsize, tensor40_arsize, tensor80_arsize;
-  logic [1:0] rgb_arburst, tensor_arburst, tensor40_arburst, tensor80_arburst; logic rgb_arlock, rgb_arvalid, rgb_rready;
-  logic tensor_arlock, tensor_arvalid, tensor_rready, tensor40_arlock, tensor40_arvalid, tensor40_rready, tensor80_arlock, tensor80_arvalid, tensor80_rready;
-  logic [3:0] rgb_arcache, tensor_arcache, tensor40_arcache, tensor80_arcache, rgb_arqos, tensor_arqos, tensor40_arqos, tensor80_arqos, rgb_arregion, tensor_arregion, tensor40_arregion, tensor80_arregion;
-  logic [2:0] rgb_arprot, tensor_arprot, tensor40_arprot, tensor80_arprot;
+  logic tensor32_busy, tensor32_done, tensor32_fault, tensor32_frame_start, tensor32_pixel_valid, tensor32_pixel_ready;
+  logic signed [31:0][7:0] tensor32_pixel; logic [13:0] tensor32_pixels_emitted; logic [31:0] tensor32_bytes_read;
+  logic tensor48_busy, tensor48_done, tensor48_fault, tensor48_frame_start, tensor48_pixel_valid, tensor48_pixel_ready;
+  logic signed [47:0][7:0] tensor48_pixel; logic [13:0] tensor48_pixels_emitted; logic [31:0] tensor48_bytes_read;
+  logic [31:0] rgb_araddr, tensor_araddr, tensor32_araddr, tensor48_araddr; logic [5:0] rgb_arid, tensor_arid, tensor32_arid, tensor48_arid;
+  logic [7:0] rgb_arlen, tensor_arlen, tensor32_arlen, tensor48_arlen; logic [2:0] rgb_arsize, tensor_arsize, tensor32_arsize, tensor48_arsize;
+  logic [1:0] rgb_arburst, tensor_arburst, tensor32_arburst, tensor48_arburst; logic rgb_arlock, rgb_arvalid, rgb_rready;
+  logic tensor_arlock, tensor_arvalid, tensor_rready, tensor32_arlock, tensor32_arvalid, tensor32_rready, tensor48_arlock, tensor48_arvalid, tensor48_rready;
+  logic [3:0] rgb_arcache, tensor_arcache, tensor32_arcache, tensor48_arcache, rgb_arqos, tensor_arqos, tensor32_arqos, tensor48_arqos, rgb_arregion, tensor_arregion, tensor32_arregion, tensor48_arregion;
+  logic [2:0] rgb_arprot, tensor_arprot, tensor32_arprot, tensor48_arprot;
   logic [31:0] post_araddr; logic [5:0] post_arid; logic [7:0] post_arlen; logic [2:0] post_arsize;
   logic [1:0] post_arburst; logic post_arlock, post_arvalid, post_rready;
   logic [3:0] post_arcache, post_arqos, post_arregion; logic [2:0] post_arprot;
@@ -201,7 +201,7 @@ module gestureflow_layer_chain_hp0_axil #(
   logic unused_rgb_rlast, unused_tensor_rlast;
   logic frame_start, pixel_valid, pixel_ready;
   logic signed [MAX_INPUT_CHANNELS-1:0][7:0] pixel_data;
-  logic wide80_mode, pointwise_mode;
+  logic wide48_mode, pointwise_mode;
   logic [13:0] input_pixels; logic dma_busy, dma_done, dma_fault; logic [31:0] dma_bytes_read;
   logic output_valid, output_ready, protocol_error; logic signed [15:0][31:0] output_psum;
   logic [15:0] output_lane_enable_valid; logic [15:0] output_row, output_column;
@@ -252,7 +252,7 @@ module gestureflow_layer_chain_hp0_axil #(
   function automatic logic [31:0] fnv_step(input logic [31:0] current, input logic [7:0] byte_value);
     fnv_step = (current ^ {24'd0, byte_value}) * FNV_PRIME;
   endfunction
-  assign wide80_mode = ENABLE_WIDE_MODES && ((layer_mode == 3) || (layer_mode == 5));
+  assign wide48_mode = ENABLE_WIDE_MODES && ((layer_mode == 3) || (layer_mode == 5));
   assign pointwise_mode = (layer_mode == 5);
   assign relay_mode = ENABLE_RELAY && relay_enable && (layer_mode == 1);
   assign relay_stream_mode = relay_mode && !relay_pool_2x2;
@@ -265,49 +265,49 @@ module gestureflow_layer_chain_hp0_axil #(
   assign dma_busy = ENABLE_POSTPROCESS && (layer_mode == 4) ? post_busy :
                     relay_pool_mode ? relay_pool_busy :
                     relay_stream_mode ? relay_busy :
-                    wide80_mode ? tensor80_busy :
-                    ENABLE_WIDE_MODES && (layer_mode == 2) ? tensor40_busy :
+                    wide48_mode ? tensor48_busy :
+                    ENABLE_WIDE_MODES && (layer_mode == 2) ? tensor32_busy :
                     (layer_mode == 1 ? tensor_busy : rgb_busy);
   assign dma_done = ENABLE_POSTPROCESS && (layer_mode == 4) ? post_done :
                     relay_pool_mode ? relay_pool_done :
                     relay_stream_mode ? relay_done :
-                    wide80_mode ? tensor80_done :
-                    ENABLE_WIDE_MODES && (layer_mode == 2) ? tensor40_done :
+                    wide48_mode ? tensor48_done :
+                    ENABLE_WIDE_MODES && (layer_mode == 2) ? tensor32_done :
                     (layer_mode == 1 ? tensor_done : rgb_done);
   assign dma_fault = ENABLE_POSTPROCESS && (layer_mode == 4) ? post_fault :
                      relay_pool_mode ? relay_pool_fault :
                      relay_stream_mode ? relay_fault :
-                     wide80_mode ? tensor80_fault :
-                     ENABLE_WIDE_MODES && (layer_mode == 2) ? tensor40_fault :
+                     wide48_mode ? tensor48_fault :
+                     ENABLE_WIDE_MODES && (layer_mode == 2) ? tensor32_fault :
                      (layer_mode == 1 ? tensor_fault : rgb_fault);
   assign dma_bytes_read = ENABLE_POSTPROCESS && (layer_mode == 4) ? dma_bytes :
                           relay_pool_mode ? {14'd0, relay_pool_pixels_emitted, 4'd0} :
                           relay_stream_mode ? {14'd0, relay_pixels_emitted, 4'd0} :
-                          wide80_mode ? tensor80_bytes_read :
-                          ENABLE_WIDE_MODES && (layer_mode == 2) ? tensor40_bytes_read :
+                          wide48_mode ? tensor48_bytes_read :
+                          ENABLE_WIDE_MODES && (layer_mode == 2) ? tensor32_bytes_read :
                           (layer_mode == 1 ? tensor_bytes_read : {16'd0, rgb_bytes_read});
   assign input_pixels = ENABLE_POSTPROCESS && (layer_mode == 4) ? dma_pixels :
                         relay_pool_mode ? relay_pool_pixels_emitted :
                         relay_stream_mode ? relay_pixels_emitted :
-                        wide80_mode ? tensor80_pixels_emitted :
-                        ENABLE_WIDE_MODES && (layer_mode == 2) ? tensor40_pixels_emitted :
+                        wide48_mode ? tensor48_pixels_emitted :
+                        ENABLE_WIDE_MODES && (layer_mode == 2) ? tensor32_pixels_emitted :
                         (layer_mode == 1 ? tensor_pixels_emitted : rgb_pixels_emitted);
   assign frame_start = relay_pool_mode ? relay_pool_frame_start :
                        relay_stream_mode ? relay_frame_start :
-                       wide80_mode ? tensor80_frame_start :
-                       ENABLE_WIDE_MODES && (layer_mode == 2) ? tensor40_frame_start :
+                       wide48_mode ? tensor48_frame_start :
+                       ENABLE_WIDE_MODES && (layer_mode == 2) ? tensor32_frame_start :
                        (layer_mode == 1 ? tensor_frame_start : rgb_frame_start);
   assign pixel_valid = ENABLE_POSTPROCESS && (layer_mode == 4) ? 1'b0 :
                        relay_pool_mode ? relay_pool_pixel_valid :
                        relay_stream_mode ? relay_pixel_valid :
-                       wide80_mode ? tensor80_pixel_valid :
-                       ENABLE_WIDE_MODES && (layer_mode == 2) ? tensor40_pixel_valid :
+                       wide48_mode ? tensor48_pixel_valid :
+                       ENABLE_WIDE_MODES && (layer_mode == 2) ? tensor32_pixel_valid :
                        (layer_mode == 1 ? tensor_pixel_valid : rgb_pixel_valid);
   assign relay_pixel_ready = relay_stream_mode ? pixel_ready : 1'b0;
   assign relay_pool_pixel_ready = relay_pool_mode ? pixel_ready : 1'b0;
   assign tensor_pixel_ready = ((layer_mode == 1) && !relay_mode) ? pixel_ready : 1'b0;
-  assign tensor40_pixel_ready = (layer_mode == 2) ? pixel_ready : 1'b0;
-  assign tensor80_pixel_ready = wide80_mode ? pixel_ready : 1'b0;
+  assign tensor32_pixel_ready = (layer_mode == 2) ? pixel_ready : 1'b0;
+  assign tensor48_pixel_ready = wide48_mode ? pixel_ready : 1'b0;
   assign rgb_pixel_ready = (layer_mode == 0) ? pixel_ready : 1'b0;
   assign weight_write_valid = ps_weight_write_valid | weight_dma_write_valid;
   always_comb begin
@@ -334,9 +334,9 @@ module gestureflow_layer_chain_hp0_axil #(
     end else if (layer_mode == 1) begin
       for (int lane = 0; lane < 16; lane++) selected_pixel[lane] = tensor_pixel[lane];
     end else if (ENABLE_WIDE_MODES && (layer_mode == 2)) begin
-      for (int lane = 0; lane < 40; lane++) selected_pixel[lane] = tensor40_pixel[lane];
-    end else if (wide80_mode) begin
-      for (int lane = 0; lane < 80; lane++) selected_pixel[lane] = tensor80_pixel[lane];
+      for (int lane = 0; lane < 32; lane++) selected_pixel[lane] = tensor32_pixel[lane];
+    end else if (wide48_mode) begin
+      for (int lane = 0; lane < 48; lane++) selected_pixel[lane] = tensor48_pixel[lane];
     end else begin
       selected_pixel[0] = rgb_pixel[0]; selected_pixel[1] = rgb_pixel[1]; selected_pixel[2] = rgb_pixel[2];
       for (int lane = 3; lane < MAX_INPUT_CHANNELS; lane++) selected_pixel[lane] = input_zero_point[0];
@@ -361,16 +361,16 @@ module gestureflow_layer_chain_hp0_axil #(
       m_axi_arsize = '0; m_axi_arburst = '0; m_axi_arlock = 1'b0;
       m_axi_arcache = '0; m_axi_arprot = '0; m_axi_arqos = '0;
       m_axi_arregion = '0; m_axi_arvalid = 1'b0; m_axi_rready = 1'b0;
-    end else if (wide80_mode) begin
-      m_axi_araddr = tensor80_araddr; m_axi_arid = tensor80_arid; m_axi_arlen = tensor80_arlen;
-      m_axi_arsize = tensor80_arsize; m_axi_arburst = tensor80_arburst; m_axi_arlock = tensor80_arlock;
-      m_axi_arcache = tensor80_arcache; m_axi_arprot = tensor80_arprot; m_axi_arqos = tensor80_arqos;
-      m_axi_arregion = tensor80_arregion; m_axi_arvalid = tensor80_arvalid; m_axi_rready = tensor80_rready;
+    end else if (wide48_mode) begin
+      m_axi_araddr = tensor48_araddr; m_axi_arid = tensor48_arid; m_axi_arlen = tensor48_arlen;
+      m_axi_arsize = tensor48_arsize; m_axi_arburst = tensor48_arburst; m_axi_arlock = tensor48_arlock;
+      m_axi_arcache = tensor48_arcache; m_axi_arprot = tensor48_arprot; m_axi_arqos = tensor48_arqos;
+      m_axi_arregion = tensor48_arregion; m_axi_arvalid = tensor48_arvalid; m_axi_rready = tensor48_rready;
     end else if (ENABLE_WIDE_MODES && (layer_mode == 2)) begin
-      m_axi_araddr = tensor40_araddr; m_axi_arid = tensor40_arid; m_axi_arlen = tensor40_arlen;
-      m_axi_arsize = tensor40_arsize; m_axi_arburst = tensor40_arburst; m_axi_arlock = tensor40_arlock;
-      m_axi_arcache = tensor40_arcache; m_axi_arprot = tensor40_arprot; m_axi_arqos = tensor40_arqos;
-      m_axi_arregion = tensor40_arregion; m_axi_arvalid = tensor40_arvalid; m_axi_rready = tensor40_rready;
+      m_axi_araddr = tensor32_araddr; m_axi_arid = tensor32_arid; m_axi_arlen = tensor32_arlen;
+      m_axi_arsize = tensor32_arsize; m_axi_arburst = tensor32_arburst; m_axi_arlock = tensor32_arlock;
+      m_axi_arcache = tensor32_arcache; m_axi_arprot = tensor32_arprot; m_axi_arqos = tensor32_arqos;
+      m_axi_arregion = tensor32_arregion; m_axi_arvalid = tensor32_arvalid; m_axi_rready = tensor32_rready;
     end else if (layer_mode == 1) begin
       m_axi_araddr = tensor_araddr; m_axi_arid = tensor_arid; m_axi_arlen = tensor_arlen;
       m_axi_arsize = tensor_arsize; m_axi_arburst = tensor_arburst; m_axi_arlock = tensor_arlock;
@@ -452,52 +452,52 @@ module gestureflow_layer_chain_hp0_axil #(
   endgenerate
   generate
   if (ENABLE_WIDE_MODES) begin : gen_wide_loaders
-  gestureflow_hp0_tensor_loader_banked #(.CHANNELS(40)) tensor40_loader (
+  gestureflow_hp0_tensor_loader_banked #(.CHANNELS(32)) tensor32_loader (
     .clk(aclk), .rst_n(aresetn), .start(dma_start && (layer_mode == 2)), .clear(dma_clear),
     .source_addr(dma_source_addr), .byte_count(dma_bytes), .pixel_count(dma_pixels),
-    .busy(tensor40_busy), .done(tensor40_done), .fault(tensor40_fault), .frame_start(tensor40_frame_start),
-    .pixel_valid(tensor40_pixel_valid), .pixel_ready(tensor40_pixel_ready), .pixel_data(tensor40_pixel),
-    .pixels_emitted(tensor40_pixels_emitted), .bytes_read(tensor40_bytes_read),
-    .m_axi_araddr(tensor40_araddr), .m_axi_arid(tensor40_arid), .m_axi_arlen(tensor40_arlen), .m_axi_arsize(tensor40_arsize),
-    .m_axi_arburst(tensor40_arburst), .m_axi_arlock(tensor40_arlock), .m_axi_arcache(tensor40_arcache), .m_axi_arprot(tensor40_arprot),
-    .m_axi_arqos(tensor40_arqos), .m_axi_arregion(tensor40_arregion), .m_axi_arvalid(tensor40_arvalid), .m_axi_arready(m_axi_arready),
+    .busy(tensor32_busy), .done(tensor32_done), .fault(tensor32_fault), .frame_start(tensor32_frame_start),
+    .pixel_valid(tensor32_pixel_valid), .pixel_ready(tensor32_pixel_ready), .pixel_data(tensor32_pixel),
+    .pixels_emitted(tensor32_pixels_emitted), .bytes_read(tensor32_bytes_read),
+    .m_axi_araddr(tensor32_araddr), .m_axi_arid(tensor32_arid), .m_axi_arlen(tensor32_arlen), .m_axi_arsize(tensor32_arsize),
+    .m_axi_arburst(tensor32_arburst), .m_axi_arlock(tensor32_arlock), .m_axi_arcache(tensor32_arcache), .m_axi_arprot(tensor32_arprot),
+    .m_axi_arqos(tensor32_arqos), .m_axi_arregion(tensor32_arregion), .m_axi_arvalid(tensor32_arvalid), .m_axi_arready(m_axi_arready),
     .m_axi_rid(m_axi_rid), .m_axi_rdata(m_axi_rdata), .m_axi_rresp(m_axi_rresp), .m_axi_rlast(m_axi_rlast),
-    .m_axi_rvalid(m_axi_rvalid), .m_axi_rready(tensor40_rready)
+    .m_axi_rvalid(m_axi_rvalid), .m_axi_rready(tensor32_rready)
   );
-  gestureflow_hp0_tensor_loader_banked #(.CHANNELS(80)) tensor80_loader (
+  gestureflow_hp0_tensor_loader_banked #(.CHANNELS(48)) tensor48_loader (
     .clk(aclk), .rst_n(aresetn), .start(dma_start && ((layer_mode == 3) || (layer_mode == 5))), .clear(dma_clear),
     .source_addr(dma_source_addr), .byte_count(dma_bytes), .pixel_count(dma_pixels),
-    .busy(tensor80_busy), .done(tensor80_done), .fault(tensor80_fault), .frame_start(tensor80_frame_start),
-    .pixel_valid(tensor80_pixel_valid), .pixel_ready(tensor80_pixel_ready), .pixel_data(tensor80_pixel),
-    .pixels_emitted(tensor80_pixels_emitted), .bytes_read(tensor80_bytes_read),
-    .m_axi_araddr(tensor80_araddr), .m_axi_arid(tensor80_arid), .m_axi_arlen(tensor80_arlen), .m_axi_arsize(tensor80_arsize),
-    .m_axi_arburst(tensor80_arburst), .m_axi_arlock(tensor80_arlock), .m_axi_arcache(tensor80_arcache), .m_axi_arprot(tensor80_arprot),
-    .m_axi_arqos(tensor80_arqos), .m_axi_arregion(tensor80_arregion), .m_axi_arvalid(tensor80_arvalid), .m_axi_arready(m_axi_arready),
+    .busy(tensor48_busy), .done(tensor48_done), .fault(tensor48_fault), .frame_start(tensor48_frame_start),
+    .pixel_valid(tensor48_pixel_valid), .pixel_ready(tensor48_pixel_ready), .pixel_data(tensor48_pixel),
+    .pixels_emitted(tensor48_pixels_emitted), .bytes_read(tensor48_bytes_read),
+    .m_axi_araddr(tensor48_araddr), .m_axi_arid(tensor48_arid), .m_axi_arlen(tensor48_arlen), .m_axi_arsize(tensor48_arsize),
+    .m_axi_arburst(tensor48_arburst), .m_axi_arlock(tensor48_arlock), .m_axi_arcache(tensor48_arcache), .m_axi_arprot(tensor48_arprot),
+    .m_axi_arqos(tensor48_arqos), .m_axi_arregion(tensor48_arregion), .m_axi_arvalid(tensor48_arvalid), .m_axi_arready(m_axi_arready),
     .m_axi_rid(m_axi_rid), .m_axi_rdata(m_axi_rdata), .m_axi_rresp(m_axi_rresp), .m_axi_rlast(m_axi_rlast),
-    .m_axi_rvalid(m_axi_rvalid), .m_axi_rready(tensor80_rready)
+    .m_axi_rvalid(m_axi_rvalid), .m_axi_rready(tensor48_rready)
   );
   end else begin : gen_no_wide_loaders
-    assign tensor40_busy = 1'b0; assign tensor40_done = 1'b0; assign tensor40_fault = 1'b0;
-    assign tensor40_frame_start = 1'b0; assign tensor40_pixel_valid = 1'b0;
-    assign tensor40_pixel = '0; assign tensor40_pixels_emitted = '0; assign tensor40_bytes_read = '0;
-    assign tensor40_araddr = '0; assign tensor40_arid = '0; assign tensor40_arlen = '0;
-    assign tensor40_arsize = '0; assign tensor40_arburst = '0; assign tensor40_arlock = 1'b0;
-    assign tensor40_arcache = '0; assign tensor40_arprot = '0; assign tensor40_arqos = '0;
-    assign tensor40_arregion = '0; assign tensor40_arvalid = 1'b0; assign tensor40_rready = 1'b0;
-    assign tensor80_busy = 1'b0; assign tensor80_done = 1'b0; assign tensor80_fault = 1'b0;
-    assign tensor80_frame_start = 1'b0; assign tensor80_pixel_valid = 1'b0;
-    assign tensor80_pixel = '0; assign tensor80_pixels_emitted = '0; assign tensor80_bytes_read = '0;
-    assign tensor80_araddr = '0; assign tensor80_arid = '0; assign tensor80_arlen = '0;
-    assign tensor80_arsize = '0; assign tensor80_arburst = '0; assign tensor80_arlock = 1'b0;
-    assign tensor80_arcache = '0; assign tensor80_arprot = '0; assign tensor80_arqos = '0;
-    assign tensor80_arregion = '0; assign tensor80_arvalid = 1'b0; assign tensor80_rready = 1'b0;
+    assign tensor32_busy = 1'b0; assign tensor32_done = 1'b0; assign tensor32_fault = 1'b0;
+    assign tensor32_frame_start = 1'b0; assign tensor32_pixel_valid = 1'b0;
+    assign tensor32_pixel = '0; assign tensor32_pixels_emitted = '0; assign tensor32_bytes_read = '0;
+    assign tensor32_araddr = '0; assign tensor32_arid = '0; assign tensor32_arlen = '0;
+    assign tensor32_arsize = '0; assign tensor32_arburst = '0; assign tensor32_arlock = 1'b0;
+    assign tensor32_arcache = '0; assign tensor32_arprot = '0; assign tensor32_arqos = '0;
+    assign tensor32_arregion = '0; assign tensor32_arvalid = 1'b0; assign tensor32_rready = 1'b0;
+    assign tensor48_busy = 1'b0; assign tensor48_done = 1'b0; assign tensor48_fault = 1'b0;
+    assign tensor48_frame_start = 1'b0; assign tensor48_pixel_valid = 1'b0;
+    assign tensor48_pixel = '0; assign tensor48_pixels_emitted = '0; assign tensor48_bytes_read = '0;
+    assign tensor48_araddr = '0; assign tensor48_arid = '0; assign tensor48_arlen = '0;
+    assign tensor48_arsize = '0; assign tensor48_arburst = '0; assign tensor48_arlock = 1'b0;
+    assign tensor48_arcache = '0; assign tensor48_arprot = '0; assign tensor48_arqos = '0;
+    assign tensor48_arregion = '0; assign tensor48_arvalid = 1'b0; assign tensor48_rready = 1'b0;
   end
   endgenerate
   // PROJECT_LOCAL_SELF_RESEARCH_NOT_GOOGLE_OFFICIAL
   // Descriptor weight path.  It is idle in the legacy AXI-Lite mode and is
   // selected on the shared HP0 read channel only while this loader owns a
   // burst.  The MAC bank sees the same write protocol in either mode.
-  gestureflow_hp0_weight_dma_loader #(.FIFO_BEATS(16), .MAX_TAPS(16), .MAX_GROUPS(20)) weight_dma_loader (
+  gestureflow_hp0_weight_dma_loader #(.FIFO_BEATS(16), .MAX_TAPS(16), .MAX_GROUPS(12)) weight_dma_loader (
     .clk(aclk), .rst_n(aresetn), .start(weight_dma_start), .clear(weight_dma_clear),
     .source_addr(weight_dma_source), .byte_count(weight_dma_bytes),
     .taps_per_output(weight_dma_taps), .groups_per_tap(weight_dma_groups),
@@ -552,9 +552,9 @@ module gestureflow_layer_chain_hp0_axil #(
     .clk(aclk), .rst_n(aresetn), .image_width(job_width), .image_height(job_height), .pointwise_mode(pointwise_mode), .frame_start(frame_start), .pixel_valid(pixel_valid), .pixel_ready(pixel_ready),
     // RGB has 3 active input channels and therefore needs one 4-lane group;
     // the fourth lane is masked by input_lane_enable.  Body layers use the
-    // full 16/40/80-channel group counts below.  PROJECT_LOCAL_SELF_RESEARCH.
+    // full 16/32/48-channel group counts below.  PROJECT_LOCAL_SELF_RESEARCH.
     .pixel_data(pixel_data), .input_zero_point(input_zero_point),
-    .input_group_count(wide80_mode ? 5'd20 : (layer_mode == 2 ? 5'd10 : (layer_mode == 1 ? 5'd4 : 5'd1))),
+    .input_group_count(wide48_mode ? 5'd12 : (layer_mode == 2 ? 5'd8 : (layer_mode == 1 ? 5'd4 : 5'd1))),
     .input_lane_enable(layer_mode == 0 ? 4'b0111 : 4'hf),
     .weight_write_valid(weight_write_valid), .weight_write_oc(weight_write_oc), .weight_write_tap(weight_write_tap),
     .weight_write_ic_group(stream_weight_write_ic_group), .weight_write_data(weight_write_data), .weight_bank_select(weight_bank_select), .bias(bias),
