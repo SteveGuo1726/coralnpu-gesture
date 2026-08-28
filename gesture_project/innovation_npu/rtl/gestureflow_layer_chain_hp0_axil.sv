@@ -132,13 +132,14 @@ module gestureflow_layer_chain_hp0_axil #(
   logic [4:0] store_valid_bytes;
   logic [31:0] layer_cycles;
   logic weight_write_valid, ps_weight_write_valid, weight_dma_write_valid;
-  logic [3:0] ps_weight_write_oc, ps_weight_write_tap;
+  logic [4:0] ps_weight_write_oc; logic [3:0] ps_weight_write_tap;
   logic [4:0] ps_weight_write_ic_group;
   logic signed [3:0][7:0] ps_weight_write_data;
   logic [31:0] weight_key, weight_resident_key, weight_write_count;
   logic [31:0] weight_hit_count, weight_miss_count, weight_bytes;
   logic weight_keyed_mode, weight_resident_valid, weight_key_hit;
-  logic [3:0] weight_write_oc, weight_write_tap, bias_index, requant_index;
+  logic [4:0] weight_write_oc; logic [3:0] weight_write_tap;
+  logic [4:0] bias_index, requant_index;
   logic [4:0] weight_write_ic_group;
   logic signed [3:0][7:0] weight_write_data;
   localparam int STREAM_WEIGHT_GROUP_W = (MAX_INPUT_CHANNELS <= 4) ? 1 : $clog2(MAX_INPUT_CHANNELS / 4);
@@ -151,13 +152,13 @@ module gestureflow_layer_chain_hp0_axil #(
   logic [3:0] weight_dma_arcache, weight_dma_arqos, weight_dma_arregion; logic [2:0] weight_dma_arprot;
   logic [3:0] weight_dma_oc, weight_dma_tap; logic [4:0] weight_dma_ic_group;
   logic signed [3:0][7:0] weight_dma_data;
-  logic signed [15:0][31:0] bias, requant_multiplier;
-  logic [15:0][5:0] requant_right_shift;
+  logic signed [17:0][31:0] bias, requant_multiplier;
+  logic [17:0][5:0] requant_right_shift;
   logic [15:0] output_lane_enable;
   logic weight_bank_select;
-  logic [31:0] bias_bank [0:1][0:15];
-  logic [31:0] requant_multiplier_bank [0:1][0:15];
-  logic [5:0] requant_right_shift_bank [0:1][0:15];
+  logic [31:0] bias_bank [0:1][0:17];
+  logic [31:0] requant_multiplier_bank [0:1][0:17];
+  logic [5:0] requant_right_shift_bank [0:1][0:17];
   logic [0:0] param_bank_select;
   logic signed [MAX_INPUT_CHANNELS-1:0][7:0] input_zero_point, selected_pixel;
   logic requant_enable, requant_relu_enable; logic signed [7:0] output_zero_point;
@@ -167,8 +168,8 @@ module gestureflow_layer_chain_hp0_axil #(
   logic signed [7:0] post_gap_input_zero_point, post_gap_output_zero_point, post_fc_output_zero_point;
   logic [31:0] post_gap_fnv1a, post_fc_fnv1a, post_cycles;
   logic signed [31:0] post_debug_gap_sum0, post_debug_gap_sum6;
-  logic signed [5:0][7:0] post_debug_fc_value;
-  logic [2:0] post_predicted_class, post_fc_values_done;
+  logic signed [17:0][7:0] post_debug_fc_value;
+  logic [4:0] post_predicted_class, post_fc_values_done;
   logic [6:0] post_gap_values_done;
 
   logic rgb_busy, rgb_done, rgb_fault, rgb_frame_start, rgb_pixel_valid, rgb_pixel_ready;
@@ -312,7 +313,7 @@ module gestureflow_layer_chain_hp0_axil #(
   assign weight_write_valid = ps_weight_write_valid | weight_dma_write_valid;
   always_comb begin
     if (weight_dma_write_valid) begin
-      weight_write_oc = weight_dma_oc;
+      weight_write_oc = {1'b0, weight_dma_oc};
       weight_write_tap = weight_dma_tap;
       weight_write_ic_group = weight_dma_ic_group;
       weight_write_data = weight_dma_data;
@@ -516,15 +517,15 @@ module gestureflow_layer_chain_hp0_axil #(
   );
   generate
   if (ENABLE_POSTPROCESS) begin : gen_postprocess
-  gestureflow_hp0_gap_fc postprocess (
+  gestureflow_hp0_gap_fc #(.CHANNELS(64), .CLASSES(18), .ELEMENTS(144), .FC_GROUPS(16)) postprocess (
     .clk(aclk), .rst_n(aresetn), .start(post_start), .clear(post_clear),
     .source_addr(dma_source_addr), .byte_count(dma_bytes), .pixel_count(dma_pixels),
     .gap_multiplier(post_gap_multiplier), .gap_right_shift(post_gap_right_shift),
     .gap_input_zero_point(post_gap_input_zero_point), .gap_output_zero_point(post_gap_output_zero_point),
     .fc_output_zero_point(post_fc_output_zero_point), .fc_weight_write_valid(weight_write_valid),
-    .fc_weight_write_class(weight_write_oc[2:0]), .fc_weight_write_group(weight_write_ic_group),
-    .fc_weight_write_data(weight_write_data), .fc_bias(bias[5:0]),
-    .fc_multiplier(requant_multiplier[5:0]), .fc_right_shift(requant_right_shift[5:0]),
+    .fc_weight_write_class(weight_write_oc), .fc_weight_write_group(weight_write_ic_group[3:0]),
+    .fc_weight_write_data(weight_write_data), .fc_bias(bias),
+    .fc_multiplier(requant_multiplier), .fc_right_shift(requant_right_shift),
     .busy(post_busy), .done(post_done), .fault(post_fault), .cycles(post_cycles),
     .gap_fnv1a(post_gap_fnv1a), .fc_fnv1a(post_fc_fnv1a), .predicted_class(post_predicted_class),
     .gap_values_done(post_gap_values_done), .fc_values_done(post_fc_values_done),
@@ -556,8 +557,8 @@ module gestureflow_layer_chain_hp0_axil #(
     .pixel_data(pixel_data), .input_zero_point(input_zero_point),
     .input_group_count(wide48_mode ? 5'd12 : (layer_mode == 2 ? 5'd8 : (layer_mode == 1 ? 5'd4 : 5'd1))),
     .input_lane_enable(layer_mode == 0 ? 4'b0111 : 4'hf),
-    .weight_write_valid(weight_write_valid), .weight_write_oc(weight_write_oc), .weight_write_tap(weight_write_tap),
-    .weight_write_ic_group(stream_weight_write_ic_group), .weight_write_data(weight_write_data), .weight_bank_select(weight_bank_select), .bias(bias),
+    .weight_write_valid(weight_write_valid), .weight_write_oc(weight_write_oc[3:0]), .weight_write_tap(weight_write_tap),
+    .weight_write_ic_group(stream_weight_write_ic_group), .weight_write_data(weight_write_data), .weight_bank_select(weight_bank_select), .bias(bias[15:0]),
     .output_lane_enable(output_lane_enable), .output_valid(output_valid), .output_ready(output_ready),
     .output_psum(output_psum), .output_lane_enable_valid(output_lane_enable_valid), .output_row(output_row),
     .output_column(output_column), .busy(), .protocol_error(protocol_error), .frame_input_done(frame_input_done)
@@ -565,7 +566,7 @@ module gestureflow_layer_chain_hp0_axil #(
   gestureflow_requant_relu #(.LANES(OUT_LANES)) requant (
     .clk(aclk), .rst_n(aresetn), .in_valid(output_valid), .in_ready(quant_ready), .in_psum(output_psum),
     .in_lane_enable(output_lane_enable_valid), .enable(requant_enable), .relu_enable(requant_relu_enable),
-    .output_zero_point(output_zero_point), .multiplier(requant_multiplier), .right_shift(requant_right_shift),
+    .output_zero_point(output_zero_point), .multiplier(requant_multiplier[15:0]), .right_shift(requant_right_shift[15:0]),
     .out_valid(quant_valid), .out_ready(1'b1), .out_data(quant_data), .out_lane_enable(), .config_error(quant_fault)
   );
   assign output_write_valid = quant_valid;
@@ -665,7 +666,7 @@ module gestureflow_layer_chain_hp0_axil #(
       desc_state<=DESC_IDLE; descriptor_active<=0; desc_select<=0; desc_read_index<=0; desc_count<=0;
       desc_issued<=0; desc_completed<=0;
       for (int bank_index=0; bank_index<2; bank_index++) begin
-        for (int parameter_index=0; parameter_index<16; parameter_index++) begin
+        for (int parameter_index=0; parameter_index<18; parameter_index++) begin
           bias_bank[bank_index][parameter_index]<=0;
           requant_multiplier_bank[bank_index][parameter_index]<=0;
           requant_right_shift_bank[bank_index][parameter_index]<=0;
@@ -701,7 +702,7 @@ module gestureflow_layer_chain_hp0_axil #(
           store_stride_bytes <= desc_store_stride_mem[desc_read_index];
           store_valid_bytes <= desc_store_valid_mem[desc_read_index];
           weight_bank_select <= desc_weight_bank_mem[desc_read_index][0];
-          for (int parameter_index = 0; parameter_index < 16; parameter_index++) begin
+          for (int parameter_index = 0; parameter_index < 18; parameter_index++) begin
             bias[parameter_index] <= bias_bank[desc_param_bank_mem[desc_read_index][0]][parameter_index];
             requant_multiplier[parameter_index] <= requant_multiplier_bank[desc_param_bank_mem[desc_read_index][0]][parameter_index];
             requant_right_shift[parameter_index] <= requant_right_shift_bank[desc_param_bank_mem[desc_read_index][0]][parameter_index];
@@ -798,11 +799,11 @@ module gestureflow_layer_chain_hp0_axil #(
               weight_miss_count<=weight_miss_count+1'b1; weight_resident_valid<=0;
             end
           end
-          WCTRL: if (running || dma_busy || weight_dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else begin ps_weight_write_oc<=wdata[3:0]; ps_weight_write_tap<=wdata[7:4]; ps_weight_write_ic_group<=wdata[12:8]; end
+          WCTRL: if (running || dma_busy || weight_dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else begin ps_weight_write_oc<=wdata[4:0]; ps_weight_write_tap<=wdata[8:5]; ps_weight_write_ic_group<=wdata[13:9]; end
           WDATA: if (running || dma_busy || weight_dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else ps_weight_write_data<=wdata;
-          BIDX: if (running || dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else bias_index<=wdata[3:0];
+          BIDX: if (running || dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else bias_index<=wdata[4:0];
           BDATA: if (running || dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else begin bias[bias_index]<=wdata; bias_bank[param_bank_select][bias_index]<=wdata; end
-          RQIDX: if (running || dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else requant_index<=wdata[3:0];
+          RQIDX: if (running || dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else requant_index<=wdata[4:0];
           RQMULT: if (running || dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else begin requant_multiplier[requant_index]<=wdata; requant_multiplier_bank[param_bank_select][requant_index]<=wdata; end
           RQSHIFT: if (running || dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else begin requant_right_shift[requant_index]<=wdata[5:0]; requant_right_shift_bank[param_bank_select][requant_index]<=wdata[5:0]; end
           WEIGHT_BANK_SELECT: if (running || dma_busy || store_busy || descriptor_active) fault<=1; else weight_bank_select<=wdata[0];
@@ -892,8 +893,8 @@ module gestureflow_layer_chain_hp0_axil #(
           POST_GAP_MULT:s_axi_rdata<=post_gap_multiplier; POST_GAP_SHIFT:s_axi_rdata<={26'd0,post_gap_right_shift};
           POST_QCFG:s_axi_rdata<={8'd0,post_fc_output_zero_point,post_gap_output_zero_point,post_gap_input_zero_point};
           POST_GAP_FNV1A:s_axi_rdata<=post_gap_fnv1a; POST_FC_FNV1A:s_axi_rdata<=post_fc_fnv1a;
-          POST_CLASS:s_axi_rdata<={19'd0,post_fc_values_done,post_gap_values_done,post_predicted_class}; POST_CYCLES:s_axi_rdata<=post_cycles;
-          POST_PROGRESS:s_axi_rdata<={19'd0,post_fc_values_done,post_gap_values_done,post_busy,post_fault,post_done};
+          POST_CLASS:s_axi_rdata<={15'd0,post_fc_values_done,post_gap_values_done,post_predicted_class}; POST_CYCLES:s_axi_rdata<=post_cycles;
+          POST_PROGRESS:s_axi_rdata<={17'd0,post_fc_values_done,post_gap_values_done,post_busy,post_fault,post_done};
           POST_DEBUG_GAP_SUM0:s_axi_rdata<=post_debug_gap_sum0; POST_DEBUG_GAP_SUM6:s_axi_rdata<=post_debug_gap_sum6;
           POST_DEBUG_FC0:s_axi_rdata<={{24{post_debug_fc_value[0][7]}},post_debug_fc_value[0]};
           POST_DEBUG_FC1:s_axi_rdata<={{24{post_debug_fc_value[1][7]}},post_debug_fc_value[1]};

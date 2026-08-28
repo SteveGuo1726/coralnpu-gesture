@@ -334,7 +334,7 @@ static void load_gap_fc_descriptor(void)
             for (lane = 0U; lane < 4U; ++lane) {
                 packed |= (u32)(uint8_t)gf_post_fc_weights[class_index * GF_POST_GAP_CHANNELS + group * 4U + lane] << (lane * 8U);
             }
-            Xil_Out32(GF_BASE + GF_WCTRL, class_index | (group << 8U));
+            Xil_Out32(GF_BASE + GF_WCTRL, class_index | (group << 9U));
             Xil_Out32(GF_BASE + GF_WDATA, packed);
         }
     }
