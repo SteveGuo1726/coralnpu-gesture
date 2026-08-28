@@ -29,7 +29,7 @@
 #include "gestureflow_real_conv4x4_head1x1_layer.h"
 #include "gestureflow_real_gap_fc.h"
 
-#define PROBE_BASE 0x43C40000U
+#define PROBE_BASE 0xFFFF0000U
 #define GF_BASE 0x43C00000U
 
 #define GF_MAGIC 0x000U
@@ -112,12 +112,12 @@
 #define GF_CONV2_BYTES (48U * 48U * 32U)
 #define GF_CONV2_TILE_BYTES (48U * 48U * 16U)
 #define GF_CONV3_BYTES (48U * 48U * 32U)
-#define GF_CONV3_TILE_BYTES (48U * 48U * 16U)
+#define GF_POOL2_TILE_BYTES (24U * 24U * 16U)
 #define GF_POOL2_BYTES GF_POOL2_OUTPUT_BYTES
 #define GF_CONV4_BYTES (24U * 24U * 48U)
 #define GF_CONV4_TILE_BYTES (24U * 24U * 16U)
 #define GF_CONV5_BYTES (24U * 24U * 48U)
-#define GF_CONV5_TILE_BYTES (24U * 24U * 16U)
+#define GF_POOL3_TILE_BYTES (12U * 12U * 16U)
 #define GF_POOL3_BYTES GF_POOL3_OUTPUT_BYTES
 #define GF_HEAD1X1_BYTES (12U * 12U * 64U)
 #define GF_HEAD1X1_TILE_BYTES (12U * 12U * 16U)
@@ -462,11 +462,11 @@ int main(void)
         Xil_Out32(GF_BASE + GF_CONTROL, 1U);
         GF_TIME_WEIGHT_LOAD(load_conv_tile(2U, 0U, first_oc, 0xffffU, gf_conv2b_weights, gf_conv2b_folded_bias,
                                            gf_conv2b_requant_multiplier, gf_conv2b_requant_right_shift, GF_CONV2B_OUTPUT_LANES, 512U, 8U));
-        pool2_cycles[index] = run_layer(2U, (u32)(UINTPTR)gf_conv2, GF_CONV2_BYTES, (u32)(UINTPTR)gf_pool2 + first_oc, GF_CONV3_TILE_BYTES, 3U, 48U, 48U, 32U, 16U);
+        pool2_cycles[index] = run_layer(2U, (u32)(UINTPTR)gf_conv2, GF_CONV2_BYTES, (u32)(UINTPTR)gf_pool2 + first_oc, GF_POOL2_TILE_BYTES, 3U, 48U, 48U, 32U, 16U);
         status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS);
         if ((status & (GF_FAULT_BIT|GF_LAYER_FAULT_BIT)) || (dma_status & GF_DMA_FAULT_BIT) || !(dma_status & GF_DMA_DONE_BIT) ||
             GF_DMA_BYTES_READ(dma_status) != GF_CONV2_BYTES || (store_status & GF_STORE_FAULT_BIT) || !(store_status & GF_STORE_DONE_BIT) ||
-            GF_STORE_BYTES_WRITTEN(store_status) != GF_CONV3_TILE_BYTES) terminal_failure(0x4111U + index, store_status);
+            GF_STORE_BYTES_WRITTEN(store_status) != GF_POOL2_TILE_BYTES) terminal_failure(0x4111U + index, store_status);
     }
     if (!verify_full_tensor(gf_pool2, GF_POOL2_BYTES, GF_POOL2_OUTPUT_FNV1A)) terminal_failure(0x4114U, fnv1a_bytes(gf_pool2, GF_POOL2_BYTES));
 
@@ -492,11 +492,11 @@ int main(void)
         Xil_Out32(GF_BASE + GF_CONTROL, 1U);
         GF_TIME_WEIGHT_LOAD(load_conv_tile(3U, 0U, first_oc, 0xffffU, gf_conv3b_weights, gf_conv3b_folded_bias,
                                            gf_conv3b_requant_multiplier, gf_conv3b_requant_right_shift, GF_CONV3B_OUTPUT_LANES, 768U, 12U));
-        pool3_cycles[index] = run_layer(3U, (u32)(UINTPTR)gf_conv4, GF_CONV4_BYTES, (u32)(UINTPTR)gf_pool3 + first_oc, GF_CONV5_TILE_BYTES, 3U, 24U, 24U, 48U, 16U);
+        pool3_cycles[index] = run_layer(3U, (u32)(UINTPTR)gf_conv4, GF_CONV4_BYTES, (u32)(UINTPTR)gf_pool3 + first_oc, GF_POOL3_TILE_BYTES, 3U, 24U, 24U, 48U, 16U);
         status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS);
         if ((status & (GF_FAULT_BIT|GF_LAYER_FAULT_BIT)) || (dma_status & GF_DMA_FAULT_BIT) || !(dma_status & GF_DMA_DONE_BIT) ||
             GF_DMA_BYTES_READ(dma_status) != GF_CONV4_BYTES || (store_status & GF_STORE_FAULT_BIT) || !(store_status & GF_STORE_DONE_BIT) ||
-            GF_STORE_BYTES_WRITTEN(store_status) != GF_CONV5_TILE_BYTES) terminal_failure(0x411DU + index, store_status);
+            GF_STORE_BYTES_WRITTEN(store_status) != GF_POOL3_TILE_BYTES) terminal_failure(0x411DU + index, store_status);
     }
     if (!verify_full_tensor(gf_pool3, GF_POOL3_BYTES, GF_POOL3_OUTPUT_FNV1A)) terminal_failure(0x4129U, fnv1a_bytes(gf_pool3, GF_POOL3_BYTES));
 
