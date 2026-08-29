@@ -3,10 +3,11 @@
 `timescale 1ns/1ps
 module tb_gestureflow_hp0_tensor_writer_boundary;
   localparam int VECTOR_COUNT = 5;
+  localparam int MAX_BURST_VECTORS = 8;
   logic clk=0, rst_n=0, start=0, clear=0, pool_2x2=0;
   logic [31:0] destination_addr=32'h00100fe0, byte_count=VECTOR_COUNT*16;
   logic [13:0] vector_count=14'(VECTOR_COUNT); logic [15:0] input_width=96;
-  logic [31:0] destination_stride_bytes=0; logic [4:0] valid_vector_bytes=0;
+  logic [31:0] destination_stride_bytes=0; logic [5:0] valid_vector_bytes=0;
   logic busy, done, fault;
   logic [2:0] bank_read_addr; logic bank_read_enable; logic [127:0] bank_read_data;
   logic [31:0] awaddr; logic [5:0] awid; logic [7:0] awlen; logic [2:0] awsize; logic [1:0] awburst;
@@ -17,7 +18,11 @@ module tb_gestureflow_hp0_tensor_writer_boundary;
   integer aw_count=0, w_count=0, b_count=0, burst_beats_seen=0;
   always #5 clk=~clk;
 
-  gestureflow_hp0_tensor_writer #(.VECTOR_COUNT(VECTOR_COUNT), .VECTOR_ADDR_W(3)) dut (
+  gestureflow_hp0_tensor_writer #(
+    .VECTOR_COUNT(VECTOR_COUNT),
+    .VECTOR_ADDR_W(3),
+    .MAX_BURST_VECTORS(MAX_BURST_VECTORS)
+  ) dut (
     .clk,.rst_n,.start,.clear,.pool_2x2,.destination_addr,.byte_count,.vector_count,.input_width,
     .destination_stride_bytes,.valid_vector_bytes,.busy,.done,.fault,.bank_read_addr,.bank_read_enable,
     .bank_read_data,.vectors_written(),.bytes_written(),.m_axi_awaddr(awaddr),.m_axi_awid(awid),

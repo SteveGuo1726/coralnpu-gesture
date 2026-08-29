@@ -98,7 +98,7 @@ module gestureflow_full_layer_hp0_axil (
     .output_write_valid(output_write_valid),.output_write_addr(output_write_addr),.output_write_data(output_write_data),.output_read_enable(output_read_enable),.output_read_addr(output_read_addr),.output_read_data(output_read_data));
   gestureflow_hp0_tensor_writer #(.VECTOR_COUNT(OUTPUTS),.VECTOR_ADDR_W(14),.VECTOR_BYTES(16)) store (
     .clk(aclk),.rst_n(aresetn),.start(store_start),.clear(store_clear),.pool_2x2(1'b0),.destination_addr(store_destination),.byte_count(store_bytes),
-    .vector_count(14'(OUTPUTS)),.input_width(16'(IMAGE_WIDTH)),.destination_stride_bytes(32'd0),.valid_vector_bytes(5'd0),
+    .vector_count(14'(OUTPUTS)),.input_width(16'(IMAGE_WIDTH)),.destination_stride_bytes(32'd0),.valid_vector_bytes(6'd0),
     .busy(store_busy),.done(store_done),.fault(store_fault),.bank_read_addr(output_read_addr),.bank_read_enable(output_read_enable),.bank_read_data(output_read_data),
     .vectors_written(store_vectors_written),.bytes_written(store_bytes_written),.m_axi_awaddr(m_axi_awaddr),.m_axi_awid(m_axi_awid),.m_axi_awlen(m_axi_awlen),
     .m_axi_awsize(m_axi_awsize),.m_axi_awburst(m_axi_awburst),.m_axi_awlock(m_axi_awlock),.m_axi_awcache(m_axi_awcache),.m_axi_awprot(m_axi_awprot),

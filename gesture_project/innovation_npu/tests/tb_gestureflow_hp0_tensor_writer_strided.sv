@@ -8,7 +8,7 @@ module tb_gestureflow_hp0_tensor_writer_strided;
   logic clk=0, rst_n=0, start=0, clear=0, pool_2x2=0;
   logic [31:0] destination_addr=0, byte_count=0;
   logic [13:0] vector_count=14'(VECTOR_COUNT); logic [15:0] input_width=48;
-  logic [31:0] destination_stride_bytes=40; logic [4:0] valid_vector_bytes=8;
+  logic [31:0] destination_stride_bytes=40; logic [5:0] valid_vector_bytes=8;
   logic busy, done, fault;
   logic [2:0] bank_read_addr; logic bank_read_enable; logic [127:0] bank_read_data;
   logic [31:0] awaddr; logic [5:0] awid; logic [7:0] awlen; logic [2:0] awsize; logic [1:0] awburst; logic awlock; logic [3:0] awcache; logic [2:0] awprot; logic [3:0] awqos, awregion; logic awvalid, awready=1;

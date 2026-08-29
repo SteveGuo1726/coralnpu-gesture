@@ -29,7 +29,7 @@ module gestureflow_layer_chain_hp0_axil #(
   // build and kept for the Verilator relay regressions.
   parameter bit ENABLE_RELAY = 1'b1
 ) (
-  (* X_INTERFACE_PARAMETER = "XIL_INTERFACENAME CLK.ACLK, ASSOCIATED_BUSIF S_AXI:M_AXI, ASSOCIATED_RESET aresetn, FREQ_HZ 40000000" *) input wire aclk,
+  (* X_INTERFACE_PARAMETER = "XIL_INTERFACENAME CLK.ACLK, ASSOCIATED_BUSIF S_AXI:M_AXI, ASSOCIATED_RESET aresetn" *) input wire aclk,
   (* X_INTERFACE_PARAMETER = "XIL_INTERFACENAME RST.ARESETN, POLARITY ACTIVE_LOW" *) input wire aresetn,
   input wire [31:0] s_axi_awaddr, input wire [2:0] s_axi_awprot, input wire s_axi_awvalid, output logic s_axi_awready,
   input wire [31:0] s_axi_wdata, input wire [3:0] s_axi_wstrb, input wire s_axi_wvalid, output logic s_axi_wready,
@@ -104,6 +104,7 @@ module gestureflow_layer_chain_hp0_axil #(
     WEIGHT_DMA_CONTROL=12'h0ec, WEIGHT_DMA_STATUS=12'h0f0,
     WEIGHT_DMA_BYTES_READ=12'h0f4, WEIGHT_DMA_WRITE_COUNT=12'h0f8,
     WEIGHT_BANK_SELECT=12'h0fc, PARAM_BANK_SELECT=12'h150,
+    WEIGHT_READ_BANK_SELECT=12'h15c,
     DESC_SELECT=12'h100, DESC_MODE=12'h104, DESC_JOB_SHAPE=12'h108,
     DESC_DMA_SOURCE=12'h10c, DESC_DMA_BYTES=12'h110, DESC_DMA_PIXELS=12'h114,
     DESC_STORE_DESTINATION=12'h118, DESC_STORE_BYTES=12'h11c,
@@ -119,6 +120,7 @@ module gestureflow_layer_chain_hp0_axil #(
   // requantized output is emitted; no second MAC array or DDR partial sum is
   // introduced for the widest 48-channel layer.
   localparam int PIXELS = IMAGE_WIDTH * IMAGE_HEIGHT;
+  localparam int CTRL_LANES = (OUT_LANES > 18) ? OUT_LANES : 18;
 
   logic [31:0] awaddr, wdata; logic [3:0] wstrb; logic aw_seen, w_seen;
   logic running, done, fault;
@@ -129,7 +131,7 @@ module gestureflow_layer_chain_hp0_axil #(
   logic [31:0] store_destination, store_bytes;
   logic [15:0] job_width, job_height;
   logic [31:0] store_stride_bytes;
-  logic [4:0] store_valid_bytes;
+  logic [5:0] store_valid_bytes;
   logic [31:0] layer_cycles;
   logic weight_write_valid, ps_weight_write_valid, weight_dma_write_valid;
   logic [4:0] ps_weight_write_oc; logic [3:0] ps_weight_write_tap;
@@ -139,7 +141,7 @@ module gestureflow_layer_chain_hp0_axil #(
   logic [31:0] weight_hit_count, weight_miss_count, weight_bytes;
   logic weight_keyed_mode, weight_resident_valid, weight_key_hit;
   logic [4:0] weight_write_oc; logic [3:0] weight_write_tap;
-  logic [4:0] bias_index, requant_index;
+  logic [$clog2(CTRL_LANES)-1:0] bias_index, requant_index;
   logic [4:0] weight_write_ic_group;
   logic signed [3:0][7:0] weight_write_data;
   localparam int STREAM_WEIGHT_GROUP_W = (MAX_INPUT_CHANNELS <= 4) ? 1 : $clog2(MAX_INPUT_CHANNELS / 4);
@@ -152,13 +154,13 @@ module gestureflow_layer_chain_hp0_axil #(
   logic [3:0] weight_dma_arcache, weight_dma_arqos, weight_dma_arregion; logic [2:0] weight_dma_arprot;
   logic [3:0] weight_dma_oc, weight_dma_tap; logic [4:0] weight_dma_ic_group;
   logic signed [3:0][7:0] weight_dma_data;
-  logic signed [17:0][31:0] bias, requant_multiplier;
-  logic [17:0][5:0] requant_right_shift;
-  logic [15:0] output_lane_enable;
-  logic weight_bank_select;
-  logic [31:0] bias_bank [0:1][0:17];
-  logic [31:0] requant_multiplier_bank [0:1][0:17];
-  logic [5:0] requant_right_shift_bank [0:1][0:17];
+  logic signed [CTRL_LANES-1:0][31:0] bias, requant_multiplier;
+  logic [CTRL_LANES-1:0][5:0] requant_right_shift;
+  logic [OUT_LANES-1:0] output_lane_enable;
+  logic weight_bank_select, weight_read_bank_select;
+  logic [31:0] bias_bank [0:1][0:CTRL_LANES-1];
+  logic [31:0] requant_multiplier_bank [0:1][0:CTRL_LANES-1];
+  logic [5:0] requant_right_shift_bank [0:1][0:CTRL_LANES-1];
   logic [0:0] param_bank_select;
   logic signed [MAX_INPUT_CHANNELS-1:0][7:0] input_zero_point, selected_pixel;
   logic requant_enable, requant_relu_enable; logic signed [7:0] output_zero_point;
@@ -204,13 +206,19 @@ module gestureflow_layer_chain_hp0_axil #(
   logic signed [MAX_INPUT_CHANNELS-1:0][7:0] pixel_data;
   logic wide48_mode, pointwise_mode;
   logic [13:0] input_pixels; logic dma_busy, dma_done, dma_fault; logic [31:0] dma_bytes_read;
-  logic output_valid, output_ready, protocol_error; logic signed [15:0][31:0] output_psum;
-  logic [15:0] output_lane_enable_valid; logic [15:0] output_row, output_column;
+  logic output_valid, output_ready, protocol_error; logic signed [OUT_LANES-1:0][31:0] output_psum;
+  logic [OUT_LANES-1:0] output_lane_enable_valid; logic [15:0] output_row, output_column;
   logic frame_input_done;
-  logic quant_valid, quant_ready, quant_fault; logic signed [15:0][7:0] quant_data;
+  logic quant_valid, quant_ready, quant_fault; logic signed [OUT_LANES-1:0][7:0] quant_data;
   logic [15:0] quant_row, quant_column; logic [13:0] output_write_addr;
-  logic output_write_valid; logic signed [15:0][7:0] output_write_data;
-  logic [127:0] output_read_data, relay_bank_read_data, hash_vector; logic [4:0] hash_byte_index;
+  logic output_write_valid; logic signed [OUT_LANES-1:0][7:0] output_write_data;
+  // PROJECT_LOCAL_SELF_RESEARCH_NOT_GOOGLE_OFFICIAL
+  // The relay and hash compatibility paths remain 16-lane wide, while the
+  // DDR writer follows OUT_LANES so a 32-lane experiment cannot truncate its
+  // upper half before the AXI writer sees it.
+  logic [OUT_LANES*8-1:0] output_read_data;
+  logic [127:0] relay_bank_read_data, hash_vector;
+  logic [4:0] hash_byte_index;
   logic [31:0] hash_value, completed_hash; logic hash_active, last_output_seen; logic [13:0] output_vectors;
   logic store_busy, store_done, store_fault; logic [13:0] store_vectors_written;
   logic [31:0] store_bytes_written; logic [13:0] output_read_addr; logic output_read_enable;
@@ -241,9 +249,9 @@ module gestureflow_layer_chain_hp0_axil #(
   logic [31:0] desc_store_destination_mem [0:DESC_DEPTH-1], desc_store_bytes_mem [0:DESC_DEPTH-1];
   logic desc_store_enable_mem [0:DESC_DEPTH-1], desc_store_pool_mem [0:DESC_DEPTH-1];
   logic [31:0] desc_store_stride_mem [0:DESC_DEPTH-1];
-  logic [4:0] desc_store_valid_mem [0:DESC_DEPTH-1];
+  logic [5:0] desc_store_valid_mem [0:DESC_DEPTH-1];
   logic [31:0] desc_qcfg_mem [0:DESC_DEPTH-1];
-  logic [15:0] desc_lane_mask_mem [0:DESC_DEPTH-1];
+  logic [OUT_LANES-1:0] desc_lane_mask_mem [0:DESC_DEPTH-1];
   logic [3:0] desc_relay_control_mem [0:DESC_DEPTH-1];
   logic [1:0] desc_weight_bank_mem [0:DESC_DEPTH-1];
   logic [1:0] desc_param_bank_mem [0:DESC_DEPTH-1];
@@ -428,7 +436,7 @@ module gestureflow_layer_chain_hp0_axil #(
       .frame_start(relay_pool_frame_start), .pixel_valid(relay_pool_pixel_valid), .pixel_ready(relay_pool_pixel_ready),
       .pixel_data(relay_pool_pixel), .pixels_emitted(relay_pool_pixels_emitted),
       .bank_read_enable(relay_pool_read_enable), .bank_read_addr(relay_pool_read_addr),
-      .bank_read_data(relay_pool_read_data)
+      .bank_read_data(relay_pool_read_data[127:0])
     );
   end else begin : gen_no_relay_loaders
     assign relay_busy = 1'b0;
@@ -524,8 +532,8 @@ module gestureflow_layer_chain_hp0_axil #(
     .gap_input_zero_point(post_gap_input_zero_point), .gap_output_zero_point(post_gap_output_zero_point),
     .fc_output_zero_point(post_fc_output_zero_point), .fc_weight_write_valid(weight_write_valid),
     .fc_weight_write_class(weight_write_oc), .fc_weight_write_group(weight_write_ic_group[3:0]),
-    .fc_weight_write_data(weight_write_data), .fc_bias(bias),
-    .fc_multiplier(requant_multiplier), .fc_right_shift(requant_right_shift),
+    .fc_weight_write_data(weight_write_data), .fc_bias(bias[17:0]),
+    .fc_multiplier(requant_multiplier[17:0]), .fc_right_shift(requant_right_shift[17:0]),
     .busy(post_busy), .done(post_done), .fault(post_fault), .cycles(post_cycles),
     .gap_fnv1a(post_gap_fnv1a), .fc_fnv1a(post_fc_fnv1a), .predicted_class(post_predicted_class),
     .gap_values_done(post_gap_values_done), .fc_values_done(post_fc_values_done),
@@ -557,8 +565,8 @@ module gestureflow_layer_chain_hp0_axil #(
     .pixel_data(pixel_data), .input_zero_point(input_zero_point),
     .input_group_count(wide48_mode ? 5'd12 : (layer_mode == 2 ? 5'd8 : (layer_mode == 1 ? 5'd4 : 5'd1))),
     .input_lane_enable(layer_mode == 0 ? 4'b0111 : 4'hf),
-    .weight_write_valid(weight_write_valid), .weight_write_oc(weight_write_oc[3:0]), .weight_write_tap(weight_write_tap),
-    .weight_write_ic_group(stream_weight_write_ic_group), .weight_write_data(weight_write_data), .weight_bank_select(weight_bank_select), .bias(bias[15:0]),
+    .weight_write_valid(weight_write_valid), .weight_write_oc(weight_write_oc[$clog2(OUT_LANES)-1:0]), .weight_write_tap(weight_write_tap),
+    .weight_write_ic_group(stream_weight_write_ic_group), .weight_write_data(weight_write_data), .weight_bank_select(weight_bank_select), .read_bank_select(weight_read_bank_select), .bias(bias[OUT_LANES-1:0]),
     .output_lane_enable(output_lane_enable), .output_valid(output_valid), .output_ready(output_ready),
     .output_psum(output_psum), .output_lane_enable_valid(output_lane_enable_valid), .output_row(output_row),
     .output_column(output_column), .busy(), .protocol_error(protocol_error), .frame_input_done(frame_input_done)
@@ -566,7 +574,7 @@ module gestureflow_layer_chain_hp0_axil #(
   gestureflow_requant_relu #(.LANES(OUT_LANES)) requant (
     .clk(aclk), .rst_n(aresetn), .in_valid(output_valid), .in_ready(quant_ready), .in_psum(output_psum),
     .in_lane_enable(output_lane_enable_valid), .enable(requant_enable), .relu_enable(requant_relu_enable),
-    .output_zero_point(output_zero_point), .multiplier(requant_multiplier[15:0]), .right_shift(requant_right_shift[15:0]),
+    .output_zero_point(output_zero_point), .multiplier(requant_multiplier[OUT_LANES-1:0]), .right_shift(requant_right_shift[OUT_LANES-1:0]),
     .out_valid(quant_valid), .out_ready(1'b1), .out_data(quant_data), .out_lane_enable(), .config_error(quant_fault)
   );
   assign output_write_valid = quant_valid;
@@ -600,7 +608,7 @@ module gestureflow_layer_chain_hp0_axil #(
     assign bank1_read_addr = relay_pool_bank_owner ? relay_pool_read_addr :
       (output_write_bank_select == 1'b1 ? output_read_addr : relay_bank_read_addr);
     assign output_read_data = (output_write_bank_select == 1'b0) ? bank0_read_data : bank1_read_data;
-    assign relay_bank_read_data = (relay_read_bank_select == 1'b0) ? bank0_read_data : bank1_read_data;
+    assign relay_bank_read_data = (relay_read_bank_select == 1'b0) ? bank0_read_data[127:0] : bank1_read_data[127:0];
     assign relay_pool_read_data = (relay_read_bank_select == 1'b0) ? bank0_read_data : bank1_read_data;
     gestureflow_output_bank #(.ADDR_W(OUTPUT_ADDR_W), .DATA_W(OUT_LANES*8)) bank0 (
       .clk(aclk), .write_enable(output_write_valid && (output_write_bank_select == 1'b0)),
@@ -628,7 +636,7 @@ module gestureflow_layer_chain_hp0_axil #(
     assign bank1_read_data = '0;
   end
   endgenerate
-  gestureflow_hp0_tensor_writer #(.VECTOR_COUNT(OUTPUTS), .VECTOR_ADDR_W(OUTPUT_ADDR_W), .VECTOR_BYTES(16), .INPUT_WIDTH(IMAGE_WIDTH)) store (
+  gestureflow_hp0_tensor_writer #(.VECTOR_COUNT(OUTPUTS), .VECTOR_ADDR_W(OUTPUT_ADDR_W), .VECTOR_BYTES(OUT_LANES), .INPUT_WIDTH(IMAGE_WIDTH)) store (
     .clk(aclk), .rst_n(aresetn), .start(store_start), .clear(store_clear), .destination_addr(store_destination),
     .pool_2x2(store_pool_2x2), .vector_count(dma_pixels), .input_width(job_width),
     .destination_stride_bytes(store_stride_bytes), .valid_vector_bytes(store_valid_bytes),
@@ -656,7 +664,7 @@ module gestureflow_layer_chain_hp0_axil #(
       relay_enable<=1'b0; relay_read_bank_select<=1'b0; output_write_bank_select<=1'b0; relay_pool_2x2<=1'b0;
       ps_weight_write_valid<=0; ps_weight_write_oc<=0; ps_weight_write_tap<=0; ps_weight_write_ic_group<=0; ps_weight_write_data<=0;
       weight_dma_start<=0; weight_dma_clear<=0; weight_dma_source<=0; weight_dma_bytes<=0; weight_dma_taps<=0; weight_dma_groups<=0;
-      bias<='0; bias_index<=0; input_zero_point<='0; output_zero_point<=0; output_lane_enable<=16'hffff; weight_bank_select<=0; param_bank_select<=0;
+      bias<='0; bias_index<=0; input_zero_point<='0; output_zero_point<=0; output_lane_enable<='1; weight_bank_select<=0; weight_read_bank_select<=0; param_bank_select<=0;
       requant_enable<=0; requant_relu_enable<=0; requant_index<=0; requant_multiplier<='0; requant_right_shift<='0;
       post_gap_multiplier<=0; post_gap_right_shift<=0; post_gap_input_zero_point<=0; post_gap_output_zero_point<=0; post_fc_output_zero_point<=0;
       hash_active<=0; last_output_seen<=0; hash_vector<='0; hash_byte_index<=0; hash_value<=FNV_OFFSET;
@@ -666,7 +674,7 @@ module gestureflow_layer_chain_hp0_axil #(
       desc_state<=DESC_IDLE; descriptor_active<=0; desc_select<=0; desc_read_index<=0; desc_count<=0;
       desc_issued<=0; desc_completed<=0;
       for (int bank_index=0; bank_index<2; bank_index++) begin
-        for (int parameter_index=0; parameter_index<18; parameter_index++) begin
+        for (int parameter_index=0; parameter_index<CTRL_LANES; parameter_index++) begin
           bias_bank[bank_index][parameter_index]<=0;
           requant_multiplier_bank[bank_index][parameter_index]<=0;
           requant_right_shift_bank[bank_index][parameter_index]<=0;
@@ -702,7 +710,7 @@ module gestureflow_layer_chain_hp0_axil #(
           store_stride_bytes <= desc_store_stride_mem[desc_read_index];
           store_valid_bytes <= desc_store_valid_mem[desc_read_index];
           weight_bank_select <= desc_weight_bank_mem[desc_read_index][0];
-          for (int parameter_index = 0; parameter_index < 18; parameter_index++) begin
+          for (int parameter_index = 0; parameter_index < CTRL_LANES; parameter_index++) begin
             bias[parameter_index] <= bias_bank[desc_param_bank_mem[desc_read_index][0]][parameter_index];
             requant_multiplier[parameter_index] <= requant_multiplier_bank[desc_param_bank_mem[desc_read_index][0]][parameter_index];
             requant_right_shift[parameter_index] <= requant_right_shift_bank[desc_param_bank_mem[desc_read_index][0]][parameter_index];
@@ -761,7 +769,7 @@ module gestureflow_layer_chain_hp0_axil #(
       end
       if (output_write_valid) begin
         if (hash_active) fault <= 1'b1;
-        hash_vector <= output_write_data; hash_byte_index<=0; hash_active<=1; output_vectors<=output_vectors+1'b1;
+        hash_vector <= output_write_data[15:0]; hash_byte_index<=0; hash_active<=1; output_vectors<=output_vectors+1'b1;
         if (output_vectors == 14'(dma_pixels-1'b1)) last_output_seen<=1;
       end
       if (s_axi_awvalid && s_axi_awready) begin awaddr<=s_axi_awaddr; aw_seen<=1; end
@@ -783,9 +791,9 @@ module gestureflow_layer_chain_hp0_axil #(
           LAYER_MODE: if (running || dma_busy || store_busy) fault<=1; else layer_mode<=wdata[2:0];
           JOB_WIDTH: if (running || dma_busy || store_busy) fault<=1; else job_width<=wdata[15:0];
           JOB_HEIGHT: if (running || dma_busy || store_busy) fault<=1; else job_height<=wdata[15:0];
-          OUTPUT_LANE_MASK: if (running || dma_busy || store_busy) fault<=1; else output_lane_enable<=wdata[15:0];
+          OUTPUT_LANE_MASK: if (running || dma_busy || store_busy) fault<=1; else output_lane_enable<=wdata[OUT_LANES-1:0];
           STORE_STRIDE: if (running || store_busy) fault<=1; else store_stride_bytes<=wdata;
-          STORE_VALID_BYTES: if (running || store_busy) fault<=1; else store_valid_bytes<=wdata[4:0];
+          STORE_VALID_BYTES: if (running || store_busy) fault<=1; else store_valid_bytes<=wdata[5:0];
           RELAY_CONTROL: if (running || dma_busy || store_busy || descriptor_active) fault<=1; else begin
             relay_enable<=wdata[0]; relay_read_bank_select<=wdata[1]; output_write_bank_select<=wdata[2]; relay_pool_2x2<=wdata[3];
           end
@@ -807,6 +815,7 @@ module gestureflow_layer_chain_hp0_axil #(
           RQMULT: if (running || dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else begin requant_multiplier[requant_index]<=wdata; requant_multiplier_bank[param_bank_select][requant_index]<=wdata; end
           RQSHIFT: if (running || dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else begin requant_right_shift[requant_index]<=wdata[5:0]; requant_right_shift_bank[param_bank_select][requant_index]<=wdata[5:0]; end
           WEIGHT_BANK_SELECT: if (running || dma_busy || store_busy || descriptor_active) fault<=1; else weight_bank_select<=wdata[0];
+          WEIGHT_READ_BANK_SELECT: if (running || dma_busy || store_busy || descriptor_active) fault<=1; else weight_read_bank_select<=wdata[0];
           PARAM_BANK_SELECT: if (running || dma_busy || store_busy || descriptor_active) fault<=1; else param_bank_select<=wdata[0];
           WEIGHT_COMMIT: if (running || dma_busy || store_busy) fault<=1; else if (wdata[0]) begin
             if (!weight_keyed_mode) fault<=1;
@@ -844,9 +853,9 @@ module gestureflow_layer_chain_hp0_axil #(
           DESC_STORE_BYTES: if (descriptor_active || running) fault<=1; else desc_store_bytes_mem[desc_select]<=wdata;
           DESC_STORE_CONTROL: if (descriptor_active || running) fault<=1; else begin desc_store_enable_mem[desc_select]<=wdata[0]; desc_store_pool_mem[desc_select]<=wdata[1]; end
           DESC_STORE_STRIDE: if (descriptor_active || running) fault<=1; else desc_store_stride_mem[desc_select]<=wdata;
-          DESC_STORE_VALID_BYTES: if (descriptor_active || running) fault<=1; else desc_store_valid_mem[desc_select]<=wdata[4:0];
+          DESC_STORE_VALID_BYTES: if (descriptor_active || running) fault<=1; else desc_store_valid_mem[desc_select]<=wdata[5:0];
           DESC_QCFG: if (descriptor_active || running) fault<=1; else desc_qcfg_mem[desc_select]<=wdata;
-          DESC_LANE_MASK: if (descriptor_active || running) fault<=1; else desc_lane_mask_mem[desc_select]<=wdata[15:0];
+          DESC_LANE_MASK: if (descriptor_active || running) fault<=1; else desc_lane_mask_mem[desc_select]<=wdata[OUT_LANES-1:0];
           DESC_RELAY_CONTROL: if (descriptor_active || running) fault<=1; else desc_relay_control_mem[desc_select]<=wdata[3:0];
           DESC_WEIGHT_BANK: if (descriptor_active || running) fault<=1; else desc_weight_bank_mem[desc_select]<=wdata[1:0];
           DESC_PARAM_BANK: if (descriptor_active || running) fault<=1; else desc_param_bank_mem[desc_select]<=wdata[1:0];
@@ -881,14 +890,14 @@ module gestureflow_layer_chain_hp0_axil #(
           MAGIC: s_axi_rdata<=32'h47464e50; VERSION: s_axi_rdata<=32'h00040004;
           STATUS: s_axi_rdata<={24'd0,frame_input_done,protocol_error||quant_fault,hash_active,1'b0,dma_busy,fault,done,running};
           QCFG: s_axi_rdata<={14'd0,requant_relu_enable,requant_enable,output_zero_point,input_zero_point[0]};
-          LAYER_MODE: s_axi_rdata<={29'd0,layer_mode}; JOB_WIDTH:s_axi_rdata<={16'd0,job_width}; JOB_HEIGHT:s_axi_rdata<={16'd0,job_height}; OUTPUT_LANE_MASK:s_axi_rdata<={16'd0,output_lane_enable}; RELAY_CONTROL:s_axi_rdata<={28'd0,relay_pool_2x2,output_write_bank_select,relay_read_bank_select,relay_enable}; CYCLES:s_axi_rdata<=layer_cycles;
+          LAYER_MODE: s_axi_rdata<={29'd0,layer_mode}; JOB_WIDTH:s_axi_rdata<={16'd0,job_width}; JOB_HEIGHT:s_axi_rdata<={16'd0,job_height}; OUTPUT_LANE_MASK:s_axi_rdata<={{(32-OUT_LANES){1'b0}},output_lane_enable}; RELAY_CONTROL:s_axi_rdata<={28'd0,relay_pool_2x2,output_write_bank_select,relay_read_bank_select,relay_enable}; CYCLES:s_axi_rdata<=layer_cycles;
           INPUT_PIXELS:s_axi_rdata<={18'd0,input_pixels}; OUTPUT_VECTORS:s_axi_rdata<={18'd0,output_vectors}; OUTPUT_FNV1A:s_axi_rdata<=completed_hash;
           DMA_SOURCE:s_axi_rdata<=dma_source_addr; DMA_BYTES:s_axi_rdata<=dma_bytes; DMA_PIXELS:s_axi_rdata<={18'd0,dma_pixels};
           // Keep the established [31:3] byte-count field wide enough for a
           // 96x96x16 activation (147456 bytes); the assignment naturally
           // discards only the unused upper three bits.
           DMA_STATUS:s_axi_rdata<={dma_bytes_read[28:0],dma_fault,dma_done,dma_busy};
-          STORE_DESTINATION:s_axi_rdata<=store_destination; STORE_BYTES:s_axi_rdata<=store_bytes; STORE_CONTROL:s_axi_rdata<={30'd0,store_pool_2x2,store_enable}; STORE_STRIDE:s_axi_rdata<=store_stride_bytes; STORE_VALID_BYTES:s_axi_rdata<={27'd0,store_valid_bytes};
+          STORE_DESTINATION:s_axi_rdata<=store_destination; STORE_BYTES:s_axi_rdata<=store_bytes; STORE_CONTROL:s_axi_rdata<={30'd0,store_pool_2x2,store_enable}; STORE_STRIDE:s_axi_rdata<=store_stride_bytes; STORE_VALID_BYTES:s_axi_rdata<={26'd0,store_valid_bytes};
           STORE_STATUS:s_axi_rdata<={store_bytes_written[28:0],store_fault,store_done,store_busy};
           POST_GAP_MULT:s_axi_rdata<=post_gap_multiplier; POST_GAP_SHIFT:s_axi_rdata<={26'd0,post_gap_right_shift};
           POST_QCFG:s_axi_rdata<={8'd0,post_fc_output_zero_point,post_gap_output_zero_point,post_gap_input_zero_point};
@@ -911,6 +920,7 @@ module gestureflow_layer_chain_hp0_axil #(
           WEIGHT_DMA_STATUS:s_axi_rdata<={29'd0,weight_dma_fault,weight_dma_done,weight_dma_busy};
           WEIGHT_DMA_BYTES_READ:s_axi_rdata<=weight_dma_bytes_read; WEIGHT_DMA_WRITE_COUNT:s_axi_rdata<=weight_dma_write_count;
           WEIGHT_BANK_SELECT:s_axi_rdata<={31'd0,weight_bank_select}; PARAM_BANK_SELECT:s_axi_rdata<={31'd0,param_bank_select};
+          WEIGHT_READ_BANK_SELECT:s_axi_rdata<={31'd0,weight_read_bank_select};
           DESC_SELECT:s_axi_rdata<={30'd0,desc_select};
           DESC_MODE:s_axi_rdata<={29'd0,desc_mode_mem[desc_select]};
           DESC_JOB_SHAPE:s_axi_rdata<={desc_height_mem[desc_select],desc_width_mem[desc_select]};
@@ -918,8 +928,8 @@ module gestureflow_layer_chain_hp0_axil #(
           DESC_DMA_PIXELS:s_axi_rdata<={18'd0,desc_dma_pixels_mem[desc_select]};
           DESC_STORE_DESTINATION:s_axi_rdata<=desc_store_destination_mem[desc_select]; DESC_STORE_BYTES:s_axi_rdata<=desc_store_bytes_mem[desc_select];
           DESC_STORE_CONTROL:s_axi_rdata<={30'd0,desc_store_pool_mem[desc_select],desc_store_enable_mem[desc_select]};
-          DESC_STORE_STRIDE:s_axi_rdata<=desc_store_stride_mem[desc_select]; DESC_STORE_VALID_BYTES:s_axi_rdata<={27'd0,desc_store_valid_mem[desc_select]};
-          DESC_QCFG:s_axi_rdata<=desc_qcfg_mem[desc_select]; DESC_LANE_MASK:s_axi_rdata<={16'd0,desc_lane_mask_mem[desc_select]};
+          DESC_STORE_STRIDE:s_axi_rdata<=desc_store_stride_mem[desc_select]; DESC_STORE_VALID_BYTES:s_axi_rdata<={26'd0,desc_store_valid_mem[desc_select]};
+          DESC_QCFG:s_axi_rdata<=desc_qcfg_mem[desc_select]; DESC_LANE_MASK:s_axi_rdata<={{(32-OUT_LANES){1'b0}},desc_lane_mask_mem[desc_select]};
           DESC_RELAY_CONTROL:s_axi_rdata<={28'd0,desc_relay_control_mem[desc_select]};
           DESC_WEIGHT_BANK:s_axi_rdata<={30'd0,desc_weight_bank_mem[desc_select]}; DESC_PARAM_BANK:s_axi_rdata<={30'd0,desc_param_bank_mem[desc_select]};
           DESC_TASK_CYCLES:s_axi_rdata<=desc_task_cycles_mem[desc_select];
