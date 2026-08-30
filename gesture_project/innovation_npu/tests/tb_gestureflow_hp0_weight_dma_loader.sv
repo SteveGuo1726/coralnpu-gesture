@@ -1,14 +1,19 @@
 // PROJECT_LOCAL_SELF_RESEARCH_NOT_GOOGLE_OFFICIAL
 `timescale 1ns/1ps
-module tb_gestureflow_hp0_weight_dma_loader;
+module tb_gestureflow_hp0_weight_dma_loader #(parameter int TEST_OUTPUTS = 16);
+  localparam int TEST_TAPS = 2;
+  localparam int TEST_GROUPS = 4;
   logic clk = 0, rst_n = 0, start = 0, clear = 0;
   always #5 clk = ~clk;
-  logic [31:0] source_addr = 32'h00001000, byte_count = 32'd512;
-  logic [4:0] taps = 5'd2, groups = 5'd4;
+  logic [31:0] source_addr = 32'h00001000;
+  logic [31:0] byte_count = 32'(4 * TEST_OUTPUTS * TEST_TAPS * TEST_GROUPS);
+  logic [4:0] taps = 5'(TEST_TAPS), groups = 5'(TEST_GROUPS);
+  logic [5:0] outputs = 6'(TEST_OUTPUTS);
   logic busy, done, fault;
   logic [31:0] bytes_read, write_count;
   logic weight_write_valid;
-  logic [3:0] weight_write_oc, weight_write_tap;
+  logic [$clog2(TEST_OUTPUTS)-1:0] weight_write_oc;
+  logic [3:0] weight_write_tap;
   logic [4:0] weight_write_ic_group;
   logic signed [3:0][7:0] weight_write_data;
   logic [31:0] araddr; logic [5:0] arid; logic [7:0] arlen;
@@ -28,9 +33,10 @@ module tb_gestureflow_hp0_weight_dma_loader;
   assign rdata = {32'hA0000000 + (response_beat * 2) + 1,
                   32'hA0000000 + (response_beat * 2)};
 
-  gestureflow_hp0_weight_dma_loader #(.FIFO_BEATS(16)) dut (
+  gestureflow_hp0_weight_dma_loader #(.FIFO_BEATS(16), .MAX_OUTPUT_LANES(TEST_OUTPUTS)) dut (
     .clk, .rst_n, .start, .clear, .source_addr, .byte_count,
     .taps_per_output(taps), .groups_per_tap(groups), .busy, .done, .fault,
+    .outputs_per_tile(outputs),
     .bytes_read, .write_count, .weight_write_valid, .weight_write_oc,
     .weight_write_tap, .weight_write_ic_group, .weight_write_data,
     .m_axi_araddr(araddr), .m_axi_arid(arid), .m_axi_arlen(arlen),
@@ -61,9 +67,9 @@ module tb_gestureflow_hp0_weight_dma_loader;
     if (rst_n && weight_write_valid) begin
       if (weight_write_data !== (32'hA0000000 + expected_word))
         $fatal(1, "bad weight word=%0d got=%08x", expected_word, weight_write_data);
-      if ({28'd0, weight_write_oc} !== (expected_word / 8) ||
-          {28'd0, weight_write_tap} !== ((expected_word / 4) % 2) ||
-          {27'd0, weight_write_ic_group} !== (expected_word % 4))
+      if (int'(weight_write_oc) !== (expected_word / (TEST_TAPS * TEST_GROUPS)) ||
+          int'(weight_write_tap) !== ((expected_word / TEST_GROUPS) % TEST_TAPS) ||
+          int'(weight_write_ic_group) !== (expected_word % TEST_GROUPS))
         $fatal(1, "bad coordinate word=%0d oc=%0d tap=%0d group=%0d", expected_word,
                weight_write_oc, weight_write_tap, weight_write_ic_group);
       expected_word = expected_word + 1;
@@ -80,7 +86,8 @@ module tb_gestureflow_hp0_weight_dma_loader;
       @(posedge clk);
       if (fault) $fatal(1, "weight DMA fault bytes=%0d writes=%0d", bytes_read, write_count);
       if (done) begin
-        if (expected_writes != 128 || bytes_read != 512 || write_count != 128)
+        if (expected_writes != TEST_OUTPUTS * TEST_TAPS * TEST_GROUPS ||
+            bytes_read != byte_count || write_count != TEST_OUTPUTS * TEST_TAPS * TEST_GROUPS)
           $fatal(1, "bad completion writes=%0d bytes=%0d count=%0d", expected_writes, bytes_read, write_count);
         $display("GESTUREFLOW_WEIGHT_DMA_LOADER_PASS writes=%0d bytes=%0d", expected_writes, bytes_read);
         $finish;

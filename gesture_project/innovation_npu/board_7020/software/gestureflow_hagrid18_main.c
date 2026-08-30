@@ -4,9 +4,10 @@
  * HaGRID-18 distilled-student full-network board driver.
  *
  * Deployment graph: 4x4/4x4/4x4 with channels 16/32/48, a 48->64 1x1 head,
- * GAP(64) and FC(18). The PL runs the same 16x4 INT8 MAC tile for every
- * spatial layer, the 1x1 head through pointwise mode, and the GAP/FC tail in
- * mode 4. Weights are burst-loaded through WEIGHT_DMA; no per-pixel ARM path.
+ * GAP(64) and FC(18). The PL uses a parameterized 32-output x 4-input-lane
+ * INT8 MAC tile; 16-output tails remain supported through lane masking. The
+ * 1x1 head uses pointwise mode and the GAP/FC tail uses mode 4. Weights are
+ * burst-loaded through WEIGHT_DMA; no per-pixel ARM path.
  */
 #include <stdint.h>
 #include "sleep.h"
@@ -114,16 +115,20 @@
 #define GF_POOL1_BYTES GF_POOL_OUTPUT_BYTES
 #define GF_CONV2_BYTES (48U * 48U * 32U)
 #define GF_CONV2_TILE_BYTES (48U * 48U * 16U)
+#define GF_CONV2_TILE32_BYTES (48U * 48U * 32U)
 #define GF_CONV3_BYTES (48U * 48U * 32U)
 #define GF_POOL2_TILE_BYTES (24U * 24U * 16U)
 #define GF_POOL2_BYTES GF_POOL2_OUTPUT_BYTES
 #define GF_CONV4_BYTES (24U * 24U * 48U)
 #define GF_CONV4_TILE_BYTES (24U * 24U * 16U)
+#define GF_CONV4_TILE32_BYTES (24U * 24U * 32U)
 #define GF_CONV5_BYTES (24U * 24U * 48U)
 #define GF_POOL3_TILE_BYTES (12U * 12U * 16U)
+#define GF_POOL3_TILE32_BYTES (12U * 12U * 32U)
 #define GF_POOL3_BYTES GF_POOL3_OUTPUT_BYTES
 #define GF_HEAD1X1_BYTES (12U * 12U * 64U)
 #define GF_HEAD1X1_TILE_BYTES (12U * 12U * 16U)
+#define GF_HEAD1X1_TILE32_BYTES (12U * 12U * 32U)
 #define GF_HEAD1X1_EMBEDDED_CENTER_TAP 5U
 
 static volatile u32 *const probe = (volatile u32 *)PROBE_BASE;
@@ -194,7 +199,8 @@ static void wait_layer_done(void)
     terminal_failure(0x4002U, status);
 }
 
-static void weight_dma_load(const uint32_t *src, uint32_t words, uint32_t taps, uint32_t groups)
+static void weight_dma_load(const uint32_t *src, uint32_t words, uint32_t taps, uint32_t groups,
+                            uint32_t output_lanes)
 {
     uint32_t status;
     XTime dma_t0, dma_t1;
@@ -203,7 +209,7 @@ static void weight_dma_load(const uint32_t *src, uint32_t words, uint32_t taps, 
     Xil_DCacheFlushRange((UINTPTR)src, bytes);
     Xil_Out32(GF_BASE + GF_WEIGHT_DMA_SOURCE, (uint32_t)(UINTPTR)src);
     Xil_Out32(GF_BASE + GF_WEIGHT_DMA_BYTES, bytes);
-    Xil_Out32(GF_BASE + GF_WEIGHT_DMA_CFG, taps | (groups << 8U));
+    Xil_Out32(GF_BASE + GF_WEIGHT_DMA_CFG, taps | (groups << 8U) | (output_lanes << 16U));
     Xil_Out32(GF_BASE + GF_WEIGHT_DMA_CONTROL, 2U);
     XTime_GetTime(&dma_t0);
     do {
@@ -216,21 +222,22 @@ static void weight_dma_load(const uint32_t *src, uint32_t words, uint32_t taps, 
     g_weight_dma_ticks += dma_t1 - dma_t0;
 }
 
-/* Generic spatial 4x4 tile loader. dma_weights is the pre-packed WEIGHT_DMA
- * image (oc -> tap -> 4-lane group) emitted by the exporter, so the ARM
- * driver does no uncached byte-packing loop. groups = ceil(input_channels/4). */
+/* Generic spatial tile loader. dma_weights is the pre-packed WEIGHT_DMA image
+ * (oc -> tap -> 4-lane group) emitted by the exporter. The physical engine is
+ * 32 lanes wide, while output_lanes permits a final 16-lane tile without
+ * sending dummy weights. */
 static void load_conv_tile(u32 mode, u32 first_oc, u32 lane_mask,
                            const uint32_t *dma_weights, const int32_t *folded_bias,
                            const int32_t *multiplier, const uint8_t *right_shift,
-                           u32 output_lanes, u32 groups)
+                           u32 output_lanes, u32 groups, u32 tile_lanes)
 {
     u32 physical_oc, model_oc;
     Xil_Out32(GF_BASE + GF_LAYER_MODE, mode);
     Xil_Out32(GF_BASE + GF_QCFG, 0x00038080U);
     Xil_Out32(GF_BASE + GF_OUTPUT_LANE_MASK, lane_mask);
-    for (physical_oc = 0U; physical_oc < 16U; ++physical_oc) {
+    for (physical_oc = 0U; physical_oc < 32U; ++physical_oc) {
         model_oc = first_oc + physical_oc;
-        if (model_oc >= output_lanes) {
+        if (physical_oc >= tile_lanes || model_oc >= output_lanes) {
             Xil_Out32(GF_BASE + GF_BIDX, physical_oc); Xil_Out32(GF_BASE + GF_BDATA, 0U);
             Xil_Out32(GF_BASE + GF_RQIDX, physical_oc); Xil_Out32(GF_BASE + GF_RQMULT, 0U); Xil_Out32(GF_BASE + GF_RQSHIFT, 0U);
             continue;
@@ -239,7 +246,8 @@ static void load_conv_tile(u32 mode, u32 first_oc, u32 lane_mask,
         Xil_Out32(GF_BASE + GF_RQIDX, physical_oc); Xil_Out32(GF_BASE + GF_RQMULT, (u32)multiplier[model_oc]);
         Xil_Out32(GF_BASE + GF_RQSHIFT, (u32)right_shift[model_oc]);
     }
-    weight_dma_load(dma_weights + (uint32_t)first_oc * 16U * groups, 16U * 16U * groups, 16U, groups);
+    weight_dma_load(dma_weights + (uint32_t)first_oc * 16U * groups,
+                    tile_lanes * 16U * groups, 16U, groups, tile_lanes);
 }
 
 /* First layer: RGB 3->16, one 4-lane group with lane 3 masked. */
@@ -254,7 +262,7 @@ static void load_first_layer(void)
         Xil_Out32(GF_BASE + GF_RQIDX, oc); Xil_Out32(GF_BASE + GF_RQMULT, (u32)gf_full_requant_multiplier[oc]);
         Xil_Out32(GF_BASE + GF_RQSHIFT, (u32)gf_full_requant_right_shift[oc]);
     }
-    weight_dma_load(gf_full_weights_dma, 16U * 16U * 1U, 16U, 1U);
+    weight_dma_load(gf_full_weights_dma, 16U * 16U * 1U, 16U, 1U, 16U);
 }
 
 /* Head 1x1: only the embedded center tap (1,1) is nonzero. */
@@ -263,14 +271,14 @@ static void load_head1x1_tile(uint32_t first_oc)
     u32 physical_oc, model_oc;
     Xil_Out32(GF_BASE + GF_LAYER_MODE, 5U);
     Xil_Out32(GF_BASE + GF_QCFG, 0x00038080U);
-    Xil_Out32(GF_BASE + GF_OUTPUT_LANE_MASK, 0xffffU);
-    for (physical_oc = 0U; physical_oc < 16U; ++physical_oc) {
+    Xil_Out32(GF_BASE + GF_OUTPUT_LANE_MASK, 0xffffffffU);
+    for (physical_oc = 0U; physical_oc < 32U; ++physical_oc) {
         model_oc = first_oc + physical_oc;
         Xil_Out32(GF_BASE + GF_BIDX, physical_oc); Xil_Out32(GF_BASE + GF_BDATA, (u32)gf_head1x1_folded_bias[model_oc]);
         Xil_Out32(GF_BASE + GF_RQIDX, physical_oc); Xil_Out32(GF_BASE + GF_RQMULT, (u32)gf_head1x1_requant_multiplier[model_oc]);
         Xil_Out32(GF_BASE + GF_RQSHIFT, (u32)gf_head1x1_requant_right_shift[model_oc]);
     }
-    weight_dma_load(gf_head1x1_weights_dma + (uint32_t)first_oc * 12U, 16U * 12U, 1U, 12U);
+    weight_dma_load(gf_head1x1_weights_dma + (uint32_t)first_oc * 12U, 32U * 12U, 1U, 12U, 32U);
 }
 
 static u32 run_layer(uint32_t mode, uint32_t source, uint32_t bytes, uint32_t destination,
@@ -415,7 +423,7 @@ int main(void)
     /* conv1 (body): 16->16 fused with pool1 */
     stage = 0x40U; Xil_Out32(GF_BASE + GF_CONTROL, 1U);
     GF_TIME_WEIGHT_LOAD(load_conv_tile(1U, 0U, 0xffffU, gf_body2_weights_dma, gf_body2_folded_bias,
-                                       gf_body2_requant_multiplier, gf_body2_requant_right_shift, 16U, 4U));
+                                       gf_body2_requant_multiplier, gf_body2_requant_right_shift, 16U, 4U, 16U));
     pool_cycles = run_layer(1U, (u32)(UINTPTR)gf_activation_1, GF_ACTIVATION_BYTES, (u32)(UINTPTR)gf_pool1, GF_POOL1_BYTES, 3U, 96U, 96U, 16U, 16U);
     status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS);
     hash = Xil_In32(GF_BASE + GF_OUTPUT_FNV1A);
@@ -426,75 +434,81 @@ int main(void)
         terminal_failure(0x4105U, hash);
 
     /* conv2: 16->32 (2 tiles) */
-    for (index = 0U; index < 2U; ++index) {
-        u32 first_oc = index * 16U;
+    for (index = 0U; index < 1U; ++index) {
+        u32 first_oc = index * 32U;
         stage = 0x50U + index;
         Xil_Out32(GF_BASE + GF_CONTROL, 1U);
-        GF_TIME_WEIGHT_LOAD(load_conv_tile(1U, first_oc, 0xffffU, gf_conv2a_weights_dma, gf_conv2a_folded_bias,
-                                           gf_conv2a_requant_multiplier, gf_conv2a_requant_right_shift, GF_CONV2A_OUTPUT_LANES, 4U));
-        conv2_cycles[index] = run_layer(1U, (u32)(UINTPTR)gf_pool1, GF_POOL1_BYTES, (u32)(UINTPTR)gf_conv2 + first_oc, GF_CONV2_TILE_BYTES, 1U, 48U, 48U, 32U, 16U);
+        GF_TIME_WEIGHT_LOAD(load_conv_tile(1U, first_oc, 0xffffffffU, gf_conv2a_weights_dma, gf_conv2a_folded_bias,
+                                           gf_conv2a_requant_multiplier, gf_conv2a_requant_right_shift, GF_CONV2A_OUTPUT_LANES, 4U, 32U));
+        conv2_cycles[index] = run_layer(1U, (u32)(UINTPTR)gf_pool1, GF_POOL1_BYTES, (u32)(UINTPTR)gf_conv2 + first_oc, GF_CONV2_BYTES, 1U, 48U, 48U, 32U, 32U);
         status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS);
         if ((status & (GF_FAULT_BIT|GF_LAYER_FAULT_BIT)) || (dma_status & GF_DMA_FAULT_BIT) || !(dma_status & GF_DMA_DONE_BIT) ||
             GF_DMA_BYTES_READ(dma_status) != GF_POOL1_BYTES || (store_status & GF_STORE_FAULT_BIT) || !(store_status & GF_STORE_DONE_BIT) ||
-            GF_STORE_BYTES_WRITTEN(store_status) != GF_CONV2_TILE_BYTES) terminal_failure(0x4107U + index, store_status);
+            GF_STORE_BYTES_WRITTEN(store_status) != GF_CONV2_BYTES) terminal_failure(0x4107U + index, store_status);
     }
     if (!verify_full_tensor(gf_conv2, GF_CONV2_BYTES, GF_CONV2A_OUTPUT_FNV1A)) terminal_failure(0x410AU, fnv1a_bytes(gf_conv2, GF_CONV2_BYTES));
 
     /* conv3: 32->32 (2 tiles) fused with pool2 */
-    for (index = 0U; index < 2U; ++index) {
-        u32 first_oc = index * 16U;
+    for (index = 0U; index < 1U; ++index) {
+        u32 first_oc = index * 32U;
         stage = 0x70U + index;
         Xil_Out32(GF_BASE + GF_CONTROL, 1U);
-        GF_TIME_WEIGHT_LOAD(load_conv_tile(2U, first_oc, 0xffffU, gf_conv2b_weights_dma, gf_conv2b_folded_bias,
-                                           gf_conv2b_requant_multiplier, gf_conv2b_requant_right_shift, GF_CONV2B_OUTPUT_LANES, 8U));
-        pool2_cycles[index] = run_layer(2U, (u32)(UINTPTR)gf_conv2, GF_CONV2_BYTES, (u32)(UINTPTR)gf_pool2 + first_oc, GF_POOL2_TILE_BYTES, 3U, 48U, 48U, 32U, 16U);
+        GF_TIME_WEIGHT_LOAD(load_conv_tile(2U, first_oc, 0xffffffffU, gf_conv2b_weights_dma, gf_conv2b_folded_bias,
+                                           gf_conv2b_requant_multiplier, gf_conv2b_requant_right_shift, GF_CONV2B_OUTPUT_LANES, 8U, 32U));
+        pool2_cycles[index] = run_layer(2U, (u32)(UINTPTR)gf_conv2, GF_CONV2_BYTES, (u32)(UINTPTR)gf_pool2 + first_oc, GF_POOL2_BYTES, 3U, 48U, 48U, 32U, 32U);
         status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS);
         if ((status & (GF_FAULT_BIT|GF_LAYER_FAULT_BIT)) || (dma_status & GF_DMA_FAULT_BIT) || !(dma_status & GF_DMA_DONE_BIT) ||
             GF_DMA_BYTES_READ(dma_status) != GF_CONV2_BYTES || (store_status & GF_STORE_FAULT_BIT) || !(store_status & GF_STORE_DONE_BIT) ||
-            GF_STORE_BYTES_WRITTEN(store_status) != GF_POOL2_TILE_BYTES) terminal_failure(0x4111U + index, store_status);
+            GF_STORE_BYTES_WRITTEN(store_status) != GF_POOL2_BYTES) terminal_failure(0x4111U + index, store_status);
     }
     if (!verify_full_tensor(gf_pool2, GF_POOL2_BYTES, GF_POOL2_OUTPUT_FNV1A)) terminal_failure(0x4114U, fnv1a_bytes(gf_pool2, GF_POOL2_BYTES));
 
     /* conv4: 32->48 (3 tiles) */
-    for (index = 0U; index < 3U; ++index) {
-        u32 first_oc = index * 16U;
+    for (index = 0U; index < 2U; ++index) {
+        u32 first_oc = index * 32U;
+        u32 tile_lanes = (first_oc + 32U <= GF_CONV3A_OUTPUT_LANES) ? 32U : 16U;
+        u32 tile_mask = tile_lanes == 32U ? 0xffffffffU : 0xffffU;
+        u32 tile_bytes = tile_lanes == 32U ? GF_CONV4_TILE32_BYTES : GF_CONV4_TILE_BYTES;
         stage = 0x80U + index;
         Xil_Out32(GF_BASE + GF_CONTROL, 1U);
-        GF_TIME_WEIGHT_LOAD(load_conv_tile(2U, first_oc, 0xffffU, gf_conv3a_weights_dma, gf_conv3a_folded_bias,
-                                           gf_conv3a_requant_multiplier, gf_conv3a_requant_right_shift, GF_CONV3A_OUTPUT_LANES, 8U));
-        conv4_cycles[index] = run_layer(2U, (u32)(UINTPTR)gf_pool2, GF_POOL2_BYTES, (u32)(UINTPTR)gf_conv4 + first_oc, GF_CONV4_TILE_BYTES, 1U, 24U, 24U, 48U, 16U);
+        GF_TIME_WEIGHT_LOAD(load_conv_tile(2U, first_oc, tile_mask, gf_conv3a_weights_dma, gf_conv3a_folded_bias,
+                                           gf_conv3a_requant_multiplier, gf_conv3a_requant_right_shift, GF_CONV3A_OUTPUT_LANES, 8U, tile_lanes));
+        conv4_cycles[index] = run_layer(2U, (u32)(UINTPTR)gf_pool2, GF_POOL2_BYTES, (u32)(UINTPTR)gf_conv4 + first_oc, tile_bytes, 1U, 24U, 24U, 48U, tile_lanes);
         status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS);
         if ((status & (GF_FAULT_BIT|GF_LAYER_FAULT_BIT)) || (dma_status & GF_DMA_FAULT_BIT) || !(dma_status & GF_DMA_DONE_BIT) ||
             GF_DMA_BYTES_READ(dma_status) != GF_POOL2_BYTES || (store_status & GF_STORE_FAULT_BIT) || !(store_status & GF_STORE_DONE_BIT) ||
-            GF_STORE_BYTES_WRITTEN(store_status) != GF_CONV4_TILE_BYTES) terminal_failure(0x4116U + index, store_status);
+            GF_STORE_BYTES_WRITTEN(store_status) != tile_bytes) terminal_failure(0x4116U + index, store_status);
     }
     if (!verify_full_tensor(gf_conv4, GF_CONV4_BYTES, GF_CONV3A_OUTPUT_FNV1A)) terminal_failure(0x411BU, fnv1a_bytes(gf_conv4, GF_CONV4_BYTES));
 
     /* conv5: 48->48 (3 tiles) fused with pool3 */
-    for (index = 0U; index < 3U; ++index) {
-        u32 first_oc = index * 16U;
+    for (index = 0U; index < 2U; ++index) {
+        u32 first_oc = index * 32U;
+        u32 tile_lanes = (first_oc + 32U <= GF_CONV3B_OUTPUT_LANES) ? 32U : 16U;
+        u32 tile_mask = tile_lanes == 32U ? 0xffffffffU : 0xffffU;
+        u32 tile_bytes = tile_lanes == 32U ? GF_POOL3_TILE32_BYTES : GF_POOL3_TILE_BYTES;
         stage = 0x90U + index;
         Xil_Out32(GF_BASE + GF_CONTROL, 1U);
-        GF_TIME_WEIGHT_LOAD(load_conv_tile(3U, first_oc, 0xffffU, gf_conv3b_weights_dma, gf_conv3b_folded_bias,
-                                           gf_conv3b_requant_multiplier, gf_conv3b_requant_right_shift, GF_CONV3B_OUTPUT_LANES, 12U));
-        pool3_cycles[index] = run_layer(3U, (u32)(UINTPTR)gf_conv4, GF_CONV4_BYTES, (u32)(UINTPTR)gf_pool3 + first_oc, GF_POOL3_TILE_BYTES, 3U, 24U, 24U, 48U, 16U);
+        GF_TIME_WEIGHT_LOAD(load_conv_tile(3U, first_oc, tile_mask, gf_conv3b_weights_dma, gf_conv3b_folded_bias,
+                                           gf_conv3b_requant_multiplier, gf_conv3b_requant_right_shift, GF_CONV3B_OUTPUT_LANES, 12U, tile_lanes));
+        pool3_cycles[index] = run_layer(3U, (u32)(UINTPTR)gf_conv4, GF_CONV4_BYTES, (u32)(UINTPTR)gf_pool3 + first_oc, tile_bytes, 3U, 24U, 24U, 48U, tile_lanes);
         status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS);
         if ((status & (GF_FAULT_BIT|GF_LAYER_FAULT_BIT)) || (dma_status & GF_DMA_FAULT_BIT) || !(dma_status & GF_DMA_DONE_BIT) ||
             GF_DMA_BYTES_READ(dma_status) != GF_CONV4_BYTES || (store_status & GF_STORE_FAULT_BIT) || !(store_status & GF_STORE_DONE_BIT) ||
-            GF_STORE_BYTES_WRITTEN(store_status) != GF_POOL3_TILE_BYTES) terminal_failure(0x411DU + index, store_status);
+            GF_STORE_BYTES_WRITTEN(store_status) != tile_bytes) terminal_failure(0x411DU + index, store_status);
     }
     if (!verify_full_tensor(gf_pool3, GF_POOL3_BYTES, GF_POOL3_OUTPUT_FNV1A)) terminal_failure(0x4129U, fnv1a_bytes(gf_pool3, GF_POOL3_BYTES));
 
     /* head 1x1: 48->64 (4 tiles) */
-    for (index = 0U; index < 4U; ++index) {
-        u32 first_oc = index * 16U;
+    for (index = 0U; index < 2U; ++index) {
+        u32 first_oc = index * 32U;
         stage = 0xB0U + index;
         Xil_Out32(GF_BASE + GF_CONTROL, 1U); GF_TIME_WEIGHT_LOAD(load_head1x1_tile(first_oc));
-        head1x1_cycles[index] = run_layer(5U, (u32)(UINTPTR)gf_pool3, GF_POOL3_BYTES, (u32)(UINTPTR)gf_head1x1 + first_oc, GF_HEAD1X1_TILE_BYTES, 1U, 12U, 12U, 64U, 16U);
+        head1x1_cycles[index] = run_layer(5U, (u32)(UINTPTR)gf_pool3, GF_POOL3_BYTES, (u32)(UINTPTR)gf_head1x1 + first_oc, GF_HEAD1X1_TILE32_BYTES, 1U, 12U, 12U, 64U, 32U);
         status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS);
         if ((status & (GF_FAULT_BIT|GF_LAYER_FAULT_BIT)) || (dma_status & GF_DMA_FAULT_BIT) || !(dma_status & GF_DMA_DONE_BIT) ||
             GF_DMA_BYTES_READ(dma_status) != GF_POOL3_BYTES || (store_status & GF_STORE_FAULT_BIT) || !(store_status & GF_STORE_DONE_BIT) ||
-            GF_STORE_BYTES_WRITTEN(store_status) != GF_HEAD1X1_TILE_BYTES) terminal_failure(0x412BU + index, store_status);
+            GF_STORE_BYTES_WRITTEN(store_status) != GF_HEAD1X1_TILE32_BYTES) terminal_failure(0x412BU + index, store_status);
     }
     if (!verify_full_tensor(gf_head1x1, GF_HEAD1X1_BYTES, GF_HEAD1X1_OUTPUT_FNV1A)) terminal_failure(0x4132U, fnv1a_bytes(gf_head1x1, GF_HEAD1X1_BYTES));
 

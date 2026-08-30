@@ -13,6 +13,10 @@ module gestureflow_layer_chain_hp0_axil #(
   parameter int IMAGE_HEIGHT = 96,
   parameter int OUTPUTS = IMAGE_WIDTH * IMAGE_HEIGHT,
   parameter int OUT_LANES = 16,
+  // Quantization is a tail operation, while convolution is the throughput
+  // driver. One lane keeps the 7020 tail compact and removes the wide
+  // variable-shift fanout from the routed critical path.
+  parameter int REQUANT_PARALLEL_LANES = 1,
   parameter int OUTPUT_ADDR_W = 14,
   // PROJECT_LOCAL_SELF_RESEARCH_NOT_GOOGLE_OFFICIAL
   // The 7020 production baseline only needs RGB and 16-Cin body layers.
@@ -115,10 +119,10 @@ module gestureflow_layer_chain_hp0_axil #(
     DESC_WEIGHT_BANK=12'h148, DESC_PARAM_BANK=12'h14c, DESC_TASK_CYCLES=12'h154,
     DESC_RELAY_CONTROL=12'h158;
   localparam logic [31:0] FNV_OFFSET=32'h811c9dc5, FNV_PRIME=32'h01000193;
-  // The physical 16x4 DSP tile remains fixed. Mode 3 only widens the
-  // ingress/window storage so 12 Cin groups accumulate locally before one
-  // requantized output is emitted; no second MAC array or DDR partial sum is
-  // introduced for the widest 48-channel layer.
+  // The physical tile has four input lanes and a parameterized output width.
+  // The 32-output build widens output-channel parallelism without spilling
+  // partial sums to DDR; mode 3 only widens ingress/window storage so all
+  // 12 Cin groups of a 48-channel layer remain locally accumulated.
   localparam int PIXELS = IMAGE_WIDTH * IMAGE_HEIGHT;
   localparam int CTRL_LANES = (OUT_LANES > 18) ? OUT_LANES : 18;
 
@@ -148,11 +152,12 @@ module gestureflow_layer_chain_hp0_axil #(
   logic [STREAM_WEIGHT_GROUP_W-1:0] stream_weight_write_ic_group;
   logic weight_dma_start, weight_dma_clear, weight_dma_busy, weight_dma_done, weight_dma_fault;
   logic [31:0] weight_dma_source, weight_dma_bytes, weight_dma_bytes_read, weight_dma_write_count;
-  logic [4:0] weight_dma_taps, weight_dma_groups;
+  logic [4:0] weight_dma_taps, weight_dma_groups; logic [5:0] weight_dma_outputs;
   logic [31:0] weight_dma_araddr; logic [5:0] weight_dma_arid; logic [7:0] weight_dma_arlen;
   logic [2:0] weight_dma_arsize; logic [1:0] weight_dma_arburst; logic weight_dma_arlock, weight_dma_arvalid, weight_dma_rready;
   logic [3:0] weight_dma_arcache, weight_dma_arqos, weight_dma_arregion; logic [2:0] weight_dma_arprot;
-  logic [3:0] weight_dma_oc, weight_dma_tap; logic [4:0] weight_dma_ic_group;
+  localparam int WEIGHT_DMA_OC_W = (OUT_LANES <= 1) ? 1 : $clog2(OUT_LANES);
+  logic [WEIGHT_DMA_OC_W-1:0] weight_dma_oc; logic [3:0] weight_dma_tap; logic [4:0] weight_dma_ic_group;
   logic signed [3:0][7:0] weight_dma_data;
   logic signed [CTRL_LANES-1:0][31:0] bias, requant_multiplier;
   logic [CTRL_LANES-1:0][5:0] requant_right_shift;
@@ -321,7 +326,7 @@ module gestureflow_layer_chain_hp0_axil #(
   assign weight_write_valid = ps_weight_write_valid | weight_dma_write_valid;
   always_comb begin
     if (weight_dma_write_valid) begin
-      weight_write_oc = {1'b0, weight_dma_oc};
+      weight_write_oc = weight_dma_oc;
       weight_write_tap = weight_dma_tap;
       weight_write_ic_group = weight_dma_ic_group;
       weight_write_data = weight_dma_data;
@@ -506,10 +511,10 @@ module gestureflow_layer_chain_hp0_axil #(
   // Descriptor weight path.  It is idle in the legacy AXI-Lite mode and is
   // selected on the shared HP0 read channel only while this loader owns a
   // burst.  The MAC bank sees the same write protocol in either mode.
-  gestureflow_hp0_weight_dma_loader #(.FIFO_BEATS(16), .MAX_TAPS(16), .MAX_GROUPS(12)) weight_dma_loader (
+  gestureflow_hp0_weight_dma_loader #(.FIFO_BEATS(16), .MAX_TAPS(16), .MAX_GROUPS(12), .MAX_OUTPUT_LANES(OUT_LANES)) weight_dma_loader (
     .clk(aclk), .rst_n(aresetn), .start(weight_dma_start), .clear(weight_dma_clear),
     .source_addr(weight_dma_source), .byte_count(weight_dma_bytes),
-    .taps_per_output(weight_dma_taps), .groups_per_tap(weight_dma_groups),
+    .taps_per_output(weight_dma_taps), .groups_per_tap(weight_dma_groups), .outputs_per_tile(weight_dma_outputs),
     .busy(weight_dma_busy), .done(weight_dma_done), .fault(weight_dma_fault),
     .bytes_read(weight_dma_bytes_read), .write_count(weight_dma_write_count),
     .weight_write_valid(weight_dma_write_valid), .weight_write_oc(weight_dma_oc),
@@ -571,7 +576,7 @@ module gestureflow_layer_chain_hp0_axil #(
     .output_psum(output_psum), .output_lane_enable_valid(output_lane_enable_valid), .output_row(output_row),
     .output_column(output_column), .busy(), .protocol_error(protocol_error), .frame_input_done(frame_input_done)
   );
-  gestureflow_requant_relu #(.LANES(OUT_LANES)) requant (
+  gestureflow_requant_relu #(.LANES(OUT_LANES), .PARALLEL_LANES(REQUANT_PARALLEL_LANES)) requant (
     .clk(aclk), .rst_n(aresetn), .in_valid(output_valid), .in_ready(quant_ready), .in_psum(output_psum),
     .in_lane_enable(output_lane_enable_valid), .enable(requant_enable), .relu_enable(requant_relu_enable),
     .output_zero_point(output_zero_point), .multiplier(requant_multiplier[OUT_LANES-1:0]), .right_shift(requant_right_shift[OUT_LANES-1:0]),
@@ -663,7 +668,7 @@ module gestureflow_layer_chain_hp0_axil #(
       store_stride_bytes<=0; store_valid_bytes<=0;
       relay_enable<=1'b0; relay_read_bank_select<=1'b0; output_write_bank_select<=1'b0; relay_pool_2x2<=1'b0;
       ps_weight_write_valid<=0; ps_weight_write_oc<=0; ps_weight_write_tap<=0; ps_weight_write_ic_group<=0; ps_weight_write_data<=0;
-      weight_dma_start<=0; weight_dma_clear<=0; weight_dma_source<=0; weight_dma_bytes<=0; weight_dma_taps<=0; weight_dma_groups<=0;
+      weight_dma_start<=0; weight_dma_clear<=0; weight_dma_source<=0; weight_dma_bytes<=0; weight_dma_taps<=0; weight_dma_groups<=0; weight_dma_outputs<=0;
       bias<='0; bias_index<=0; input_zero_point<='0; output_zero_point<=0; output_lane_enable<='1; weight_bank_select<=0; weight_read_bank_select<=0; param_bank_select<=0;
       requant_enable<=0; requant_relu_enable<=0; requant_index<=0; requant_multiplier<='0; requant_right_shift<='0;
       post_gap_multiplier<=0; post_gap_right_shift<=0; post_gap_input_zero_point<=0; post_gap_output_zero_point<=0; post_fc_output_zero_point<=0;
@@ -823,7 +828,7 @@ module gestureflow_layer_chain_hp0_axil #(
           end
           WEIGHT_DMA_SOURCE: if (running || dma_busy || weight_dma_busy || store_busy) fault<=1; else weight_dma_source<=wdata;
           WEIGHT_DMA_BYTES: if (running || dma_busy || weight_dma_busy || store_busy) fault<=1; else weight_dma_bytes<=wdata;
-          WEIGHT_DMA_CFG: if (running || dma_busy || weight_dma_busy || store_busy) fault<=1; else begin weight_dma_taps<=wdata[4:0]; weight_dma_groups<=wdata[12:8]; end
+          WEIGHT_DMA_CFG: if (running || dma_busy || weight_dma_busy || store_busy) fault<=1; else begin weight_dma_taps<=wdata[4:0]; weight_dma_groups<=wdata[12:8]; weight_dma_outputs<=wdata[21:16]; end
           WEIGHT_DMA_CONTROL: begin
             if (wdata[0]) begin weight_dma_clear<=1; end
             if (wdata[1]) begin

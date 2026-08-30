@@ -10,7 +10,8 @@
 module gestureflow_hp0_weight_dma_loader #(
   parameter int FIFO_BEATS = 16,
   parameter int MAX_TAPS = 16,
-  parameter int MAX_GROUPS = 20
+  parameter int MAX_GROUPS = 20,
+  parameter int MAX_OUTPUT_LANES = 16
 ) (
   input logic clk,
   input logic rst_n,
@@ -20,13 +21,16 @@ module gestureflow_hp0_weight_dma_loader #(
   input logic [31:0] byte_count,
   input logic [4:0] taps_per_output,
   input logic [4:0] groups_per_tap,
+  // Runtime tile width. This lets one OUT_LANES=32 engine load a 16-lane
+  // compatibility tile without requiring padded dummy weights.
+  input logic [5:0] outputs_per_tile,
   output logic busy,
   output logic done,
   output logic fault,
   output logic [31:0] bytes_read,
   output logic [31:0] write_count,
   output logic weight_write_valid,
-  output logic [3:0] weight_write_oc,
+  output logic [(MAX_OUTPUT_LANES <= 1 ? 1 : $clog2(MAX_OUTPUT_LANES))-1:0] weight_write_oc,
   output logic [3:0] weight_write_tap,
   output logic [4:0] weight_write_ic_group,
   output logic signed [3:0][7:0] weight_write_data,
@@ -53,6 +57,7 @@ module gestureflow_hp0_weight_dma_loader #(
   typedef enum logic [1:0] {IDLE, ISSUE_AR, RECEIVE_R, DRAIN} state_t;
   localparam int PTR_W = (FIFO_BEATS <= 1) ? 1 : $clog2(FIFO_BEATS);
   localparam int COUNT_W = $clog2(FIFO_BEATS + 1);
+  localparam int OC_W = (MAX_OUTPUT_LANES <= 1) ? 1 : $clog2(MAX_OUTPUT_LANES);
   state_t state;
   logic [63:0] beat_fifo [0:FIFO_BEATS-1];
   logic [PTR_W-1:0] read_ptr, write_ptr;
@@ -61,7 +66,9 @@ module gestureflow_hp0_weight_dma_loader #(
   logic [5:0] beats_remaining, requested_beats;
   logic [31:0] words_remaining;
   logic [4:0] cfg_taps, cfg_groups;
-  logic [3:0] oc_count, tap_count;
+  logic [5:0] cfg_outputs;
+  logic [OC_W-1:0] oc_count;
+  logic [3:0] tap_count;
   logic [4:0] group_count;
   logic word_half;
   logic [31:0] current_word;
@@ -130,6 +137,7 @@ module gestureflow_hp0_weight_dma_loader #(
       state <= IDLE; read_ptr <= '0; write_ptr <= '0; buffered_beats <= '0;
       next_addr <= '0; bytes_remaining <= '0; beats_remaining <= '0;
       words_remaining <= '0; cfg_taps <= '0; cfg_groups <= '0;
+      cfg_outputs <= '0;
       oc_count <= '0; tap_count <= '0; group_count <= '0; word_half <= 1'b0;
       current_word_valid <= 1'b0; done <= 1'b0; fault <= 1'b0;
       bytes_read <= '0; write_count <= '0;
@@ -162,7 +170,7 @@ module gestureflow_hp0_weight_dma_loader #(
           group_count <= '0;
           if (tap_count == (cfg_taps[3:0] - 4'd1)) begin
             tap_count <= '0;
-            if (oc_count == 4'd15) oc_count <= '0;
+            if (oc_count == OC_W'(cfg_outputs - 1'b1)) oc_count <= '0;
             else oc_count <= oc_count + 1'b1;
           end else tap_count <= tap_count + 1'b1;
         end else group_count <= group_count + 1'b1;
@@ -195,11 +203,13 @@ module gestureflow_hp0_weight_dma_loader #(
           word_half <= 1'b0; current_word_valid <= 1'b0;
           oc_count <= '0; tap_count <= '0; group_count <= '0;
           cfg_taps <= taps_per_output; cfg_groups <= groups_per_tap;
+          cfg_outputs <= outputs_per_tile;
           words_remaining <= (byte_count >> 2);
           if ((source_addr[2:0] != 0) || (byte_count == 0) ||
               (byte_count[2:0] != 0) || (taps_per_output == 0) ||
-              (groups_per_tap == 0) || ((byte_count >> 2) !=
-                (32'(16) * taps_per_output * groups_per_tap))) begin
+              (groups_per_tap == 0) || (outputs_per_tile == 0) ||
+              (int'(outputs_per_tile) > MAX_OUTPUT_LANES) || ((byte_count >> 2) !=
+              (32'(outputs_per_tile) * taps_per_output * groups_per_tap))) begin
             fault <= 1'b1;
           end else begin
             next_addr <= source_addr; bytes_remaining <= byte_count; state <= ISSUE_AR;
