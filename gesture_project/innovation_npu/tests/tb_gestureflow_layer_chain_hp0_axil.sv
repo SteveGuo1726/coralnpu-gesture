@@ -62,7 +62,10 @@ module tb_gestureflow_layer_chain_hp0_axil;
   assign m_axi_awready = !write_active;
   assign m_axi_wready = write_active;
 
-  gestureflow_layer_chain_hp0_axil dut (
+  gestureflow_layer_chain_hp0_axil #(
+    .MAX_INPUT_CHANNELS(40),
+    .ENABLE_WIDE_MODES(1'b1)
+  ) dut (
     .aclk(clk), .aresetn(aresetn),
     .s_axi_awaddr(s_axi_awaddr), .s_axi_awprot(s_axi_awprot), .s_axi_awvalid(s_axi_awvalid), .s_axi_awready(s_axi_awready),
     .s_axi_wdata(s_axi_wdata), .s_axi_wstrb(s_axi_wstrb), .s_axi_wvalid(s_axi_wvalid), .s_axi_wready(s_axi_wready),
@@ -111,7 +114,7 @@ module tb_gestureflow_layer_chain_hp0_axil;
               (m_axi_awaddr >= ACT3_BASE && m_axi_awaddr < ACT3_BASE + POOL_BYTES) ||
               (m_axi_awaddr >= CONV2A_BASE && m_axi_awaddr < CONV2A_BASE + CONV2A_BYTES) ||
               (m_axi_awaddr >= CONV2B_BASE && m_axi_awaddr < CONV2B_BASE + CONV2B_BYTES)) ||
-            m_axi_awlen > 1 || m_axi_awsize != 3 || m_axi_awburst != 2'b01 || m_axi_awid != 0)
+            m_axi_awlen > 15 || m_axi_awsize != 3 || m_axi_awburst != 2'b01 || m_axi_awid != 0)
           $fatal(1,"invalid chain HP0 write addr=%08x len=%0d",m_axi_awaddr,m_axi_awlen);
         write_active<=1; write_index<=17'(m_axi_awaddr >> 3); write_beats_left<=m_axi_awlen[4:0]+1'b1;
       end
@@ -214,7 +217,7 @@ module tb_gestureflow_layer_chain_hp0_axil;
     for (int byte_index=0; byte_index<RGB_BYTES; byte_index++) ddr[(RGB_BASE>>3)+(byte_index>>3)][(byte_index&7)*8 +: 8] = gf_full_input_q[byte_index] ^ 8'h80;
     repeat(3) @(negedge clk); aresetn=1;
     read32(MAGIC,value); if(value!=32'h47464e50)$fatal(1,"bad chain magic %08x",value);
-    read32(VERSION,value); if(value!=32'h00040003)$fatal(1,"bad chain version %08x",value);
+    read32(VERSION,value); if(value!=32'h00040004)$fatal(1,"bad chain version %08x",value);
     write32(CONTROL,1); write32(LAYER_MODE,0); write32(QCFG,32'h0003_8080); load_rgb_weights();
     write32(DMA_SOURCE,RGB_BASE); write32(DMA_BYTES,RGB_BYTES); write32(DMA_PIXELS,9216);
     write32(STORE_DESTINATION,ACT1_BASE); write32(STORE_BYTES,ACTIVATION_BYTES); write32(STORE_CONTROL,1); write32(CONTROL,2);

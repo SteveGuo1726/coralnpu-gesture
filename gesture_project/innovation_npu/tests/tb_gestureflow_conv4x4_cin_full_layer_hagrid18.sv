@@ -60,7 +60,7 @@ module tb_gestureflow_conv4x4_cin_full_layer_hagrid18;
     .pixel_valid(pixel_valid), .pixel_ready(pixel_ready), .pixel_data(pixel_data),
     .input_zero_point(input_zero_point), .input_group_count(5'd4), .input_lane_enable(4'hf), .weight_write_valid(weight_write_valid),
     .weight_write_oc(weight_write_oc), .weight_write_tap(weight_write_tap),
-    .weight_write_ic_group(weight_write_ic_group), .weight_write_data(weight_write_data), .weight_bank_select(weight_bank_select),
+    .weight_write_ic_group(weight_write_ic_group), .weight_write_data(weight_write_data), .weight_bank_select(weight_bank_select), .read_bank_select(1'b0),
     .bias(bias), .output_lane_enable(output_lane_enable), .output_valid(raw_valid),
     .output_ready(raw_ready), .output_psum(raw_psum), .output_lane_enable_valid(raw_mask),
     .output_row(raw_row), .output_column(raw_column), .busy(raw_busy),

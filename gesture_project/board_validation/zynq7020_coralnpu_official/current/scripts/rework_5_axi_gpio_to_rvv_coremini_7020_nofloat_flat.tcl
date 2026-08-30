@@ -13,7 +13,8 @@ proc generate_bundled_rvv_wrapper {rtl_dir} {
   set prelude_files [list \
     [file join $shared_rtl_dir "registers.svh"] \
     [file join $shared_rtl_dir "cf_math_pkg.sv"] \
-    [file join $shared_rtl_dir "fpnew_pkg.sv"]]
+    [file join $shared_rtl_dir "fpnew_pkg.sv"] \
+    [file join $shared_rtl_dir "defs_div_sqrt_mvp.sv"]]
 
   if {![file exists $wrapper_v]} {
     error "Missing wrapper RTL: $wrapper_v"

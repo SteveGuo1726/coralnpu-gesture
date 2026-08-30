@@ -68,7 +68,7 @@ module gestureflow_conv4x4_rgb_same_stream #(
     .clk(clk), .rst_n(rst_n),
     .weight_write_valid(weight_write_valid), .weight_write_oc(weight_write_oc),
     .weight_write_tap(weight_write_tap), .weight_write_ic_group('0),
-    .weight_write_data(weight_write_data),
+    .weight_write_data(weight_write_data), .weight_bank_select(1'b0),
     .start_valid(pending_window), .start_ready(tile_start_ready), .bias(bias),
     .output_lane_enable(output_lane_enable), .mac_valid(mac_active),
     .mac_ready(tile_mac_ready), .mac_tap(tap_index), .mac_ic_group('0),

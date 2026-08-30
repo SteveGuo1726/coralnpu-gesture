@@ -28,6 +28,7 @@ foreach src {
   gestureflow_hp0_weight_dma_loader.sv
   gestureflow_hp0_gap_fc.sv
   gestureflow_hp0_tensor_writer.sv
+  gestureflow_hp0_stream_writer.sv
   gestureflow_layer_chain_hp0_axil.sv
 } {
   set path [file join $script_dir wide80_src $src]

@@ -1,0 +1,3 @@
+[submodule "coralnpu"]
+	path = coralnpu
+	url = https://github.com/google-coral/coralnpu.git

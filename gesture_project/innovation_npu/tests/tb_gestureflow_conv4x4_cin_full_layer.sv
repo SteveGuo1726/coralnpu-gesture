@@ -14,6 +14,7 @@ module tb_gestureflow_conv4x4_cin_full_layer;
   logic signed [GF_FULL_INPUT_CHANNELS-1:0][7:0] pixel_data;
   logic signed [GF_FULL_INPUT_CHANNELS-1:0][7:0] input_zero_point;
   logic weight_write_valid = 0;
+  logic weight_bank_select = 0;
   logic [$clog2(GF_FULL_LANES)-1:0] weight_write_oc;
   logic [3:0] weight_write_tap;
   logic [$clog2(GF_FULL_INPUT_CHANNELS/4)-1:0] weight_write_ic_group;
@@ -53,11 +54,14 @@ module tb_gestureflow_conv4x4_cin_full_layer;
     .IMAGE_WIDTH(GF_FULL_WIDTH), .IMAGE_HEIGHT(GF_FULL_HEIGHT),
     .INPUT_CHANNELS(GF_FULL_INPUT_CHANNELS), .OUT_LANES(GF_FULL_LANES)
   ) stream (
-    .clk(clk), .rst_n(rst_n), .frame_start(frame_start),
+    .clk(clk), .rst_n(rst_n),
+    .image_width(16'(GF_FULL_WIDTH)), .image_height(16'(GF_FULL_HEIGHT)),
+    .pointwise_mode(1'b0),
+    .frame_start(frame_start),
     .pixel_valid(pixel_valid), .pixel_ready(pixel_ready), .pixel_data(pixel_data),
     .input_zero_point(input_zero_point), .input_group_count(5'd4), .input_lane_enable(4'hf), .weight_write_valid(weight_write_valid),
     .weight_write_oc(weight_write_oc), .weight_write_tap(weight_write_tap),
-    .weight_write_ic_group(weight_write_ic_group), .weight_write_data(weight_write_data),
+    .weight_write_ic_group(weight_write_ic_group), .weight_write_data(weight_write_data), .weight_bank_select(weight_bank_select),
     .bias(bias), .output_lane_enable(output_lane_enable), .output_valid(raw_valid),
     .output_ready(raw_ready), .output_psum(raw_psum), .output_lane_enable_valid(raw_mask),
     .output_row(raw_row), .output_column(raw_column), .busy(raw_busy),

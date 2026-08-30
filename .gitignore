@@ -2,10 +2,12 @@
 .agents/
 .codex/
 .git-local/
+.git.broken/
 local_env/
 
-# Upstream dependency: clone locally when needed, do not duplicate upload
-coralnpu/
+# Upstream dependency: kept as a git submodule pinned to a specific official
+# commit, so the team clones the exact reference tree with --recurse-submodules.
+# (No coralnpu/ ignore line: the submodule gitlink is tracked.)
 
 # Exception: the RVV learning guide contains a small, immutable source snapshot.
 # The directory name mirrors the official Scala package and must remain trackable.
@@ -33,7 +35,13 @@ gesture_project/algorithms/.keras_cache/
 # Local datasets and model artifacts
 gesture_project/datasets/raw/
 gesture_project/datasets/processed/
-gesture_project/models/
+gesture_project/models/*
+
+# Non-current-mainline reference material and out-of-scope board experiments
+guides/
+gesture_project/simulation/
+gesture_project/board_validation/fz3a_coralnpu/
+gesture_project/board_validation/axu5ev_coralnpu/
 
 # Local experimental worktrees derived from upstream coralnpu
 gesture_project/worktrees/

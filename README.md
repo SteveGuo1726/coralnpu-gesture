@@ -1,250 +1,113 @@
-# CoralNPU Gesture Project
+# coralnpu-gesture：面向手势识别的自研 NPU 加速器
 
-## 1. 仓库定位
+本仓库围绕一条明确主线：**借鉴 Google Coral NPU 的架构思想，在 Zynq-7020 FPGA 上
+完全独立实现一个面向 18 类手势识别的硬件加速器 GestureFlow-NPU**。
 
-本仓库用于共享“面向手势识别的 RISC-V + NPU 软硬件协同优化”项目的当前活跃工程材料。它不是单纯的算法训练仓库，也不是单纯的 RTL 仓库，而是围绕同一条项目主线，统一保存以下内容：
+> 不是 Google Coral NPU 的移植或修改。`coralnpu/` 只是只读架构参考（以 git
+> submodule 引入，锁定官方提交 `7318dfc2`），所有自研 RTL 都在
+> `gesture_project/innovation_npu/`。
 
-- 手势识别数据准备、训练、量化和评估脚本。
-- CoralNPU official 路径上的回放、比对、周期统计和策略收敛工具。
-- rowhandoff 硬件参考线相关的 CSR、trace、readback、对账与报告材料。
-- 项目从立项到当前中期阶段的总结文档、阶段报告和关键规范说明。
+## 当前成果（已真实上板验证）
 
-当前仓库面向团队协作共享，原则是：
+| 项目 | 结果 |
+|------|------|
+| 算法 | 18 类 HaGRID 蒸馏学生模型，INT8 测试准确率 **98.88%**（85,311 张） |
+| 硬件 | 32 输出通道 × 4 输入通道 INT8 MAC + 卷积/池化/GAP/FC 全链路 |
+| 时钟 / 时序 | 80 MHz，WNS = +0.063 ns，0 时序违例 |
+| 上板 | `FINAL_RESULT = 0x600D600D`，全网络逐层 FNV 与 TFLite golden 一致 |
+| 性能 | 端到端 **32.69 ms / 30.59 FPS**（整网测试图基准，非摄像头实时帧） |
+| 资源 | LUT 34,627 / FF 51,477 / RAMB36 127 / RAMB18 26 / DSP 191 |
 
-- 保留当前活跃主线、正式结果和关键文档。
-- 不重复上传 CoralNPU 上游仓库副本。
-- 不上传本机生成的大体积训练产物、数据集、实验 worktree 和杂散临时文件。
-- 不把已经判死的路线继续作为主入口材料。
+## 快速开始
 
-## 2. 当前项目状态
-
-到当前阶段，项目已经形成三条正式保底线：
-
-- 算法保底线：`static_cnn_regularized_3x3_i96_e70_hagrid6_sample`
-- official 软件保底线：`strategy=8 + x4_id32/x4_id64 + 静态主体块调度 + interior 6tap + 顶/底 4/6/4`
-- 第二层硬件参考线：`rowhandoff_rowbase_recur mode=1`
-
-当前关键量化结果如下：
-
-- 主线模型 Keras 测试准确率：`77.29%`
-- 主线模型 INT8 TFLite 测试准确率：`77.07%`
-- 主线模型量化精度损失：`0.22` 个百分点
-- official current best 四层总 `opt_cycles`：`17,596,916`
-- official current best 四层总 `mismatch`：`0`
-- 真实 workload rowhandoff trace 已重建事件数：`111`
-
-这意味着项目已经完成：
-
-- 任务口径和数据口径统一。
-- 候选算法训练、量化、评估和热点分析。
-- official 软件路径的 current best 收敛。
-- rowhandoff 参考线的 CSR / counter / trace / reconstruction 最小闭环。
-
-## 3. 整个工程从头到现在做了什么
-
-### 阶段 1：算法与数据集探索
-
-这一阶段完成了六类静态手势任务口径建立、HaGRID 子集整理、候选模型真实训练和 INT8 量化评估。项目最终没有凭经验直接选模型，而是用统一流程比较了准确率、量化稳定性、TFLite 算子画像和 NPU 周期估算，正式收敛出 `static_cnn_regularized_3x3_i96_e70_hagrid6_sample` 作为算法主线。同时完成了 MobileNet 系列对照和若干结构路线的止损归档。
-
-### 阶段 2：official 回放与 current best 收敛
-
-这一阶段把算法主线映射到 CoralNPU official 工程路径，围绕四个主体热点层，建立了 worktree 回放、桥接、总周期比对、tail patch 分析和 current best 收敛工具链。最终收敛到 `strategy=8` 这条正式软件保底线，并系统排除了 `3x3 repack`、`3x3 postprocess` 软件融合、边界行中带块调度、边界窄特化等方向。
-
-### 阶段 3：rowhandoff 硬件参考线与真实 trace 闭环
-
-这一阶段的目标不是继续扫软件微 patch，而是判断是否存在值得保留的硬件参考语义。最终只保留 `rowhandoff_rowbase_recur mode=1` 作为第二层硬件参考线，并沿 `CoreAxi / CoreAxiCSR / RowhandoffCounterBank / CSR readback / trace` 方向，完成了最小可观测闭环。真实 workload 下已经抓到完整 `111` 事件 trace，并完成项目侧解析和 row 生命周期重建。
-
-### 阶段 4：主线收口与团队接管整理
-
-这一阶段主要完成活跃材料收缩、历史材料归档、阶段总结撰写、项目中期报告整理和统一入口建立。当前所有续接都应从新的入口文档出发，而不应重新从大量旧碎片起步。
-
-## 4. 仓库目录说明
-
-- `gesture_project/`：项目自己的活跃工程目录，是团队后续主要工作区。
-- `gesture_project/docs/`：当前最重要的中文主线文档、阶段总结、规范和报告入口。
-- `gesture_project/algorithms/`：训练、量化、评估、回放桥接、trace 重建等项目代码。
-- `gesture_project/datasets/`：数据集说明和数据准备脚本；实际数据内容默认不上传。
-- `gesture_project/configs/`：模型热点分析和候选硬件摘要所用配置文件。
-- `gesture_project/reports/`：当前主线仍然需要引用的正式结果与关键 JSON/Markdown 报告。
-- `gesture_project/patches/`：针对 CoralNPU 上游仓库的实验补丁；当前只保留累计补丁作为主要入口。
-- `24348025_面向手势识别的RISC-V+NPU设计.pdf`：项目最初计划书，用于回看原始目标，不作为技术事实本身。
-
-## 5. 与 CoralNPU 上游仓库的关系
-
-本仓库不会重复上传 `coralnpu/` 目录内容。`coralnpu/` 视为外部依赖，需要团队成员在本地自行拉取。这样做有两个原因：
-
-- 避免把上游仓库整份重复提交到本仓库。
-- 保持项目仓库专注于自己的脚本、文档、报告和补丁。
-
-推荐本地准备方式：
+### 1. 克隆仓库（含 coralnpu 官方只读参考）
 
 ```bash
-cd <your-workspace>
-git clone <this-repo-url> coralnpu-gesture
-cd coralnpu-gesture
-git clone https://github.com/google-coral/coralnpu.git coralnpu
+git clone --recurse-submodules git@github.com:SteveGuo1726/coralnpu-gesture.git
 ```
 
-如果后续需要跑项目里的 official worktree 路线，建议把实验修改放在：
+已经普通 clone 的，再补拉子模块：
+
+```bash
+cd coralnpu-gesture
+git submodule update --init --recursive
+```
+
+### 2. 先读文档
+
+新手从零入门，按顺序读：
+
+1. [`gesture_project/docs/GestureFlow-NPU_从零入门完全指南_2026-08-31.md`](gesture_project/docs/GestureFlow-NPU_从零入门完全指南_2026-08-31.md) —— 面向零基础的算法/硬件/软件/运行全讲解，**这是第一入口**。
+2. [`gesture_project/docs/会话交接_最高优先级_2026-07-11.md`](gesture_project/docs/会话交接_最高优先级_2026-07-11.md) —— 全部历史交接记录（120 条），按时间倒序。
+
+### 3. 复现当前成果
+
+```bash
+cd gesture_project
+
+# 1) 从 INT8 模型导出各层权重/golden
+bash innovation_npu/tools/export_hagrid18_all_layers.sh
+
+# 2) Verilator 快速回归（秒级，FNV 对账）
+bash innovation_npu/tests/run_gestureflow_hp0_gap_fc_hagrid18_real.sh
+bash innovation_npu/tests/run_gestureflow_conv4x4_cin_full_layer_hagrid18.sh
+bash innovation_npu/tests/run_gestureflow_layer_chain_hp0_postprocess_hagrid18_out32.sh
+
+# 3) 整网综合布线（需 Windows 侧 Vivado，WSL 调 /mnt/e）
+GESTUREFLOW_HAGRID18_FCLK_MHZ=80 \
+  bash innovation_npu/board_7020/run_build_gestureflow_hagrid18_hf_7020_from_wsl.sh
+
+# 4) 编译 ARM 软件
+bash innovation_npu/board_7020/build_software_hagrid18_from_wsl.sh
+
+# 5) 烧板运行（需板子 + hw_server）
+timeout 240s bash innovation_npu/board_7020/run_board_hagrid18_from_wsl.sh
+```
+
+完整的环境准备、每一步含义和常见坑见“从零入门完全指南”第 5 章。
+
+## 目录结构（当前主线）
 
 ```text
-gesture_project/worktrees/coralnpu-3x3-conv
+coralnpu/                  Google 官方只读参考（submodule，禁止修改）
+gesture_project/
+├── docs/                  主文档（入门指南 + 交接记录 + 阶段复盘）
+├── models/                当前 18 类学生模型（model.keras / model_int8.tflite / 评估）
+├── algorithms/            算法代码（训练/蒸馏/量化/评估/时序模型）
+│   ├── static_cnn/        学生模型训练与量化
+│   ├── mobilenet_candidates/  教师模型训练
+│   ├── temporal_cnn/      动态手势时序模型（尚未上板）
+│   └── scripts/           训练脚本
+├── datasets/              数据准备脚本 + 说明（大体积数据本地，不入库）
+├── innovation_npu/        自研 GestureFlow-NPU（核心）
+│   ├── rtl/               SystemVerilog 硬件
+│   ├── tests/             Verilator 回归
+│   ├── tools/             权重/golden 导出
+│   └── board_7020/        7020 板级脚本 + 软件驱动
+└── README.md
 ```
 
-该目录在本仓库中默认忽略，由每位开发者本地重建。
+## 与 coralnpu 的关系
 
-## 6. 快速开始
+- `coralnpu/` 是 [google-coral/coralnpu](https://github.com/google-coral/coralnpu)
+  官方仓库，以 submodule 锁定在提交 `7318dfc2`。
+- 它**只用于架构思想借鉴**（控制-计算解耦、片上数据复用、权重驻留），任何情况下
+  都不要在 `coralnpu/` 内做项目修改。
+- 自研硬件是独立 RTL 实现，全部位于 `gesture_project/innovation_npu/rtl/`，每个
+  文件顶部带 `PROJECT_LOCAL_SELF_RESEARCH_NOT_GOOGLE_OFFICIAL`。
 
-### 6.1 先读哪些文档
+## 数据与模型说明
 
-团队成员第一次接手时，建议按下面顺序阅读：
+- 训练数据集（HaGRID-v1 384p）体积大，`gesture_project/datasets/raw/` 与
+  `gesture_project/datasets/processed/` 默认不入库，需自行下载准备。
+- `gesture_project/models/` 默认不入库，但**当前 18 类学生模型的小文件已白名单
+  入库**（`model.keras`、`model_int8.tflite`、`labels.txt`、评估 JSON），保证能
+  复现导出与整网 golden。教师模型（约 36 MB）仍需按脚本本地重训。
 
-1. `gesture_project/docs/新对话对接_当前唯一有效入口_2026-06-12.md`
-2. `gesture_project/docs/官方网页参考与代理_运行细节总表_2026-06-12.md`
-3. `gesture_project/docs/项目全程阶段总结_阶段1_算法与数据集探索.md`
-4. `gesture_project/docs/项目全程阶段总结_阶段2_official回放与current_best收敛.md`
-5. `gesture_project/docs/项目全程阶段总结_阶段3_rowhandoff硬件参考线与真实trace闭环.md`
-6. `gesture_project/docs/项目全程阶段总结_阶段4_当前状态与后续执行路线.md`
-7. `gesture_project/docs/工程文件索引.md`
+## 维护约定
 
-### 6.2 Python 环境
-
-```bash
-cd gesture_project/algorithms
-python3 -m venv .venv
-source .venv/bin/activate
-env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u http_proxy -u https_proxy -u all_proxy \
-  .venv/bin/python -m pip install -r requirements.txt
-```
-
-注意：根据当前项目经验，`pip install` 在虚拟环境里通常要先取消代理。
-
-### 6.3 训练与评估主线模型
-
-训练：
-
-```bash
-cd gesture_project/algorithms
-./.venv/bin/python -m static_cnn.train_static_cnn \
-  --data_dir ../datasets/processed/hagrid_sample_static_6cls \
-  --out_dir ../models/static_cnn_regularized_3x3_i96_e70_hagrid6_sample \
-  --image_size 96 \
-  --epochs 70 \
-  --batch_size 32 \
-  --learning_rate 0.0005 \
-  --variant regularized_3x3 \
-  --dropout 0.25 \
-  --weight_decay 0.00005 \
-  --reduce_lr_on_plateau
-```
-
-量化：
-
-```bash
-./.venv/bin/python -m static_cnn.quantize_tflite \
-  --model ../models/static_cnn_regularized_3x3_i96_e70_hagrid6_sample/model.keras \
-  --data_dir ../datasets/processed/hagrid_sample_static_6cls \
-  --out ../models/static_cnn_regularized_3x3_i96_e70_hagrid6_sample/model_int8.tflite \
-  --image_size 96 \
-  --samples 200
-```
-
-Keras 评估：
-
-```bash
-./.venv/bin/python -m tools.evaluate_keras_classifier \
-  --model ../models/static_cnn_regularized_3x3_i96_e70_hagrid6_sample/model.keras \
-  --data_dir ../datasets/processed/hagrid_sample_static_6cls/test \
-  --labels ../models/static_cnn_regularized_3x3_i96_e70_hagrid6_sample/labels.txt \
-  --out ../reports/static_cnn_regularized_3x3_i96_e70_hagrid6_sample_keras_eval.json
-```
-
-TFLite 评估：
-
-```bash
-./.venv/bin/python -m tools.evaluate_tflite_classifier \
-  --model ../models/static_cnn_regularized_3x3_i96_e70_hagrid6_sample/model_int8.tflite \
-  --data_dir ../datasets/processed/hagrid_sample_static_6cls/test \
-  --labels ../models/static_cnn_regularized_3x3_i96_e70_hagrid6_sample/labels.txt \
-  --out ../reports/static_cnn_regularized_3x3_i96_e70_hagrid6_sample_tflite_eval.json
-```
-
-### 6.4 运行 official current best 回放
-
-项目当前推荐入口：
-
-```bash
-cd gesture_project/algorithms
-./.venv/bin/python tools/run_core_3x3_worktree_replay.py
-```
-
-实际使用前必须先阅读：
-
-- `gesture_project/docs/官方网页参考与代理_运行细节总表_2026-06-12.md`
-- `gesture_project/docs/Bazel缓存与output_base规范.md`
-
-尤其注意：
-
-- Bazel `output_base` 统一使用 `/tmp/bazel-coralnpu-gesture-3x3-batch`
-- 开代理后跑 Bazel 前要显式导出 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`
-- `pip install` 与 Bazel 代理策略不完全相同，不要混用
-
-### 6.5 rowhandoff 相关验证
-
-当前 rowhandoff 主线材料应优先看：
-
-- `gesture_project/docs/strategy8_上板导向主线说明.md`
-- `gesture_project/docs/strategy8_rowhandoff_mode1_RTL语义整理.md`
-- `gesture_project/docs/strategy8_rowhandoff_官方CSR接入任务单.md`
-- `gesture_project/docs/strategy8_板级最小验证清单.md`
-
-当前项目侧 trace 工具入口为：
-
-- `gesture_project/algorithms/tools/parse_strategy8_rowhandoff_cocotb_log.py`
-- `gesture_project/algorithms/tools/reconstruct_strategy8_rowhandoff_event_trace.py`
-
-## 7. 重要注意事项
-
-### 7.1 不要把已判死方向重新当主线
-
-当前已经明确不应回到：
-
-- `3x3 repack`
-- `3x3 postprocess` 软件融合
-- 边界行中带块调度
-- 边界点窄特化
-- `mode2 / mode3 / mode4_helper / mode6_terminalptr` 等 rowhandoff 继续发散
-
-### 7.2 不要污染上游仓库
-
-`coralnpu/` 作为上游参考仓库使用；本项目实验修改优先在 `gesture_project/worktrees/` 下进行，不要直接把本地实验长期堆到上游副本里。
-
-### 7.3 不要上传本机大体积生成物
-
-默认不上传：
-
-- 数据集原始文件和处理后图片
-- 训练模型与量化模型产物
-- worktree、Bazel 缓存、虚拟环境
-- 本机日志、临时扫描结果和预测 CSV
-
-### 7.4 先看活跃文档，再追旧材料
-
-如果需要追溯历史碎片，不要直接从 `docs/` 和 `reports/` 里盲搜，应先看：
-
-- `gesture_project/docs/归档清单_2026-06-12.md`
-- 团队内部另行保存的历史备份目录或旧实验备份仓
-
-## 8. 详细文件说明
-
-活跃代码文件、配置文件和脚本的逐项说明见：
-
-- `gesture_project/docs/仓库共享版_活跃代码与文件说明.md`
-
-## 9. 当前最重要的入口文档
-
-- `gesture_project/docs/新对话对接_当前唯一有效入口_2026-06-12.md`
-- `gesture_project/docs/项目中期报告_阶段进展问题与后续计划_2026-06-15.md`
-- `gesture_project/docs/工程文件索引.md`
-
-如果团队成员只想快速理解“项目做到哪里、接下来怎么接”，优先看这三份即可。
+- 每轮工作完成后，在 `gesture_project/docs/会话交接_最高优先级_2026-07-11.md`
+  顶部（编号最大处）追加一条记录。
+- 所有 RTL 修改先跑 Verilator 回归（FNV 与 golden 一致），再跑 OOC 综合估时序，
+  最后才整网布线，避免空耗综合时间。
+- 改动后确认 `git -C coralnpu status --short` 为空，保证官方参考目录不被污染。

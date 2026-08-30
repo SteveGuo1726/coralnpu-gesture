@@ -16,6 +16,7 @@ module tb_gestureflow_head1x1_tile_hagrid18_real;
   logic signed [GF_HEAD1X1_INPUT_CHANNELS-1:0][7:0] pixel_data;
   logic weight_write_valid = 0;
   logic weight_bank_select = 0;
+  logic read_bank_select = 0;
   logic [$clog2(GF_TILE_LANES)-1:0] weight_write_oc = '0;
   logic [3:0] weight_write_tap = '0;
   logic [$clog2(GF_HEAD1X1_INPUT_CHANNELS/4)-1:0] weight_write_ic_group = '0;
@@ -59,6 +60,7 @@ module tb_gestureflow_head1x1_tile_hagrid18_real;
     .weight_write_valid(weight_write_valid), .weight_write_oc(weight_write_oc),
     .weight_write_tap(weight_write_tap), .weight_write_ic_group(weight_write_ic_group),
     .weight_write_data(weight_write_data), .weight_bank_select(weight_bank_select),
+    .read_bank_select(read_bank_select),
     .bias(bias), .output_lane_enable(output_lane_enable), .output_valid(raw_valid),
     .output_ready(raw_ready), .output_psum(raw_psum), .output_lane_enable_valid(raw_mask),
     .output_row(raw_row), .output_column(raw_column), .busy(raw_busy),

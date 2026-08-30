@@ -6,8 +6,8 @@ proc select_target {filter description} {
 }
 proc rd32 {address} { return [mrd -value $address] }
 set project_root "E:/coralnpu_vivado/projects/gestureflow_layer_chain_descriptor_hp0_7020_v1"
-set bit_path [file join $project_root logs gestureflow_layer_chain_descriptor_hp0_7020.bit]
-set xsa_path [file join $project_root logs gestureflow_layer_chain_descriptor_hp0_7020.xsa]
+set bit_path [file join $project_root logs gestureflow_layer_chain_descriptor_hp0_7020_wide40_mode2fix.bit]
+set xsa_path [file join $project_root logs gestureflow_layer_chain_descriptor_hp0_7020_wide40_mode2fix.xsa]
 set ps7_init_path [file join $project_root axi_gpio.srcs sources_1 bd system ip system_processing_system7_0_0 ps7_init.tcl]
 set elf_path [file join $project_root vitis axi_gpio Debug gestureflow_descriptor_replay.elf]
 set probe_base 0xFFFF0000
@@ -27,7 +27,7 @@ for {set i 0} {$i < 4800} {incr i} {
   after 25
 }
 puts [format {GESTUREFLOW_DESCRIPTOR_REPLAY_FINAL_RESULT = 0x%08X} $final]
-for {set i 0} {$i < 10} {incr i} {
+for {set i 0} {$i < 57} {incr i} {
   puts [format {GESTUREFLOW_DESCRIPTOR_REPLAY_PROBE[%02d] = 0x%08X} $i [rd32 [expr {$probe_base + $i * 4}]]]
 }
 if {$final != 0x600D600D} { error "GestureFlow descriptor replay board run failed" }

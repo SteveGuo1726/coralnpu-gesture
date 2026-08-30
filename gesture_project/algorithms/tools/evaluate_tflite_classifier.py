@@ -21,6 +21,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--labels", required=True, help="labels.txt written during training.")
     parser.add_argument("--out", required=True, help="Output JSON report.")
     parser.add_argument("--csv_out", help="Optional per-image prediction CSV.")
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=1,
+        help="Fixed inference batch size. Requires a dynamic TFLite batch dimension when above one.",
+    )
+    parser.add_argument(
+        "--op_resolver",
+        choices=["builtin", "builtin_ref"],
+        default="builtin",
+        help="TFLite kernel set. builtin_ref bypasses CPU delegates for compatibility diagnosis.",
+    )
     return parser.parse_args()
 
 
@@ -79,7 +91,18 @@ def dequantize_output(output: np.ndarray, output_detail: dict) -> np.ndarray:
 
 def load_image(path: Path, height: int, width: int) -> np.ndarray:
     image = Image.open(path).convert("RGB").resize((width, height), Image.BILINEAR)
-    return np.asarray(image, dtype=np.float32)[None, ...]
+    return np.asarray(image, dtype=np.float32)
+
+
+def make_interpreter(tf, model_path: Path, resolver_name: str):
+    resolver_type = (
+        tf.lite.experimental.OpResolverType.BUILTIN_REF
+        if resolver_name == "builtin_ref"
+        else tf.lite.experimental.OpResolverType.BUILTIN
+    )
+    return tf.lite.Interpreter(
+        model_path=str(model_path), experimental_op_resolver_type=resolver_type
+    )
 
 
 def main() -> None:
@@ -97,38 +120,61 @@ def main() -> None:
 
     labels = read_labels(labels_path)
     samples = list_images(data_dir, labels)
+    if args.batch_size <= 0:
+        raise SystemExit("--batch_size must be positive.")
 
-    interpreter = tf.lite.Interpreter(model_path=str(model_path))
+    interpreter = make_interpreter(tf, model_path, args.op_resolver)
     interpreter.allocate_tensors()
     input_detail = interpreter.get_input_details()[0]
-    output_detail = interpreter.get_output_details()[0]
     input_shape = [int(value) for value in input_detail["shape"]]
     if len(input_shape) != 4:
         raise SystemExit(f"Expected NHWC input, got {input_shape}")
-    height, width = input_shape[1], input_shape[2]
+    height, width, channels = input_shape[1], input_shape[2], input_shape[3]
+    if channels != 3:
+        raise SystemExit(f"Expected RGB input channels, got {channels}")
+    if args.batch_size != input_shape[0]:
+        signature = input_detail.get("shape_signature", input_detail["shape"])
+        if int(signature[0]) != -1:
+            raise SystemExit(
+                f"Model has fixed batch {input_shape[0]}; cannot use --batch_size {args.batch_size}."
+            )
+        interpreter.resize_tensor_input(
+            input_detail["index"], [args.batch_size, height, width, channels], strict=True
+        )
+        interpreter.allocate_tensors()
+        input_detail = interpreter.get_input_details()[0]
+        input_shape = [int(value) for value in input_detail["shape"]]
+    output_detail = interpreter.get_output_details()[0]
 
     confusion = np.zeros((len(labels), len(labels)), dtype=np.int64)
-    rows: list[dict[str, str | int | float]] = []
+    rows: list[dict[str, str | int | float]] | None = [] if csv_path else None
     correct = 0
 
-    for path, true_index in samples:
-        image = load_image(path, height, width)
-        interpreter.set_tensor(input_detail["index"], quantize_input(image, input_detail))
-        interpreter.invoke()
-        output = interpreter.get_tensor(output_detail["index"])[0]
-        scores = dequantize_output(output, output_detail)
-        pred_index = int(np.argmax(scores))
-        confusion[true_index, pred_index] += 1
-        correct += int(pred_index == true_index)
-        rows.append(
-            {
-                "path": str(path),
-                "true_label": labels[true_index],
-                "pred_label": labels[pred_index],
-                "pred_score": float(scores[pred_index]),
-                "correct": int(pred_index == true_index),
-            }
+    for start in range(0, len(samples), args.batch_size):
+        batch = samples[start : start + args.batch_size]
+        images = np.zeros(input_shape, dtype=np.float32)
+        images[: len(batch)] = np.stack(
+            [load_image(path, height, width) for path, _true_index in batch], axis=0
         )
+        interpreter.set_tensor(input_detail["index"], quantize_input(images, input_detail))
+        interpreter.invoke()
+        scores_batch = dequantize_output(
+            interpreter.get_tensor(output_detail["index"]), output_detail
+        )
+        for (path, true_index), scores in zip(batch, scores_batch[: len(batch)], strict=True):
+            pred_index = int(np.argmax(scores))
+            confusion[true_index, pred_index] += 1
+            correct += int(pred_index == true_index)
+            if rows is not None:
+                rows.append(
+                    {
+                        "path": str(path),
+                        "true_label": labels[true_index],
+                        "pred_label": labels[pred_index],
+                        "pred_score": float(scores[pred_index]),
+                        "correct": int(pred_index == true_index),
+                    }
+                )
 
     per_class = {}
     for index, label in enumerate(labels):
@@ -145,6 +191,8 @@ def main() -> None:
         "data_dir": str(data_dir),
         "labels": labels,
         "input_shape": input_shape,
+        "batch_size": args.batch_size,
+        "op_resolver": args.op_resolver,
         "num_samples": len(samples),
         "accuracy": correct / len(samples),
         "correct": correct,
@@ -160,7 +208,7 @@ def main() -> None:
                 fieldnames=["path", "true_label", "pred_label", "pred_score", "correct"],
             )
             writer.writeheader()
-            writer.writerows(rows)
+        writer.writerows(rows or [])
 
     print(f"Wrote {out_path}")
     if csv_path:

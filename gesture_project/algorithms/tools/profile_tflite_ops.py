@@ -17,6 +17,15 @@ def parse_args() -> argparse.Namespace:
         default="auto",
         help="Parser backend. auto uses TensorFlow if available, otherwise tflite flatbuffer schema.",
     )
+    parser.add_argument(
+        "--tensorflow_op_resolver",
+        choices=["builtin", "builtin_ref"],
+        default="builtin",
+        help=(
+            "TensorFlow interpreter kernel set. builtin_ref avoids optional CPU delegates "
+            "when profiling a valid model that an optimized delegate rejects."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -75,12 +84,19 @@ def make_empty_report(model_path: Path, backend: str) -> dict:
     return report
 
 
-def profile_with_tensorflow(model_path: Path) -> dict:
+def profile_with_tensorflow(model_path: Path, resolver_name: str) -> dict:
     tf = require_tensorflow()
-    interpreter = tf.lite.Interpreter(model_path=str(model_path))
+    resolver_type = (
+        tf.lite.experimental.OpResolverType.BUILTIN_REF
+        if resolver_name == "builtin_ref"
+        else tf.lite.experimental.OpResolverType.BUILTIN
+    )
+    interpreter = tf.lite.Interpreter(
+        model_path=str(model_path), experimental_op_resolver_type=resolver_type
+    )
     interpreter.allocate_tensors()
     tensor_details = {item["index"]: item for item in interpreter.get_tensor_details()}
-    report = make_empty_report(model_path, "tensorflow")
+    report = make_empty_report(model_path, f"tensorflow_{resolver_name}")
 
     for op_index, op in enumerate(interpreter._get_ops_details()):  # pylint: disable=protected-access
         op_name = op["op_name"]
@@ -176,13 +192,13 @@ def profile_with_flatbuffer(model_path: Path) -> dict:
     return report
 
 
-def profile_model(model_path: Path, backend: str) -> dict:
+def profile_model(model_path: Path, backend: str, resolver_name: str) -> dict:
     if backend == "tensorflow":
-        return profile_with_tensorflow(model_path)
+        return profile_with_tensorflow(model_path, resolver_name)
     if backend == "flatbuffer":
         return profile_with_flatbuffer(model_path)
     try:
-        return profile_with_tensorflow(model_path)
+        return profile_with_tensorflow(model_path, resolver_name)
     except SystemExit:
         return profile_with_flatbuffer(model_path)
 
@@ -193,7 +209,7 @@ def main() -> None:
     out_path = Path(args.out).resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    report = profile_model(model_path, args.backend)
+    report = profile_model(model_path, args.backend, args.tensorflow_op_resolver)
     out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Wrote {out_path}")
     print(

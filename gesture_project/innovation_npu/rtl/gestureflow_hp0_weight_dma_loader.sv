@@ -54,7 +54,12 @@ module gestureflow_hp0_weight_dma_loader #(
   input wire m_axi_rvalid,
   output logic m_axi_rready
 );
-  typedef enum logic [1:0] {IDLE, ISSUE_AR, RECEIVE_R, DRAIN} state_t;
+  // CONFIG is an intentional one-cycle launch barrier.  Runtime shape
+  // validation contains a multiply and must not share the timing arc that
+  // enables the active transfer counters.
+  typedef enum logic [2:0] {
+    IDLE, CONFIG, CONFIG_PRODUCT, VALIDATE, LAUNCH, ISSUE_AR, RECEIVE_R, DRAIN
+  } state_t;
   localparam int PTR_W = (FIFO_BEATS <= 1) ? 1 : $clog2(FIFO_BEATS);
   localparam int COUNT_W = $clog2(FIFO_BEATS + 1);
   localparam int OC_W = (MAX_OUTPUT_LANES <= 1) ? 1 : $clog2(MAX_OUTPUT_LANES);
@@ -67,6 +72,9 @@ module gestureflow_hp0_weight_dma_loader #(
   logic [31:0] words_remaining;
   logic [4:0] cfg_taps, cfg_groups;
   logic [5:0] cfg_outputs;
+  logic [31:0] cfg_source_addr, cfg_byte_count;
+  logic [15:0] cfg_output_taps;
+  logic [31:0] cfg_expected_words;
   logic [OC_W-1:0] oc_count;
   logic [3:0] tap_count;
   logic [4:0] group_count;
@@ -137,7 +145,8 @@ module gestureflow_hp0_weight_dma_loader #(
       state <= IDLE; read_ptr <= '0; write_ptr <= '0; buffered_beats <= '0;
       next_addr <= '0; bytes_remaining <= '0; beats_remaining <= '0;
       words_remaining <= '0; cfg_taps <= '0; cfg_groups <= '0;
-      cfg_outputs <= '0;
+      cfg_outputs <= '0; cfg_source_addr <= '0; cfg_byte_count <= '0;
+      cfg_output_taps <= '0; cfg_expected_words <= '0;
       oc_count <= '0; tap_count <= '0; group_count <= '0; word_half <= 1'b0;
       current_word_valid <= 1'b0; done <= 1'b0; fault <= 1'b0;
       bytes_read <= '0; write_count <= '0;
@@ -204,16 +213,43 @@ module gestureflow_hp0_weight_dma_loader #(
           oc_count <= '0; tap_count <= '0; group_count <= '0;
           cfg_taps <= taps_per_output; cfg_groups <= groups_per_tap;
           cfg_outputs <= outputs_per_tile;
-          words_remaining <= (byte_count >> 2);
-          if ((source_addr[2:0] != 0) || (byte_count == 0) ||
-              (byte_count[2:0] != 0) || (taps_per_output == 0) ||
-              (groups_per_tap == 0) || (outputs_per_tile == 0) ||
-              (int'(outputs_per_tile) > MAX_OUTPUT_LANES) || ((byte_count >> 2) !=
-              (32'(outputs_per_tile) * taps_per_output * groups_per_tap))) begin
+          cfg_source_addr <= source_addr; cfg_byte_count <= byte_count;
+          state <= CONFIG;
+        end
+        CONFIG: begin
+          // Basic checks are kept separate from the arithmetic checks.  The
+          // output/tap product is registered before the second product is
+          // formed, preventing one wide multiply from reaching a status bit.
+          if ((cfg_source_addr[2:0] != 0) || (cfg_byte_count == 0) ||
+              (cfg_byte_count[2:0] != 0) || (cfg_taps == 0) ||
+              (cfg_groups == 0) || (cfg_outputs == 0) ||
+              (int'(cfg_outputs) > MAX_OUTPUT_LANES)) begin
             fault <= 1'b1;
+            state <= IDLE;
           end else begin
-            next_addr <= source_addr; bytes_remaining <= byte_count; state <= ISSUE_AR;
+            cfg_output_taps <= cfg_outputs * cfg_taps;
+            state <= CONFIG_PRODUCT;
           end
+        end
+        CONFIG_PRODUCT: begin
+          cfg_expected_words <= cfg_output_taps * cfg_groups;
+          state <= VALIDATE;
+        end
+        VALIDATE: begin
+          if ((cfg_byte_count >> 2) != cfg_expected_words) begin
+            fault <= 1'b1;
+            state <= IDLE;
+          end else begin
+            state <= LAUNCH;
+          end
+        end
+        LAUNCH: begin
+          // This separate clock edge keeps the variable-size validation
+          // cone out of the active byte-counter enable path.
+          next_addr <= cfg_source_addr;
+          bytes_remaining <= cfg_byte_count;
+          words_remaining <= (cfg_byte_count >> 2);
+          state <= ISSUE_AR;
         end
         ISSUE_AR: if (m_axi_arvalid && m_axi_arready) begin
           if (requested_beats == 0) begin fault <= 1'b1; state <= IDLE; end

@@ -8,7 +8,11 @@ datasets/raw/
 datasets/processed/
 !datasets/raw/.gitkeep
 !datasets/processed/.gitkeep
-models/
+models/*
+# Exception: keep the small current 18-class student model artifacts so the
+# team can re-export weights and INT8 golden without downloading the dataset.
+!models/hagrid_v1_500k_384p_targethand_student_4x4_rvv_distill_20260827/
+!models/hagrid_v1_500k_384p_targethand_student_4x4_rvv_distill_20260827/**
 
 # Bazel worktrees are experiments derived from upstream repositories.
 worktrees/

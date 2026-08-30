@@ -37,13 +37,36 @@ proc dump_postprocess_diagnostics {} {
   puts "GESTUREFLOW_POSTPROCESS_DIAGNOSTICS_END"
 }
 set project_root "E:/coralnpu_vivado/projects/gestureflow_layer_chain_hp0_7020_v1"
+if {[info exists ::env(GESTUREFLOW_PROJECT_ROOT)] && $::env(GESTUREFLOW_PROJECT_ROOT) ne ""} {
+  set project_root $::env(GESTUREFLOW_PROJECT_ROOT)
+}
 set bit_path [file join $project_root axi_gpio.runs impl_1 system_wrapper.bit]
 set xsa_path [file join $project_root logs gestureflow_layer_chain_hp0_7020.xsa]
+if {[info exists ::env(GESTUREFLOW_BIT_PATH)] && $::env(GESTUREFLOW_BIT_PATH) ne ""} {
+  set bit_path $::env(GESTUREFLOW_BIT_PATH)
+}
+if {[info exists ::env(GESTUREFLOW_XSA_PATH)] && $::env(GESTUREFLOW_XSA_PATH) ne ""} {
+  set xsa_path $::env(GESTUREFLOW_XSA_PATH)
+}
+if {![file exists $bit_path]} {
+  # reset_run impl_1 can remove the working bit before a replacement build
+  # finishes. Keep the last SHA-verified board baseline usable as a rollback;
+  # this is project-local recovery logic, not Google CoralNPU RTL.
+  set bit_path [file join $project_root logs gestureflow_layer_chain_hp0_7020.bit]
+}
 set ps7_init_path [file join $project_root axi_gpio.srcs sources_1 bd system ip system_processing_system7_0_0 ps7_init.tcl]
 set elf_path [file join $project_root vitis axi_gpio Debug gestureflow_layer_chain_hp0.elf]
+if {[info exists ::env(GESTUREFLOW_PS7_INIT_PATH)] && $::env(GESTUREFLOW_PS7_INIT_PATH) ne ""} {
+  set ps7_init_path $::env(GESTUREFLOW_PS7_INIT_PATH)
+}
+if {[info exists ::env(GESTUREFLOW_ELF_PATH)] && $::env(GESTUREFLOW_ELF_PATH) ne ""} {
+  set elf_path $::env(GESTUREFLOW_ELF_PATH)
+}
 set probe_base 0xFFFF0000
 set hw_server_url "tcp:127.0.0.1:3334"
 if {[info exists ::env(GESTUREFLOW_HW_SERVER_URL)]} { set hw_server_url $::env(GESTUREFLOW_HW_SERVER_URL) }
+puts "GESTUREFLOW_SELECTED_BIT = $bit_path"
+puts "GESTUREFLOW_SELECTED_XSA = $xsa_path"
 connect -url $hw_server_url
 select_target_with_recovery {level == 0 && jtag_device_name == "arm_dap"} {top-level ARM DAP}
 rst -system; after 3000
@@ -62,7 +85,7 @@ for {set i 0} {$i < 4800} {incr i} {
   after 25
 }
 puts [format {GESTUREFLOW_LAYER_CHAIN_HP0_FINAL_RESULT = 0x%08X} $final]
-for {set i 0} {$i < 130} {incr i} {
+for {set i 0} {$i < 134} {incr i} {
   puts [format {GESTUREFLOW_LAYER_CHAIN_HP0_PROBE[%02d] = 0x%08X} $i [rd32 [expr {$probe_base + $i * 4}]]]
 }
 if {$final != 0x600D600D} {

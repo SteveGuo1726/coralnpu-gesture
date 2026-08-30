@@ -14,6 +14,8 @@ module tb_gestureflow_mac_tile;
   logic [$clog2(MAX_TAPS)-1:0] weight_write_tap;
   logic [$clog2(MAX_IC_GROUPS)-1:0] weight_write_ic_group;
   logic signed [INPUT_LANES-1:0][7:0] weight_write_data;
+  logic weight_bank_select;
+  logic read_bank_select;
   logic start_valid;
   logic start_ready;
   logic signed [OUT_LANES-1:0][31:0] bias;
@@ -86,6 +88,8 @@ module tb_gestureflow_mac_tile;
     activation = '0;
     input_lane_enable = '0;
     mac_last = 1'b0;
+    weight_bank_select = 1'b0;
+    read_bank_select = 1'b0;
     repeat (3) @(negedge clk);
     rst_n = 1'b1;
 

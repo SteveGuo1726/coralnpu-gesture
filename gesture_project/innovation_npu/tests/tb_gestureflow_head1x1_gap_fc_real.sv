@@ -187,7 +187,7 @@ module tb_gestureflow_head1x1_gap_fc_real;
       for (int lane = 0; lane < GF_TILE_LANES; lane++) begin
         @(negedge clk);
         gap_write_valid = 1'b1;
-        gap_write_index = 7'(tile * GF_TILE_LANES + lane);
+        gap_write_index = 6'(tile * GF_TILE_LANES + lane);
         gap_write_data = gap_data[lane];
       end
       @(negedge clk);
@@ -226,7 +226,7 @@ module tb_gestureflow_head1x1_gap_fc_real;
         @(negedge clk);
         fc_weight_write_valid = 1'b1;
         fc_weight_write_class = 3'(class_index);
-        fc_weight_write_group = 5'(group);
+        fc_weight_write_group = 4'(group);
         for (int lane = 0; lane < 4; lane++) begin
           fc_weight_write_data[lane] = fc_memory[class_index * 112 + group * 4 + lane];
         end

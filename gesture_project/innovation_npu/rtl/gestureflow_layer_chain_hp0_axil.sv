@@ -18,6 +18,11 @@ module gestureflow_layer_chain_hp0_axil #(
   // variable-shift fanout from the routed critical path.
   parameter int REQUANT_PARALLEL_LANES = 1,
   parameter int OUTPUT_ADDR_W = 14,
+  // Pooling reads the pre-pool source tensor. The production HaGRID-18
+  // schedule uses at most 48x48 source vectors, so it does not need the
+  // 96x96 depth used by the general-purpose output bank. Keep the default
+  // equal to OUTPUT_ADDR_W for compatibility with every legacy build.
+  parameter int POOL_BANK_ADDR_W = OUTPUT_ADDR_W,
   // PROJECT_LOCAL_SELF_RESEARCH_NOT_GOOGLE_OFFICIAL
   // The 7020 production baseline only needs RGB and 16-Cin body layers.
   // Wide loaders and GAP/FC remain available as an explicit expansion build,
@@ -31,7 +36,8 @@ module gestureflow_layer_chain_hp0_axil #(
   // forces the MAC weight banks into LUT-RAM. The deployed store-to-DDR path
   // needs only one two-port bank, so relay is parameterized out for the board
   // build and kept for the Verilator relay regressions.
-  parameter bit ENABLE_RELAY = 1'b1
+  parameter bit ENABLE_RELAY = 1'b1,
+  parameter bit ENABLE_STREAM_STORE = 1'b0
 ) (
   (* X_INTERFACE_PARAMETER = "XIL_INTERFACENAME CLK.ACLK, ASSOCIATED_BUSIF S_AXI:M_AXI, ASSOCIATED_RESET aresetn" *) input wire aclk,
   (* X_INTERFACE_PARAMETER = "XIL_INTERFACENAME RST.ARESETN, POLARITY ACTIVE_LOW" *) input wire aresetn,
@@ -125,6 +131,11 @@ module gestureflow_layer_chain_hp0_axil #(
   // 12 Cin groups of a 48-channel layer remain locally accumulated.
   localparam int PIXELS = IMAGE_WIDTH * IMAGE_HEIGHT;
   localparam int CTRL_LANES = (OUT_LANES > 18) ? OUT_LANES : 18;
+
+  initial begin
+    if (POOL_BANK_ADDR_W < 1 || POOL_BANK_ADDR_W > OUTPUT_ADDR_W)
+      $error("POOL_BANK_ADDR_W must be in [1, OUTPUT_ADDR_W]");
+  end
 
   logic [31:0] awaddr, wdata; logic [3:0] wstrb; logic aw_seen, w_seen;
   logic running, done, fault;
@@ -227,6 +238,12 @@ module gestureflow_layer_chain_hp0_axil #(
   logic [31:0] hash_value, completed_hash; logic hash_active, last_output_seen; logic [13:0] output_vectors;
   logic store_busy, store_done, store_fault; logic [13:0] store_vectors_written;
   logic [31:0] store_bytes_written; logic [13:0] output_read_addr; logic output_read_enable;
+  logic legacy_store_busy, legacy_store_done, legacy_store_fault;
+  logic [13:0] legacy_store_vectors_written; logic [31:0] legacy_store_bytes_written;
+  logic stream_store_busy, stream_store_done, stream_store_fault, stream_store_ready;
+  logic [13:0] stream_store_vectors_written; logic [31:0] stream_store_bytes_written;
+  logic stream_store_mode;
+  logic stream_store_vector_last;
   logic [13:0] relay_bank_read_addr; logic relay_bank_read_enable;
   logic [13:0] relay_pool_read_addr;
   logic relay_pool_read_enable;
@@ -235,6 +252,14 @@ module gestureflow_layer_chain_hp0_axil #(
   logic [OUTPUT_ADDR_W-1:0] bank0_read_addr, bank1_read_addr;
   logic [OUT_LANES*8-1:0] bank0_read_data, bank1_read_data;
   logic [OUT_LANES*8-1:0] relay_pool_read_data;
+  logic [31:0] legacy_awaddr, stream_awaddr; logic [5:0] legacy_awid, stream_awid;
+  logic [7:0] legacy_awlen, stream_awlen; logic [2:0] legacy_awsize, stream_awsize;
+  logic [1:0] legacy_awburst, stream_awburst; logic legacy_awlock, stream_awlock;
+  logic [3:0] legacy_awcache, stream_awcache; logic [2:0] legacy_awprot, stream_awprot;
+  logic [3:0] legacy_awqos, stream_awqos, legacy_awregion, stream_awregion;
+  logic legacy_awvalid, stream_awvalid; logic [63:0] legacy_wdata, stream_wdata;
+  logic [7:0] legacy_wstrb, stream_wstrb; logic legacy_wlast, stream_wlast, legacy_wvalid, stream_wvalid;
+  logic legacy_bready, stream_bready;
   // PROJECT_LOCAL_SELF_RESEARCH_NOT_GOOGLE_OFFICIAL
   // Four compact execution descriptors let PS submit a layer/tile batch with
   // one doorbell. They deliberately reuse the existing resident weight bank;
@@ -271,6 +296,15 @@ module gestureflow_layer_chain_hp0_axil #(
   assign relay_mode = ENABLE_RELAY && relay_enable && (layer_mode == 1);
   assign relay_stream_mode = relay_mode && !relay_pool_2x2;
   assign relay_pool_mode = relay_mode && relay_pool_2x2;
+  assign stream_store_mode = ENABLE_STREAM_STORE && store_enable && !store_pool_2x2 &&
+    (store_valid_bytes == 0 || (store_valid_bytes >= 8 && store_valid_bytes <= 6'(OUT_LANES))) &&
+    (store_stride_bytes == 0 || (store_stride_bytes[2:0] == 0 && store_stride_bytes >=
+      (store_valid_bytes == 0 ? 32'(OUT_LANES) : {26'd0, store_valid_bytes})));
+  assign store_busy = stream_store_mode ? stream_store_busy : legacy_store_busy;
+  assign store_done = stream_store_mode ? stream_store_done : legacy_store_done;
+  assign store_fault = stream_store_mode ? stream_store_fault : legacy_store_fault;
+  assign store_vectors_written = stream_store_mode ? stream_store_vectors_written : legacy_store_vectors_written;
+  assign store_bytes_written = stream_store_mode ? stream_store_bytes_written : legacy_store_bytes_written;
   assign backend_complete = (store_done && store_enable && running) ||
                             (post_done && running && layer_mode == 4) ||
                             (!store_enable && !running && done);
@@ -326,7 +360,7 @@ module gestureflow_layer_chain_hp0_axil #(
   assign weight_write_valid = ps_weight_write_valid | weight_dma_write_valid;
   always_comb begin
     if (weight_dma_write_valid) begin
-      weight_write_oc = weight_dma_oc;
+      weight_write_oc = 5'(weight_dma_oc);
       weight_write_tap = weight_dma_tap;
       weight_write_ic_group = weight_dma_ic_group;
       weight_write_data = weight_dma_data;
@@ -580,9 +614,14 @@ module gestureflow_layer_chain_hp0_axil #(
     .clk(aclk), .rst_n(aresetn), .in_valid(output_valid), .in_ready(quant_ready), .in_psum(output_psum),
     .in_lane_enable(output_lane_enable_valid), .enable(requant_enable), .relu_enable(requant_relu_enable),
     .output_zero_point(output_zero_point), .multiplier(requant_multiplier[OUT_LANES-1:0]), .right_shift(requant_right_shift[OUT_LANES-1:0]),
-    .out_valid(quant_valid), .out_ready(1'b1), .out_data(quant_data), .out_lane_enable(), .config_error(quant_fault)
+    .out_valid(quant_valid), .out_ready(stream_store_mode ? stream_store_ready : 1'b1), .out_data(quant_data), .out_lane_enable(), .config_error(quant_fault)
   );
-  assign output_write_valid = quant_valid;
+  assign stream_store_vector_last = quant_valid && stream_store_ready &&
+    (output_vectors == 14'(dma_pixels - 1'b1));
+  // Hashing and the legacy bank must observe the same transfer boundary as
+  // the direct writer. In stream mode a stalled writer therefore cannot
+  // duplicate a vector in the diagnostic hash or lose its ordering.
+  assign output_write_valid = quant_valid && (stream_store_mode ? stream_store_ready : 1'b1);
   assign output_write_addr = OUTPUT_ADDR_W'(int'(quant_row) * int'(job_width) + int'(quant_column));
   assign output_write_data = quant_data;
   always_ff @(posedge aclk) begin
@@ -596,7 +635,29 @@ module gestureflow_layer_chain_hp0_axil #(
   end
   assign relay_pool_bank_owner = ENABLE_RELAY && relay_pool_busy;
   generate
-  if (ENABLE_RELAY) begin : gen_relay_banks
+  if (ENABLE_STREAM_STORE) begin : gen_stream_store_pool_bank
+    // Direct mode removes the full-width frame bank. Pooling still needs a
+    // source bank, and the 32-lane production schedule pools complete
+    // 256-bit vectors before the next layer. Keep the reduced address depth,
+    // but retain the full output width so the second half of a 32-lane tile
+    // cannot be silently replaced by zeroes.
+    assign bank0_read_enable = output_read_enable;
+    assign bank0_read_addr = output_read_addr;
+    assign bank1_read_enable = 1'b0;
+    assign bank1_read_addr = '0;
+    assign output_read_data = bank0_read_data;
+    assign relay_bank_read_data = '0;
+    assign relay_pool_read_data = '0;
+    // Pooling addresses are row*job_width+column. The production descriptor
+    // bounds the source tensor to 48x48, so a 12-bit bank covers every valid
+    // vector while leaving the control-plane address width unchanged.
+    gestureflow_output_bank #(.ADDR_W(POOL_BANK_ADDR_W), .DATA_W(OUT_LANES*8)) pool_bank0 (
+      .clk(aclk), .write_enable(output_write_valid && !stream_store_mode),
+      .write_addr(output_write_addr[POOL_BANK_ADDR_W-1:0]), .write_data(quant_data),
+      .read_enable(bank0_read_enable), .read_addr(bank0_read_addr[POOL_BANK_ADDR_W-1:0]), .read_data(bank0_read_data)
+    );
+    assign bank1_read_data = '0;
+  end else if (ENABLE_RELAY) begin : gen_relay_banks
     // Two independent two-port banks. Read muxes are mutually exclusive:
     // pool mode owns the relay_read_bank_select bank, otherwise the writer reads
     // output_write_bank_select and the relay loader reads relay_read_bank_select.
@@ -616,12 +677,12 @@ module gestureflow_layer_chain_hp0_axil #(
     assign relay_bank_read_data = (relay_read_bank_select == 1'b0) ? bank0_read_data[127:0] : bank1_read_data[127:0];
     assign relay_pool_read_data = (relay_read_bank_select == 1'b0) ? bank0_read_data : bank1_read_data;
     gestureflow_output_bank #(.ADDR_W(OUTPUT_ADDR_W), .DATA_W(OUT_LANES*8)) bank0 (
-      .clk(aclk), .write_enable(output_write_valid && (output_write_bank_select == 1'b0)),
+      .clk(aclk), .write_enable(output_write_valid && !stream_store_mode && (output_write_bank_select == 1'b0)),
       .write_addr(output_write_addr), .write_data(quant_data),
       .read_enable(bank0_read_enable), .read_addr(bank0_read_addr), .read_data(bank0_read_data)
     );
     gestureflow_output_bank #(.ADDR_W(OUTPUT_ADDR_W), .DATA_W(OUT_LANES*8)) bank1 (
-      .clk(aclk), .write_enable(output_write_valid && (output_write_bank_select == 1'b1)),
+      .clk(aclk), .write_enable(output_write_valid && !stream_store_mode && (output_write_bank_select == 1'b1)),
       .write_addr(output_write_addr), .write_data(quant_data),
       .read_enable(bank1_read_enable), .read_addr(bank1_read_addr), .read_data(bank1_read_data)
     );
@@ -634,7 +695,7 @@ module gestureflow_layer_chain_hp0_axil #(
     assign relay_bank_read_data = '0;
     assign relay_pool_read_data = '0;
     gestureflow_output_bank #(.ADDR_W(OUTPUT_ADDR_W), .DATA_W(OUT_LANES*8)) bank0 (
-      .clk(aclk), .write_enable(output_write_valid),
+      .clk(aclk), .write_enable(output_write_valid && !stream_store_mode),
       .write_addr(output_write_addr), .write_data(quant_data),
       .read_enable(bank0_read_enable), .read_addr(bank0_read_addr), .read_data(bank0_read_data)
     );
@@ -642,18 +703,63 @@ module gestureflow_layer_chain_hp0_axil #(
   end
   endgenerate
   gestureflow_hp0_tensor_writer #(.VECTOR_COUNT(OUTPUTS), .VECTOR_ADDR_W(OUTPUT_ADDR_W), .VECTOR_BYTES(OUT_LANES), .INPUT_WIDTH(IMAGE_WIDTH)) store (
-    .clk(aclk), .rst_n(aresetn), .start(store_start), .clear(store_clear), .destination_addr(store_destination),
+      .clk(aclk), .rst_n(aresetn), .start(store_start), .clear(store_clear), .destination_addr(store_destination),
     .pool_2x2(store_pool_2x2), .vector_count(dma_pixels), .input_width(job_width),
     .destination_stride_bytes(store_stride_bytes), .valid_vector_bytes(store_valid_bytes),
-    .byte_count(store_bytes), .busy(store_busy), .done(store_done), .fault(store_fault), .bank_read_addr(output_read_addr),
-    .bank_read_enable(output_read_enable), .bank_read_data(output_read_data), .vectors_written(store_vectors_written),
-    .bytes_written(store_bytes_written), .m_axi_awaddr(m_axi_awaddr), .m_axi_awid(m_axi_awid), .m_axi_awlen(m_axi_awlen),
-    .m_axi_awsize(m_axi_awsize), .m_axi_awburst(m_axi_awburst), .m_axi_awlock(m_axi_awlock), .m_axi_awcache(m_axi_awcache),
-    .m_axi_awprot(m_axi_awprot), .m_axi_awqos(m_axi_awqos), .m_axi_awregion(m_axi_awregion), .m_axi_awvalid(m_axi_awvalid),
-    .m_axi_awready(m_axi_awready), .m_axi_wdata(m_axi_wdata), .m_axi_wstrb(m_axi_wstrb), .m_axi_wlast(m_axi_wlast),
-    .m_axi_wvalid(m_axi_wvalid), .m_axi_wready(m_axi_wready), .m_axi_bid(m_axi_bid), .m_axi_bresp(m_axi_bresp),
-    .m_axi_bvalid(m_axi_bvalid), .m_axi_bready(m_axi_bready)
+    .byte_count(store_bytes), .busy(legacy_store_busy), .done(legacy_store_done), .fault(legacy_store_fault), .bank_read_addr(output_read_addr),
+    .bank_read_enable(output_read_enable), .bank_read_data(output_read_data),
+    .bytes_written(legacy_store_bytes_written), .vectors_written(legacy_store_vectors_written), .m_axi_awaddr(legacy_awaddr), .m_axi_awid(legacy_awid), .m_axi_awlen(legacy_awlen),
+    .m_axi_awsize(legacy_awsize), .m_axi_awburst(legacy_awburst), .m_axi_awlock(legacy_awlock), .m_axi_awcache(legacy_awcache),
+    .m_axi_awprot(legacy_awprot), .m_axi_awqos(legacy_awqos), .m_axi_awregion(legacy_awregion), .m_axi_awvalid(legacy_awvalid),
+    .m_axi_awready(m_axi_awready), .m_axi_wdata(legacy_wdata), .m_axi_wstrb(legacy_wstrb), .m_axi_wlast(legacy_wlast),
+    .m_axi_wvalid(legacy_wvalid), .m_axi_wready(m_axi_wready), .m_axi_bid(m_axi_bid), .m_axi_bresp(m_axi_bresp),
+    .m_axi_bvalid(m_axi_bvalid), .m_axi_bready(legacy_bready)
   );
+
+  // Direct mode starts with the layer and consumes quantized vectors as they
+  // retire. It is deliberately restricted by stream_store_mode to contiguous
+  // full-width stores; tiled/pooled layouts continue using the proven bank
+  // reader above.
+  gestureflow_hp0_stream_writer #(
+    .VECTOR_BYTES(OUT_LANES), .MAX_BURST_VECTORS(4), .COUNT_W(OUTPUT_ADDR_W),
+    .DEFAULT_VECTOR_COUNT(OUTPUTS)
+  ) stream_store (
+    .clk(aclk), .rst_n(aresetn), .start(dma_start && stream_store_mode),
+    .clear(dma_clear || store_clear), .destination_addr(store_destination),
+    .destination_stride_bytes(store_stride_bytes),
+    .byte_count(store_bytes), .vector_count(dma_pixels), .valid_vector_bytes(store_valid_bytes),
+    .vector_valid(quant_valid), .vector_ready(stream_store_ready), .vector_data(quant_data),
+    .vector_last(stream_store_vector_last), .busy(stream_store_busy), .done(stream_store_done),
+    .fault(stream_store_fault), .vectors_written(stream_store_vectors_written),
+    .bytes_written(stream_store_bytes_written), .m_axi_awaddr(stream_awaddr), .m_axi_awid(stream_awid),
+    .m_axi_awlen(stream_awlen), .m_axi_awsize(stream_awsize), .m_axi_awburst(stream_awburst),
+    .m_axi_awlock(stream_awlock), .m_axi_awcache(stream_awcache), .m_axi_awprot(stream_awprot),
+    .m_axi_awqos(stream_awqos), .m_axi_awregion(stream_awregion), .m_axi_awvalid(stream_awvalid),
+    .m_axi_awready(m_axi_awready), .m_axi_wdata(stream_wdata), .m_axi_wstrb(stream_wstrb),
+    .m_axi_wlast(stream_wlast), .m_axi_wvalid(stream_wvalid), .m_axi_wready(m_axi_wready),
+    .m_axi_bid(m_axi_bid), .m_axi_bresp(m_axi_bresp), .m_axi_bvalid(m_axi_bvalid),
+    .m_axi_bready(stream_bready)
+  );
+
+  // Both writers share HP0's write channel, but their ownership is static for
+  // a job. Selecting the direct writer from the same mode predicate avoids a
+  // combinational arbitration loop and keeps the legacy writer untouched.
+  assign m_axi_awaddr = stream_store_mode ? stream_awaddr : legacy_awaddr;
+  assign m_axi_awid = stream_store_mode ? stream_awid : legacy_awid;
+  assign m_axi_awlen = stream_store_mode ? stream_awlen : legacy_awlen;
+  assign m_axi_awsize = stream_store_mode ? stream_awsize : legacy_awsize;
+  assign m_axi_awburst = stream_store_mode ? stream_awburst : legacy_awburst;
+  assign m_axi_awlock = stream_store_mode ? stream_awlock : legacy_awlock;
+  assign m_axi_awcache = stream_store_mode ? stream_awcache : legacy_awcache;
+  assign m_axi_awprot = stream_store_mode ? stream_awprot : legacy_awprot;
+  assign m_axi_awqos = stream_store_mode ? stream_awqos : legacy_awqos;
+  assign m_axi_awregion = stream_store_mode ? stream_awregion : legacy_awregion;
+  assign m_axi_awvalid = stream_store_mode ? stream_awvalid : legacy_awvalid;
+  assign m_axi_wdata = stream_store_mode ? stream_wdata : legacy_wdata;
+  assign m_axi_wstrb = stream_store_mode ? stream_wstrb : legacy_wstrb;
+  assign m_axi_wlast = stream_store_mode ? stream_wlast : legacy_wlast;
+  assign m_axi_wvalid = stream_store_mode ? stream_wvalid : legacy_wvalid;
+  assign m_axi_bready = stream_store_mode ? stream_bready : legacy_bready;
 
   assign s_axi_awready = !aw_seen && !s_axi_bvalid;
   assign s_axi_wready = !w_seen && !s_axi_bvalid;
@@ -768,7 +874,8 @@ module gestureflow_layer_chain_hp0_axil #(
         if (hash_byte_index == 15) begin
           completed_hash <= fnv_step(hash_value, hash_vector[hash_byte_index*8 +: 8]); hash_active <= 0;
           if (last_output_seen) begin
-            if (store_enable) store_start <= 1'b1; else begin running<=0; done<=1; end
+            if (store_enable && !stream_store_mode) store_start <= 1'b1;
+            else if (!store_enable) begin running<=0; done<=1; end
           end
         end else hash_byte_index <= hash_byte_index + 1'b1;
       end

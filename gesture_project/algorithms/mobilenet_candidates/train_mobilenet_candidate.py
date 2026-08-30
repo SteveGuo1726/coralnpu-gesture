@@ -134,9 +134,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--augmentation_mode",
-        choices=["full", "light", "none"],
+        choices=["full", "light", "medium", "none"],
         default="full",
-        help="Training-time image augmentation intensity.",
+        help=(
+            "Training-time image augmentation intensity. "
+            "medium uses degree-bounded handheld-image perturbations."
+        ),
     )
     parser.add_argument(
         "--mixup_alpha",
@@ -262,6 +265,27 @@ def build_mobilenet_v1_small(
 def add_training_augmentation(tf, x, mode: str):
     if mode == "none":
         return x
+    if mode == "medium":
+        # PROJECT_LOCAL_MOD: RandomRotation is expressed as a fraction of one
+        # complete turn. This keeps the intended rotation at about +/-8 degrees.
+        x = tf.keras.layers.RandomTranslation(
+            height_factor=0.06,
+            width_factor=0.06,
+            fill_mode="nearest",
+            name="aug_translate",
+        )(x)
+        x = tf.keras.layers.RandomRotation(
+            8.0 / 360.0,
+            fill_mode="nearest",
+            name="aug_rotate",
+        )(x)
+        x = tf.keras.layers.RandomZoom(
+            height_factor=(-0.10, 0.06),
+            width_factor=(-0.10, 0.06),
+            fill_mode="nearest",
+            name="aug_zoom",
+        )(x)
+        return tf.keras.layers.RandomContrast(0.12, name="aug_contrast")(x)
     if mode == "light":
         x = tf.keras.layers.RandomTranslation(
             height_factor=0.04,
@@ -445,7 +469,9 @@ def apply_mixup(tf, dataset, alpha: float, probability: float):
     return dataset.map(mix_batch, num_parallel_calls=tf.data.AUTOTUNE)
 
 
-def evaluate_model_per_image(model, data_dir: Path, labels: list[str]) -> dict | None:
+def evaluate_model_per_image(
+    model, data_dir: Path, labels: list[str], batch_size: int = 128
+) -> dict | None:
     test_dir = data_dir / "test"
     if not test_dir.is_dir():
         return None
@@ -462,24 +488,31 @@ def evaluate_model_per_image(model, data_dir: Path, labels: list[str]) -> dict |
     if not samples:
         raise SystemExit(f"No images found in {test_dir}")
 
-    images = np.stack(
-        [
-            np.asarray(
-                Image.open(path).convert("RGB").resize((width, height), Image.BILINEAR),
-                dtype=np.float32,
-            )
-            for path, _ in samples
-        ],
-        axis=0,
-    )
-    true_indices = np.asarray([label_index for _path, label_index in samples], dtype=np.int64)
-    scores = model.predict(images, verbose=0)
-    pred_indices = np.argmax(scores, axis=1)
-    accuracy = float((pred_indices == true_indices).mean())
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    correct = 0
+    for start in range(0, len(samples), batch_size):
+        batch = samples[start : start + batch_size]
+        images = np.stack(
+            [
+                np.asarray(
+                    Image.open(path).convert("RGB").resize((width, height), Image.BILINEAR),
+                    dtype=np.float32,
+                )
+                for path, _ in batch
+            ],
+            axis=0,
+        )
+        pred_indices = np.argmax(model.predict(images, verbose=0), axis=1)
+        correct += sum(
+            int(prediction == target)
+            for prediction, (_path, target) in zip(pred_indices, batch, strict=True)
+        )
+    accuracy = float(correct / len(samples))
     return {
         "num_samples": len(samples),
         "accuracy": accuracy,
-        "correct": int((pred_indices == true_indices).sum()),
+        "correct": correct,
     }
 
 

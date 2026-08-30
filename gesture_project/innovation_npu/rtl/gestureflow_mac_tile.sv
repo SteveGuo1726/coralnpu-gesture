@@ -20,6 +20,8 @@ module gestureflow_mac_tile #(
   input  logic [$clog2(MAX_TAPS)-1:0] weight_write_tap,
   input  logic [(MAX_IC_GROUPS <= 1 ? 1 : $clog2(MAX_IC_GROUPS))-1:0] weight_write_ic_group,
   input  logic signed [INPUT_LANES-1:0][7:0] weight_write_data,
+  input  logic weight_bank_select,
+  input  logic read_bank_select,
 
   input  logic start_valid,
   output logic start_ready,
@@ -52,9 +54,9 @@ module gestureflow_mac_tile #(
   logic signed [OUT_LANES-1:0][31:0] accum;
   logic [OUT_LANES-1:0] active_output_lanes;
 
-  logic [WEIGHT_ADDR_W-1:0] weight_write_addr;
+  logic [WEIGHT_ADDR_W:0] weight_write_addr;
   logic [WEIGHT_ADDR_W-1:0] mac_weight_addr;
-  logic [WEIGHT_ADDR_W-1:0] weight_addr_s0;
+  logic [WEIGHT_ADDR_W:0] weight_addr_s0;
   logic signed [INPUT_LANES-1:0][7:0] activation_s0;
   logic signed [INPUT_LANES-1:0][7:0] activation_s1;
   logic [INPUT_LANES-1:0] input_lane_enable_s0;
@@ -67,7 +69,7 @@ module gestureflow_mac_tile #(
 
   for (genvar oc = 0; oc < OUT_LANES; oc++) begin : output_weight_banks
     gestureflow_weight_bank #(
-      .ADDR_W(WEIGHT_ADDR_W),
+      .ADDR_W(WEIGHT_ADDR_W + 1),
       .DATA_W(INPUT_LANES * 8)
     ) weight_bank (
       .clk(clk),
@@ -85,16 +87,22 @@ module gestureflow_mac_tile #(
   // products before the final local INT32 accumulation. Once full this still
   // accepts one channel group per clock, while avoiding a long product-to-psum
   // combinational path at the 100MHz XC7Z020 target.
-  (* use_dsp = "yes" *) logic signed [OUT_LANES-1:0][3:0][17:0] product_pipe;
+  // An INT8 x INT8 product is exactly 16-bit signed.  The previous 18-bit
+  // storage widened every lane's add tree without increasing its numeric
+  // range; at OUT_LANES=32 that unnecessary width materially increases local
+  // routing and carry-chain pressure on XC7Z020.
+  (* use_dsp = "yes" *) logic signed [OUT_LANES-1:0][3:0][15:0] product_pipe;
+  (* use_dsp = "yes" *) logic signed [OUT_LANES-1:0][3:0][15:0] product_comb;
   logic product_valid;
   logic product_last;
   logic [OUT_LANES-1:0] product_output_lanes;
 
-  logic signed [OUT_LANES-1:0][1:0][18:0] pair_sum_pipe;
+  // Two products fit in signed 17 bits; four products fit in signed 18 bits.
+  logic signed [OUT_LANES-1:0][1:0][16:0] pair_sum_pipe;
   logic pair_valid;
   logic pair_last;
   logic [OUT_LANES-1:0] pair_output_lanes;
-  logic signed [OUT_LANES-1:0][19:0] reduced_sum_pipe;
+  logic signed [OUT_LANES-1:0][17:0] reduced_sum_pipe;
   logic signed [OUT_LANES-1:0][31:0] reduced_sum_extended;
   logic reduced_valid;
   logic reduced_last;
@@ -103,8 +111,8 @@ module gestureflow_mac_tile #(
   logic [3:0] input_lane_enable_s1_padded;
   logic signed [OUT_LANES-1:0][3:0][7:0] weight_s1_padded;
 
-  assign weight_write_addr = WEIGHT_ADDR_W'(
-    int'(weight_write_tap) * MAX_IC_GROUPS + int'(weight_write_ic_group));
+  assign weight_write_addr = {weight_bank_select,
+    WEIGHT_ADDR_W'(int'(weight_write_tap) * MAX_IC_GROUPS + int'(weight_write_ic_group))};
   assign mac_weight_addr = WEIGHT_ADDR_W'(
     int'(mac_tap) * MAX_IC_GROUPS + int'(mac_ic_group));
 
@@ -116,6 +124,7 @@ module gestureflow_mac_tile #(
     input_lane_enable_s1_padded = '0;
     weight_s1_padded = '0;
     reduced_sum_extended = '0;
+    product_comb = '0;
     for (int ic = 0; ic < INPUT_LANES; ic++) begin
       activation_s1_padded[ic] = activation_s1[ic];
       input_lane_enable_s1_padded[ic] = input_lane_enable_s1[ic];
@@ -125,8 +134,14 @@ module gestureflow_mac_tile #(
     end
     for (int oc = 0; oc < OUT_LANES; oc++) begin
       reduced_sum_extended[oc] = {
-        {12{reduced_sum_pipe[oc][19]}}, reduced_sum_pipe[oc]
+        {14{reduced_sum_pipe[oc][17]}}, reduced_sum_pipe[oc]
       };
+      for (int ic = 0; ic < 4; ic++) begin
+        if (output_lanes_s1[oc] && input_lane_enable_s1_padded[ic]) begin
+          product_comb[oc][ic] = $signed(activation_s1_padded[ic]) *
+            $signed(weight_s1_padded[oc][ic]);
+        end
+      end
     end
   end
 
@@ -203,7 +218,7 @@ module gestureflow_mac_tile #(
       if (mac_valid && mac_ready) begin
         activation_s0 <= activation;
         input_lane_enable_s0 <= input_lane_enable;
-        weight_addr_s0 <= mac_weight_addr;
+        weight_addr_s0 <= {read_bank_select, mac_weight_addr};
         output_lanes_s0 <= active_output_lanes;
         s0_last <= mac_last;
         s0_valid <= 1'b1;
@@ -244,8 +259,8 @@ module gestureflow_mac_tile #(
       if (pair_valid) begin
         for (int oc = 0; oc < OUT_LANES; oc++) begin
           reduced_sum_pipe[oc] <=
-            $signed({pair_sum_pipe[oc][0][18], pair_sum_pipe[oc][0]}) +
-            $signed({pair_sum_pipe[oc][1][18], pair_sum_pipe[oc][1]});
+            $signed({pair_sum_pipe[oc][0][16], pair_sum_pipe[oc][0]}) +
+            $signed({pair_sum_pipe[oc][1][16], pair_sum_pipe[oc][1]});
         end
       end
 
@@ -256,11 +271,11 @@ module gestureflow_mac_tile #(
       if (product_valid) begin
         for (int oc = 0; oc < OUT_LANES; oc++) begin
           pair_sum_pipe[oc][0] <=
-            $signed({product_pipe[oc][0][17], product_pipe[oc][0]}) +
-            $signed({product_pipe[oc][1][17], product_pipe[oc][1]});
+            $signed({product_pipe[oc][0][15], product_pipe[oc][0]}) +
+            $signed({product_pipe[oc][1][15], product_pipe[oc][1]});
           pair_sum_pipe[oc][1] <=
-            $signed({product_pipe[oc][2][17], product_pipe[oc][2]}) +
-            $signed({product_pipe[oc][3][17], product_pipe[oc][3]});
+            $signed({product_pipe[oc][2][15], product_pipe[oc][2]}) +
+            $signed({product_pipe[oc][3][15], product_pipe[oc][3]});
         end
       end
 
@@ -273,8 +288,7 @@ module gestureflow_mac_tile #(
         for (int oc = 0; oc < OUT_LANES; oc++) begin
           for (int ic = 0; ic < 4; ic++) begin
             if (output_lanes_s1[oc] && input_lane_enable_s1_padded[ic]) begin
-              product_pipe[oc][ic] <= $signed(activation_s1_padded[ic]) *
-                $signed(weight_s1_padded[oc][ic]);
+              product_pipe[oc][ic] <= product_comb[oc][ic];
             end else begin
               product_pipe[oc][ic] <= '0;
             end

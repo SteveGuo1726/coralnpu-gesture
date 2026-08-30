@@ -23,7 +23,7 @@ proc package_gestureflow_ip {src_dir project_root} {
     gestureflow_output_bank_pool_relay_loader.sv
     gestureflow_hp0_rgb_loader.sv gestureflow_hp0_tensor_loader.sv
     gestureflow_hp0_tensor_loader_banked.sv gestureflow_hp0_weight_dma_loader.sv
-    gestureflow_hp0_gap_fc.sv gestureflow_hp0_tensor_writer.sv
+  gestureflow_hp0_gap_fc.sv gestureflow_hp0_tensor_writer.sv gestureflow_hp0_stream_writer.sv
     gestureflow_layer_chain_hp0_axil.sv
   } {
     set path [file join $src_dir $src]
