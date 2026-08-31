@@ -897,7 +897,16 @@ module gestureflow_layer_chain_hp0_axil #(
             if (wdata[1]) begin
               if (descriptor_active || running || dma_busy || store_busy || hash_active) fault<=1;
               else if (weight_keyed_mode && !weight_resident_valid) fault<=1;
-              else begin running<=1; done<=0; fault<=0; if (layer_mode == 4) post_start<=1; else dma_start<=1; hash_active<=0; last_output_seen<=0; hash_value<=FNV_OFFSET; completed_hash<=FNV_OFFSET; layer_cycles<=0; output_vectors<=0; end
+              else begin
+                // Load the active bias/requant from the selected param bank so
+                // the MAC and requant capture a stable snapshot for this layer.
+                for (int pi = 0; pi < CTRL_LANES; pi++) begin
+                  bias[pi] <= bias_bank[param_bank_select][pi];
+                  requant_multiplier[pi] <= requant_multiplier_bank[param_bank_select][pi];
+                  requant_right_shift[pi] <= requant_right_shift_bank[param_bank_select][pi];
+                end
+                running<=1; done<=0; fault<=0; if (layer_mode == 4) post_start<=1; else dma_start<=1; hash_active<=0; last_output_seen<=0; hash_value<=FNV_OFFSET; completed_hash<=FNV_OFFSET; layer_cycles<=0; output_vectors<=0;
+              end
             end
           end
           LAYER_MODE: if (running || dma_busy || store_busy) fault<=1; else layer_mode<=wdata[2:0];
@@ -921,14 +930,18 @@ module gestureflow_layer_chain_hp0_axil #(
           end
           WCTRL: if (running || dma_busy || weight_dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else begin ps_weight_write_oc<=wdata[4:0]; ps_weight_write_tap<=wdata[8:5]; ps_weight_write_ic_group<=wdata[13:9]; end
           WDATA: if (running || dma_busy || weight_dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else ps_weight_write_data<=wdata;
-          BIDX: if (running || dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else bias_index<=wdata[4:0];
-          BDATA: if (running || dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else begin bias[bias_index]<=wdata; bias_bank[param_bank_select][bias_index]<=wdata; end
-          RQIDX: if (running || dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else requant_index<=wdata[4:0];
-          RQMULT: if (running || dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else begin requant_multiplier[requant_index]<=wdata; requant_multiplier_bank[param_bank_select][requant_index]<=wdata; end
-          RQSHIFT: if (running || dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else begin requant_right_shift[requant_index]<=wdata[5:0]; requant_right_shift_bank[param_bank_select][requant_index]<=wdata[5:0]; end
+          BIDX: if (dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else bias_index<=wdata[4:0];
+          // Param ping-pong: bias/requant are written into the selected param
+          // bank only; the active registers are loaded from that bank when the
+          // layer starts. This lets the next layer's params be staged while the
+          // current layer is still computing.
+          BDATA: if (dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else bias_bank[param_bank_select][bias_index]<=wdata;
+          RQIDX: if (dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else requant_index<=wdata[4:0];
+          RQMULT: if (dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else requant_multiplier_bank[param_bank_select][requant_index]<=wdata;
+          RQSHIFT: if (dma_busy || (weight_keyed_mode && weight_key_hit)) fault<=1; else requant_right_shift_bank[param_bank_select][requant_index]<=wdata[5:0];
           WEIGHT_BANK_SELECT: if (running || dma_busy || store_busy || descriptor_active) fault<=1; else weight_bank_select<=wdata[0];
           WEIGHT_READ_BANK_SELECT: if (running || dma_busy || store_busy || descriptor_active) fault<=1; else weight_read_bank_select<=wdata[0];
-          PARAM_BANK_SELECT: if (running || dma_busy || store_busy || descriptor_active) fault<=1; else param_bank_select<=wdata[0];
+          PARAM_BANK_SELECT: if (descriptor_active) fault<=1; else param_bank_select<=wdata[0];
           WEIGHT_COMMIT: if (running || dma_busy || store_busy) fault<=1; else if (wdata[0]) begin
             if (!weight_keyed_mode) fault<=1;
             else if (!weight_key_hit) begin weight_resident_key<=weight_key; weight_resident_valid<=1; end
