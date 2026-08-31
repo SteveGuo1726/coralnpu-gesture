@@ -73,7 +73,13 @@ module gestureflow_mac_tile #(
       .DATA_W(INPUT_LANES * 8)
     ) weight_bank (
       .clk(clk),
-      .write_enable(weight_write_valid && !busy && (weight_write_oc == oc)),
+      // Ping-pong preload: while the tile computes from read_bank_select, it
+      // may accept weight writes into the opposite bank. Writing the bank that
+      // is currently being read stays forbidden, so a live job is never
+      // corrupted. This is the hardware enabler for overlapping the next
+      // layer's weight DMA with the current layer's compute.
+      .write_enable(weight_write_valid && (weight_write_oc == oc) &&
+                    (!busy || (weight_bank_select != read_bank_select))),
       .write_addr(weight_write_addr),
       .write_data(weight_write_data),
       .read_enable(s0_valid),
@@ -192,7 +198,10 @@ module gestureflow_mac_tile #(
       busy <= 1'b0;
       protocol_error <= 1'b0;
     end else begin
-      if (weight_write_valid && busy) begin
+      // Ping-pong preload makes "write while busy" legal only when the write
+      // targets the bank that is NOT being read. Writing the live read bank
+      // remains a protocol violation.
+      if (weight_write_valid && busy && (weight_bank_select == read_bank_select)) begin
         protocol_error <= 1'b1;
       end
 
