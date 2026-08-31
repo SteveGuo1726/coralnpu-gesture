@@ -933,13 +933,21 @@ module gestureflow_layer_chain_hp0_axil #(
             if (!weight_keyed_mode) fault<=1;
             else if (!weight_key_hit) begin weight_resident_key<=weight_key; weight_resident_valid<=1; end
           end
-          WEIGHT_DMA_SOURCE: if (running || dma_busy || weight_dma_busy || store_busy) fault<=1; else weight_dma_source<=wdata;
-          WEIGHT_DMA_BYTES: if (running || dma_busy || weight_dma_busy || store_busy) fault<=1; else weight_dma_bytes<=wdata;
-          WEIGHT_DMA_CFG: if (running || dma_busy || weight_dma_busy || store_busy) fault<=1; else begin weight_dma_taps<=wdata[4:0]; weight_dma_groups<=wdata[12:8]; weight_dma_outputs<=wdata[21:16]; end
+          // Ping-pong preload: the next layer's weight descriptor may be staged
+          // while the current layer is still running. Only an in-flight weight
+          // DMA blocks a new descriptor write.
+          WEIGHT_DMA_SOURCE: if (weight_dma_busy) fault<=1; else weight_dma_source<=wdata;
+          WEIGHT_DMA_BYTES: if (weight_dma_busy) fault<=1; else weight_dma_bytes<=wdata;
+          WEIGHT_DMA_CFG: if (weight_dma_busy) fault<=1; else begin weight_dma_taps<=wdata[4:0]; weight_dma_groups<=wdata[12:8]; weight_dma_outputs<=wdata[21:16]; end
           WEIGHT_DMA_CONTROL: begin
             if (wdata[0]) begin weight_dma_clear<=1; end
             if (wdata[1]) begin
-              if (running || dma_busy || weight_dma_busy || store_busy || hash_active) fault<=1;
+              // Tail-overlap launch: weight DMA may start once the input
+              // loader has released the AR channel (dma_busy==0), even while
+              // the output store is still writing or the layer is otherwise
+              // still running. The MAC tile already forbids writing the bank
+              // that is currently being read, so bank B preload is safe.
+              if (dma_busy || weight_dma_busy) fault<=1;
               else weight_dma_start<=1;
             end
           end
