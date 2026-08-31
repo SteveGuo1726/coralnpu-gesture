@@ -70,7 +70,7 @@ module gestureflow_hp0_gap_fc #(
   localparam logic [31:0] FNV_PRIME = 32'h01000193;
 
   typedef enum logic [4:0] {
-    IDLE, LOAD, GAP_ADJ, GAP_MUL, GAP_MUL2, GAP_QUANT, GAP_QUANT2, GAP_HASH, FC_INIT, FC_ACC_T0, FC_ACC_A0, FC_ACC_T1, FC_ACC_A1, FC_ACC_T2, FC_ACC_A2, FC_ACC_T3, FC_ACC_A3, FC_MUL, FC_MUL2, FC_QUANT, FC_QUANT2, FC_HASH,
+    IDLE, LOAD, GAP_ADJ, GAP_MUL, GAP_MUL2, GAP_QUANT, GAP_QUANT2, GAP_HASH, FC_INIT, FC_ACC_T0, FC_ACC_A0, FC_ACC_T1, FC_ACC_A1, FC_ACC_T2, FC_ACC_A2, FC_ACC_T3, FC_ACC_A3, FC_MUL, FC_MUL2, FC_MUL3, FC_QUANT, FC_QUANT2, FC_HASH,
     ARGMAX_PAIR, ARGMAX_TREE1, ARGMAX_TREE2, ARGMAX_TREE3, ARGMAX_FINAL
   } state_t;
   state_t state;
@@ -92,6 +92,8 @@ module gestureflow_hp0_gap_fc #(
   logic signed [CLASSES-1:0][31:0] fc_mul_result;
   logic signed [63:0] fc_product;
   logic fc_product_special;
+  logic signed [31:0] fc_sel_a;
+  logic signed [31:0] fc_sel_b;
   logic signed [CLASSES-1:0][31:0] fc_rounded;
   logic signed [7:0] fc_saturated_comb;
   logic signed [CLASSES-1:0][7:0] fc_value;
@@ -302,7 +304,7 @@ module gestureflow_hp0_gap_fc #(
   always_ff @(posedge clk) begin
     if (!rst_n) begin
       state <= IDLE; loader_start <= 0; loader_clear <= 0; done <= 0; fault <= 0; cycles <= 0;
-      gap_sum <= '0; gap_value <= '0; gap_adjusted <= '0; gap_mul_result <= '0; gap_rounded <= '0; gap_product <= '0; gap_product_special <= 1'b0; fc_sum <= '0; fc_term <= '0; fc_mul_result <= '0; fc_product <= '0; fc_product_special <= 1'b0; fc_rounded <= '0; fc_value <= '0; gap_index <= 0; fc_group <= 0; fc_class <= 0; fc_index <= 0;
+      gap_sum <= '0; gap_value <= '0; gap_adjusted <= '0; gap_mul_result <= '0; gap_rounded <= '0; gap_product <= '0; gap_product_special <= 1'b0; fc_sum <= '0; fc_term <= '0; fc_mul_result <= '0; fc_product <= '0; fc_product_special <= 1'b0; fc_sel_a <= '0; fc_sel_b <= '0; fc_rounded <= '0; fc_value <= '0; gap_index <= 0; fc_group <= 0; fc_class <= 0; fc_index <= 0;
       gap_quantized_pending <= '0;
       gap_hash_work <= FNV_OFFSET; fc_hash_work <= FNV_OFFSET; gap_fnv1a <= FNV_OFFSET; fc_fnv1a <= FNV_OFFSET;
       predicted_class <= 0; gap_values_done <= 0; fc_values_done <= 0;
@@ -420,16 +422,20 @@ module gestureflow_hp0_gap_fc #(
             end else begin fc_group <= fc_group + 1'b1; state <= FC_ACC_T0; end
           end
           FC_MUL: begin
-            if ((fc_sum[fc_index] == 32'sh80000000) && (fc_multiplier[fc_index] == 32'sh80000000)) begin
-              fc_product_special <= 1'b1;
-              fc_product <= '0;
-            end else begin
-              fc_product_special <= 1'b0;
-              fc_product <= $signed(fc_sum[fc_index]) * $signed(fc_multiplier[fc_index]);
-            end
+            // Register the selected operands so the fc_index mux is not in
+            // front of the 32x32 DSP multiply, shortening the routed path.
+            fc_sel_a <= $signed(fc_sum[fc_index]);
+            fc_sel_b <= $signed(fc_multiplier[fc_index]);
+            fc_product_special <= (fc_sum[fc_index] == 32'sh80000000) &&
+                                  (fc_multiplier[fc_index] == 32'sh80000000);
             state <= FC_MUL2;
           end
           FC_MUL2: begin
+            if (fc_product_special) fc_product <= '0;
+            else fc_product <= fc_sel_a * fc_sel_b;
+            state <= FC_MUL3;
+          end
+          FC_MUL3: begin
             if (fc_product_special) fc_mul_result[fc_index] <= 32'sh7fffffff;
             else fc_mul_result[fc_index] <= high_mul_from_product(fc_product);
             state <= FC_QUANT;
