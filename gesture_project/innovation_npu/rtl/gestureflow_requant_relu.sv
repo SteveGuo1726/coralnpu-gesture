@@ -75,7 +75,18 @@ module gestureflow_requant_relu #(
   logic [CHUNK_W-1:0] result_chunk_index;
   logic signed [PARALLEL_LANES-1:0][31:0] chunk_mul_comb;
   logic signed [PARALLEL_LANES-1:0][7:0] chunk_data_comb;
-  logic chunk_config_error_comb;
+  // Stage-3a registers: split the long rounding_divide_by_pot + zero-point +
+  // saturate path into a registered rounded value followed by a short
+  // add-and-saturate. This shortens the routed critical path on 7020.
+  logic signed [PARALLEL_LANES-1:0][31:0] shifted_comb;
+  logic shift_config_error_comb;
+  logic signed [PARALLEL_LANES-1:0][31:0] shifted_value;
+  logic [PARALLEL_LANES-1:0] shifted_requant;
+  logic [PARALLEL_LANES-1:0] shifted_lane_enable;
+  logic shift_valid;
+  logic shift_last;
+  logic [CHUNK_W-1:0] shift_chunk_index;
+  logic shift_config_error;
 
   initial begin
     if ((PARALLEL_LANES <= 0) || (PARALLEL_LANES > LANES)) begin
@@ -218,6 +229,31 @@ module gestureflow_requant_relu #(
     end
   endfunction
 
+  // Stage-3b half of round_saturate: apply zero point and saturate to the
+  // already-registered rounded value. Keeping the rounding shift in a separate
+  // stage removes its case-select fanout from the add/saturate path.
+  function automatic logic signed [7:0] saturate_zero_point(
+    input logic signed [31:0] shifted,
+    input logic signed [7:0] zero_point,
+    input logic apply_relu
+  );
+    logic signed [31:0] with_zero_point;
+    logic signed [31:0] zero_extended;
+    begin
+      zero_extended = {{24{zero_point[7]}}, zero_point};
+      with_zero_point = shifted + zero_extended;
+      if (apply_relu && (with_zero_point < zero_extended)) begin
+        saturate_zero_point = zero_point;
+      end else if (with_zero_point > 127) begin
+        saturate_zero_point = 8'sh7f;
+      end else if (with_zero_point < -128) begin
+        saturate_zero_point = -8'sh80;
+      end else begin
+        saturate_zero_point = with_zero_point[7:0];
+      end
+    end
+  endfunction
+
   function automatic logic signed [7:0] passthrough_lane(
     input logic signed [31:0] accumulator
   );
@@ -280,21 +316,33 @@ module gestureflow_requant_relu #(
   // delayed with the result so the extra arithmetic stage cannot misalign a
   // lane's scale, zero point, or pass-through mode.
   always_comb begin
-    chunk_data_comb = '0;
-    chunk_config_error_comb = 1'b0;
+    // Stage 3a: rounded value. Requant lanes do the rounding shift; pass-through
+    // lanes simply carry their accumulator through to the saturator.
+    shifted_comb = '0;
+    shift_config_error_comb = 1'b0;
     for (int lane_off = 0; lane_off < PARALLEL_LANES; lane_off++) begin
-      if (result_right_shift_chunk[lane_off] > 31) begin
+      if (result_right_shift_chunk[lane_off] > 31) shift_config_error_comb = 1'b1;
+      if (pending_enable && result_lane_enable_chunk[lane_off]) begin
+        shifted_comb[lane_off] = rounding_divide_by_pot(
+          chunk_mul_result[lane_off], result_right_shift_chunk[lane_off]
+        );
+      end else begin
+        shifted_comb[lane_off] = result_psum_chunk[lane_off];
+      end
+    end
+
+    // Stage 3b: zero point + saturation, fed from the registered shifted value.
+    chunk_data_comb = '0;
+    for (int lane_off = 0; lane_off < PARALLEL_LANES; lane_off++) begin
+      if (!shifted_lane_enable[lane_off]) begin
         chunk_data_comb[lane_off] = '0;
-        chunk_config_error_comb = 1'b1;
-      end else if (!result_lane_enable_chunk[lane_off]) begin
-        chunk_data_comb[lane_off] = '0;
-      end else if (pending_enable) begin
-        chunk_data_comb[lane_off] = round_saturate(
-          chunk_mul_result[lane_off], result_right_shift_chunk[lane_off],
+      end else if (shifted_requant[lane_off]) begin
+        chunk_data_comb[lane_off] = saturate_zero_point(
+          shifted_value[lane_off],
           pending_output_zero_point, pending_relu_enable
         );
       end else begin
-        chunk_data_comb[lane_off] = passthrough_lane(result_psum_chunk[lane_off]);
+        chunk_data_comb[lane_off] = passthrough_lane(shifted_value[lane_off]);
       end
     end
   end
@@ -321,6 +369,13 @@ module gestureflow_requant_relu #(
       result_lane_enable_chunk <= '0;
       result_right_shift_chunk <= '0;
       result_chunk_index <= '0;
+      shifted_value <= '0;
+      shifted_requant <= '0;
+      shifted_lane_enable <= '0;
+      shift_valid <= 1'b0;
+      shift_last <= 1'b0;
+      shift_chunk_index <= '0;
+      shift_config_error <= 1'b0;
       for (int lane = 0; lane < LANES; lane++) begin
         pending_psum[lane] <= '0;
         pending_lane_enable[lane] <= 1'b0;
@@ -377,19 +432,34 @@ module gestureflow_requant_relu #(
         product_last <= (CHUNK_COUNT == 1);
         result_valid <= 1'b0;
         result_chunk_index <= '0;
+        shift_valid <= 1'b0;
+        shift_chunk_index <= '0;
       end else if (processing) begin
+        // Stage 3a: register the rounded value and its metadata so the
+        // zero-point add and saturation run in the following cycle.
         if (result_valid) begin
+          shifted_value <= shifted_comb;
+          shifted_requant <= (pending_enable ? result_lane_enable_chunk : '0);
+          shifted_lane_enable <= result_lane_enable_chunk;
+          shift_valid <= 1'b1;
+          shift_last <= result_last;
+          shift_chunk_index <= result_chunk_index;
+          shift_config_error <= shift_config_error_comb;
+          if (!result_last) result_chunk_index <= result_chunk_index + 1'b1;
+        end
+
+        // Stage 3b: consume the registered rounded value.
+        if (shift_valid) begin
           for (int lane_off = 0; lane_off < PARALLEL_LANES; lane_off++) begin
-            if ((int'(result_chunk_index) * PARALLEL_LANES + lane_off) < LANES) begin
-              out_data[int'(result_chunk_index) * PARALLEL_LANES + lane_off] <= chunk_data_comb[lane_off];
+            if ((int'(shift_chunk_index) * PARALLEL_LANES + lane_off) < LANES) begin
+              out_data[int'(shift_chunk_index) * PARALLEL_LANES + lane_off] <= chunk_data_comb[lane_off];
             end
           end
-          if (chunk_config_error_comb) config_error <= 1'b1;
-          if (result_last) begin
+          if (shift_config_error) config_error <= 1'b1;
+          if (shift_last) begin
             processing <= 1'b0;
             out_valid <= 1'b1;
-          end else begin
-            result_chunk_index <= result_chunk_index + 1'b1;
+            shift_valid <= 1'b0;
           end
         end
 
