@@ -77,12 +77,19 @@ bias'[oc] = bias[oc] − 128·Σw[oc] − 16384·N     // 权重修正折叠进 
 1. 打包乘积的高/低 16 bit 与朴素有符号 INT8 逐点结果**位精确一致**（含偏移修正）。
 2. 一个 DSP 槽位每拍产出两个独立的输出通道部分和。
 
+在此基础上新增 `innovation_npu/rtl/gestureflow_conv4x4_cin_same_stream_dmp.sv`：
+这是 8 输入 lane 的 SAME 流式卷积引擎，复用同一个行缓存/滑窗结构，但把
+`gestureflow_mac_tile.sv` 替换为 DMP tile，并把 `ic_group` 步长从 4 改成 8。
+`tests/tb_gestureflow_conv4x4_cin_same_stream_dmp.sv` 用 64 bit 参考模型对完整
+小尺寸 3×3 SAME 卷积的**每一个输出向量**逐点比较，不是只查 hash 或少数 probe。
+
 ## 4. 后续整网集成步骤
 
 1. 导出工具：权重按"两个输出通道偏移+128 后按 16 bit 打包"输出，并把 `bias'` 折叠好。
 2. 权重 bank 改成存 25 bit 打包字（每字覆盖两个输出通道）。
 3. `gestureflow_mac_tile.sv` 换成 DMP 版本（`INPUT_LANES` 4→8），卷积引擎的
-   `ic_group` 步长从 4 改 8。
+   `ic_group` 步长从 4 改 8。该步骤已完成独立模块
+   `gestureflow_conv4x4_cin_same_stream_dmp.sv`，但尚未接入主链。
 4. 顶层加一个"有符号激活求和"累加器，与 requant 前的 INT32 部分和合并修正。
 5. 重新导出 golden、跑 Verilator、OOC 估时序、整网布线、上板。
 
