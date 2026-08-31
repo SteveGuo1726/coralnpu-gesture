@@ -302,17 +302,22 @@ static void set_param_bank(u32 bank)
     Xil_Out32(GF_BASE + GF_PARAM_BANK_SELECT, bank & 1U);
 }
 
-/* Config-only tile setup: mode/QCFG/lane mask + folded bias + per-channel
- * requant. Weights are loaded separately so their DMA can overlap the previous
- * layer's compute. */
-static void config_conv_tile(u32 mode, u32 first_oc, u32 lane_mask,
-                             const int32_t *folded_bias, const int32_t *multiplier,
-                             const uint8_t *right_shift, u32 output_lanes, u32 tile_lanes)
+/* Global per-tile control words. These are NOT banked, so they must be written
+ * while idle, just before the tile launches. */
+static void config_tile_control(u32 mode, u32 lane_mask)
 {
-    u32 physical_oc, model_oc;
     Xil_Out32(GF_BASE + GF_LAYER_MODE, mode);
     Xil_Out32(GF_BASE + GF_QCFG, 0x00038080U);
     Xil_Out32(GF_BASE + GF_OUTPUT_LANE_MASK, lane_mask);
+}
+
+/* Banked bias + per-channel requant, staged into the selected param bank. These
+ * can be written during the previous tile's compute (overlap). */
+static void config_tile_params(u32 first_oc, const int32_t *folded_bias,
+                               const int32_t *multiplier, const uint8_t *right_shift,
+                               u32 output_lanes, u32 tile_lanes)
+{
+    u32 physical_oc, model_oc;
     for (physical_oc = 0U; physical_oc < 32U; ++physical_oc) {
         model_oc = first_oc + physical_oc;
         if (physical_oc >= tile_lanes || model_oc >= output_lanes) {
@@ -326,13 +331,10 @@ static void config_conv_tile(u32 mode, u32 first_oc, u32 lane_mask,
     }
 }
 
-/* Config-only first RGB layer (no weight DMA). */
-static void config_first_layer(void)
+/* First RGB layer banked params (16 lanes). */
+static void config_first_params(void)
 {
     u32 oc;
-    Xil_Out32(GF_BASE + GF_LAYER_MODE, 0U);
-    Xil_Out32(GF_BASE + GF_QCFG, 0x00038080U);
-    Xil_Out32(GF_BASE + GF_OUTPUT_LANE_MASK, 0xffffU);
     for (oc = 0U; oc < 16U; ++oc) {
         Xil_Out32(GF_BASE + GF_BIDX, oc); Xil_Out32(GF_BASE + GF_BDATA, (u32)gf_full_folded_bias[oc]);
         Xil_Out32(GF_BASE + GF_RQIDX, oc); Xil_Out32(GF_BASE + GF_RQMULT, (u32)gf_full_requant_multiplier[oc]);
@@ -340,13 +342,10 @@ static void config_first_layer(void)
     }
 }
 
-/* Config-only 1x1 head tile (no weight DMA). */
-static void config_head1x1_tile(uint32_t first_oc)
+/* 1x1 head tile banked params (32 lanes). */
+static void config_head_params(uint32_t first_oc)
 {
     u32 physical_oc, model_oc;
-    Xil_Out32(GF_BASE + GF_LAYER_MODE, 5U);
-    Xil_Out32(GF_BASE + GF_QCFG, 0x00038080U);
-    Xil_Out32(GF_BASE + GF_OUTPUT_LANE_MASK, 0xffffffffU);
     for (physical_oc = 0U; physical_oc < 32U; ++physical_oc) {
         model_oc = first_oc + physical_oc;
         Xil_Out32(GF_BASE + GF_BIDX, physical_oc); Xil_Out32(GF_BASE + GF_BDATA, (u32)gf_head1x1_folded_bias[model_oc]);
@@ -523,7 +522,8 @@ int main(void)
     /* conv0: 3->16 (weights -> bank 0; preload conv1 -> bank 1) */
     stage = 0x20U; Xil_Out32(GF_BASE + GF_CONTROL, 1U);
     set_param_bank(0U);
-    set_weight_write_bank(0U); config_first_layer();
+    config_tile_control(0U, 0xffffU);
+    set_weight_write_bank(0U); config_first_params();
     weight_dma_load(gf_full_weights_dma, 16U * 16U * 1U, 16U, 1U, 16U);
     set_weight_write_bank(1U);
     set_weight_read_bank(0U);
@@ -531,7 +531,7 @@ int main(void)
     wait_input_loaded();
     set_param_bank(1U);
     preload_conv_tile(gf_body2_weights_dma, 0U, 4U, 16U);
-    config_conv_tile(1U, 0U, 0xffffU, gf_body2_folded_bias, gf_body2_requant_multiplier, gf_body2_requant_right_shift, 16U, 16U);
+    config_tile_params(0U, gf_body2_folded_bias, gf_body2_requant_multiplier, gf_body2_requant_right_shift, 16U, 16U);
     wait_layer_done();
     cycles0 = Xil_In32(GF_BASE + GF_CYCLES);
     status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS);
@@ -544,13 +544,14 @@ int main(void)
 
     /* conv1 (body): 16->16 fused with pool1 (bank 1; preload conv2 -> bank 0) */
     stage = 0x40U; Xil_Out32(GF_BASE + GF_CONTROL, 1U);
+    config_tile_control(1U, 0xffffU);
     set_weight_write_bank(0U);
     set_weight_read_bank(1U);
     launch_layer(1U, (u32)(UINTPTR)gf_activation_1, GF_ACTIVATION_BYTES, (u32)(UINTPTR)gf_pool1, GF_POOL1_BYTES, 3U, 96U, 96U, 16U, 16U);
     wait_input_loaded();
     set_param_bank(0U);
     preload_conv_tile(gf_conv2a_weights_dma, 0U, 4U, 32U);
-    config_conv_tile(1U, 0U, 0xffffffffU, gf_conv2a_folded_bias, gf_conv2a_requant_multiplier, gf_conv2a_requant_right_shift, GF_CONV2A_OUTPUT_LANES, 32U);
+    config_tile_params(0U, gf_conv2a_folded_bias, gf_conv2a_requant_multiplier, gf_conv2a_requant_right_shift, GF_CONV2A_OUTPUT_LANES, 32U);
     wait_layer_done();
     pool_cycles = Xil_In32(GF_BASE + GF_CYCLES);
     status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS);
@@ -563,13 +564,14 @@ int main(void)
 
     /* conv2: 16->32 (bank 0; preload conv3 -> bank 1) */
     stage = 0x50U; Xil_Out32(GF_BASE + GF_CONTROL, 1U);
+    config_tile_control(1U, 0xffffffffU);
     set_weight_write_bank(1U);
     set_weight_read_bank(0U);
     launch_layer(1U, (u32)(UINTPTR)gf_pool1, GF_POOL1_BYTES, (u32)(UINTPTR)gf_conv2, GF_CONV2_BYTES, 1U, 48U, 48U, 32U, 32U);
     wait_input_loaded();
     set_param_bank(1U);
     preload_conv_tile(gf_conv2b_weights_dma, 0U, 8U, 32U);
-    config_conv_tile(2U, 0U, 0xffffffffU, gf_conv2b_folded_bias, gf_conv2b_requant_multiplier, gf_conv2b_requant_right_shift, GF_CONV2B_OUTPUT_LANES, 32U);
+    config_tile_params(0U, gf_conv2b_folded_bias, gf_conv2b_requant_multiplier, gf_conv2b_requant_right_shift, GF_CONV2B_OUTPUT_LANES, 32U);
     wait_layer_done();
     conv2_cycles[0] = Xil_In32(GF_BASE + GF_CYCLES);
     status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS);
@@ -580,13 +582,14 @@ int main(void)
 
     /* conv3: 32->32 fused with pool2 (bank 1; preload conv4t0 -> bank 0) */
     stage = 0x70U; Xil_Out32(GF_BASE + GF_CONTROL, 1U);
+    config_tile_control(2U, 0xffffffffU);
     set_weight_write_bank(0U);
     set_weight_read_bank(1U);
     launch_layer(2U, (u32)(UINTPTR)gf_conv2, GF_CONV2_BYTES, (u32)(UINTPTR)gf_pool2, GF_POOL2_BYTES, 3U, 48U, 48U, 32U, 32U);
     wait_input_loaded();
     set_param_bank(0U);
     preload_conv_tile(gf_conv3a_weights_dma, 0U, 8U, 32U);
-    config_conv_tile(2U, 0U, 0xffffffffU, gf_conv3a_folded_bias, gf_conv3a_requant_multiplier, gf_conv3a_requant_right_shift, GF_CONV3A_OUTPUT_LANES, 32U);
+    config_tile_params(0U, gf_conv3a_folded_bias, gf_conv3a_requant_multiplier, gf_conv3a_requant_right_shift, GF_CONV3A_OUTPUT_LANES, 32U);
     wait_layer_done();
     pool2_cycles[0] = Xil_In32(GF_BASE + GF_CYCLES);
     status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS);
@@ -597,13 +600,14 @@ int main(void)
 
     /* conv4: 32->48 (tile0 bank0; tile1 bank1; preload conv5t0 -> bank0) */
     stage = 0x80U; Xil_Out32(GF_BASE + GF_CONTROL, 1U);
+    config_tile_control(2U, 0xffffffffU);
     set_weight_write_bank(1U);
     set_weight_read_bank(0U);
     launch_layer(2U, (u32)(UINTPTR)gf_pool2, GF_POOL2_BYTES, (u32)(UINTPTR)gf_conv4, GF_CONV4_TILE32_BYTES, 1U, 24U, 24U, 48U, 32U);
     wait_input_loaded();
     set_param_bank(1U);
     preload_conv_tile(gf_conv3a_weights_dma, 32U, 8U, 16U);
-    config_conv_tile(2U, 32U, 0xffffU, gf_conv3a_folded_bias, gf_conv3a_requant_multiplier, gf_conv3a_requant_right_shift, GF_CONV3A_OUTPUT_LANES, 16U);
+    config_tile_params(32U, gf_conv3a_folded_bias, gf_conv3a_requant_multiplier, gf_conv3a_requant_right_shift, GF_CONV3A_OUTPUT_LANES, 16U);
     wait_layer_done();
     conv4_cycles[0] = Xil_In32(GF_BASE + GF_CYCLES);
     status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS);
@@ -612,13 +616,14 @@ int main(void)
         GF_STORE_BYTES_WRITTEN(store_status) != GF_CONV4_TILE32_BYTES) terminal_failure(0x4116U, store_status);
 
     stage = 0x81U; Xil_Out32(GF_BASE + GF_CONTROL, 1U);
+    config_tile_control(2U, 0xffffU);
     set_weight_write_bank(0U);
     set_weight_read_bank(1U);
     launch_layer(2U, (u32)(UINTPTR)gf_pool2, GF_POOL2_BYTES, (u32)(UINTPTR)gf_conv4 + 32U, GF_CONV4_TILE_BYTES, 1U, 24U, 24U, 48U, 16U);
     wait_input_loaded();
     set_param_bank(0U);
     preload_conv_tile(gf_conv3b_weights_dma, 0U, 12U, 32U);
-    config_conv_tile(3U, 0U, 0xffffffffU, gf_conv3b_folded_bias, gf_conv3b_requant_multiplier, gf_conv3b_requant_right_shift, GF_CONV3B_OUTPUT_LANES, 32U);
+    config_tile_params(0U, gf_conv3b_folded_bias, gf_conv3b_requant_multiplier, gf_conv3b_requant_right_shift, GF_CONV3B_OUTPUT_LANES, 32U);
     wait_layer_done();
     conv4_cycles[1] = Xil_In32(GF_BASE + GF_CYCLES);
     status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS);
@@ -629,13 +634,14 @@ int main(void)
 
     /* conv5: 48->48 fused with pool3 (tile0 bank0; tile1 bank1; preload head0 -> bank0) */
     stage = 0x90U; Xil_Out32(GF_BASE + GF_CONTROL, 1U);
+    config_tile_control(3U, 0xffffffffU);
     set_weight_write_bank(1U);
     set_weight_read_bank(0U);
     launch_layer(3U, (u32)(UINTPTR)gf_conv4, GF_CONV4_BYTES, (u32)(UINTPTR)gf_pool3, GF_POOL3_TILE32_BYTES, 3U, 24U, 24U, 48U, 32U);
     wait_input_loaded();
     set_param_bank(1U);
     preload_conv_tile(gf_conv3b_weights_dma, 32U, 12U, 16U);
-    config_conv_tile(3U, 32U, 0xffffU, gf_conv3b_folded_bias, gf_conv3b_requant_multiplier, gf_conv3b_requant_right_shift, GF_CONV3B_OUTPUT_LANES, 16U);
+    config_tile_params(32U, gf_conv3b_folded_bias, gf_conv3b_requant_multiplier, gf_conv3b_requant_right_shift, GF_CONV3B_OUTPUT_LANES, 16U);
     wait_layer_done();
     pool3_cycles[0] = Xil_In32(GF_BASE + GF_CYCLES);
     status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS);
@@ -644,13 +650,14 @@ int main(void)
         GF_STORE_BYTES_WRITTEN(store_status) != GF_POOL3_TILE32_BYTES) terminal_failure(0x411DU, store_status);
 
     stage = 0x91U; Xil_Out32(GF_BASE + GF_CONTROL, 1U);
+    config_tile_control(3U, 0xffffU);
     set_weight_write_bank(0U);
     set_weight_read_bank(1U);
     launch_layer(3U, (u32)(UINTPTR)gf_conv4, GF_CONV4_BYTES, (u32)(UINTPTR)gf_pool3 + 32U, GF_POOL3_TILE_BYTES, 3U, 24U, 24U, 48U, 16U);
     wait_input_loaded();
     set_param_bank(0U);
     preload_head1x1_tile(0U);
-    config_head1x1_tile(0U);
+    config_head_params(0U);
     wait_layer_done();
     pool3_cycles[1] = Xil_In32(GF_BASE + GF_CYCLES);
     status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS);
@@ -661,13 +668,14 @@ int main(void)
 
     /* head 1x1: 48->64 (tile0 bank0; tile1 bank1) */
     stage = 0xB0U; Xil_Out32(GF_BASE + GF_CONTROL, 1U);
+    config_tile_control(5U, 0xffffffffU);
     set_weight_write_bank(1U);
     set_weight_read_bank(0U);
     launch_layer(5U, (u32)(UINTPTR)gf_pool3, GF_POOL3_BYTES, (u32)(UINTPTR)gf_head1x1, GF_HEAD1X1_TILE32_BYTES, 1U, 12U, 12U, 64U, 32U);
     wait_input_loaded();
     set_param_bank(1U);
     preload_head1x1_tile(32U);
-    config_head1x1_tile(32U);
+    config_head_params(32U);
     wait_layer_done();
     head1x1_cycles[0] = Xil_In32(GF_BASE + GF_CYCLES);
     status = Xil_In32(GF_BASE + GF_STATUS); dma_status = Xil_In32(GF_BASE + GF_DMA_STATUS); store_status = Xil_In32(GF_BASE + GF_STORE_STATUS);
@@ -676,6 +684,7 @@ int main(void)
         GF_STORE_BYTES_WRITTEN(store_status) != GF_HEAD1X1_TILE32_BYTES) terminal_failure(0x412BU, store_status);
 
     stage = 0xB1U; Xil_Out32(GF_BASE + GF_CONTROL, 1U);
+    config_tile_control(5U, 0xffffffffU);
     set_weight_read_bank(1U);
     launch_layer(5U, (u32)(UINTPTR)gf_pool3, GF_POOL3_BYTES, (u32)(UINTPTR)gf_head1x1 + 32U, GF_HEAD1X1_TILE32_BYTES, 1U, 12U, 12U, 64U, 32U);
     wait_layer_done();
