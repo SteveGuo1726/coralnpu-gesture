@@ -83,6 +83,14 @@ bias'[oc] = bias[oc] − 128·Σw[oc] − 16384·N     // 权重修正折叠进 
 `tests/tb_gestureflow_conv4x4_cin_same_stream_dmp.sv` 用 64 bit 参考模型对完整
 小尺寸 3×3 SAME 卷积的**每一个输出向量**逐点比较，不是只查 hash 或少数 probe。
 
+`tests/tb_gestureflow_conv4x4_cin_same_stream_dmp_pointwise.sv` 进一步覆盖同引擎
+的 `pointwise_mode`，证明 1×1 路径在 DMP tile 上同样逐点位精确。
+
+软件数据链路由 `innovation_npu/tools/export_dmp_conv_layer.py` 完成：它从 TFLite
+卷积提取权重/bias，补零到 8 通道边界，输出 192 bit 权重 bank 的 6×32 bit DMA 字，
+并把 `(input_zp + 128)*sum(w) + 16384*N` 折叠进 bias。工具在写文件前会用随机数据
+验证 DMP 恒等式。
+
 ## 4. 后续整网集成步骤
 
 1. 导出工具：权重按"两个输出通道偏移+128 后按 16 bit 打包"输出，并把 `bias'` 折叠好。
