@@ -25,9 +25,9 @@ module gestureflow_line_window_vector #(
 
   logic [COLUMN_W-1:0] column_index;
   logic [COUNT_W-1:0] rows_seen;
-  logic input_accept;
+  (* max_fanout = 32 *) logic input_accept;
   logic stage_will_emit_window;
-  logic stage_valid;
+  (* max_fanout = 32 *) logic stage_valid;
   logic signed [DATA_WIDTH-1:0] stage_pixel_data;
   logic [COLUMN_W-1:0] stage_column_index;
   logic [COUNT_W-1:0] stage_rows_seen;

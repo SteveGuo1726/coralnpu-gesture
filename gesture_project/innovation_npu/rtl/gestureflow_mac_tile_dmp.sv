@@ -76,8 +76,8 @@ module gestureflow_mac_tile_dmp #(
   logic [INPUT_LANES-1:0] input_lane_enable_s1;
   logic [OUT_LANES-1:0] output_lanes_s0;
   logic [OUT_LANES-1:0] output_lanes_s1;
-  logic s0_valid, s0_last;
-  logic s1_valid, s1_last;
+  (* max_fanout = 32 *) logic s0_valid; logic s0_last;
+  (* max_fanout = 32 *) logic s1_valid; logic s1_last;
 
   logic [WEIGHT_DATA_W-1:0] weight_pipe [0:PAIR_LANES-1];
   logic [INPUT_LANES-1:0][7:0] activation_offset_s1;
@@ -111,7 +111,7 @@ module gestureflow_mac_tile_dmp #(
   // bit and is never used in the add tree below.
   (* use_dsp = "yes" *) logic signed [PAIR_LANES-1:0][INPUT_LANES-1:0][31:0] product_comb;
   (* use_dsp = "yes" *) logic signed [PAIR_LANES-1:0][INPUT_LANES-1:0][31:0] product_pipe;
-  logic product_valid;
+  (* max_fanout = 32 *) logic product_valid;
   logic product_last;
   logic [OUT_LANES-1:0] product_output_lanes;
 
@@ -120,19 +120,19 @@ module gestureflow_mac_tile_dmp #(
   // the registered add tree from inflating XC7Z020 carry chains.
   logic [PAIR_LANES-1:0][PAIR_COUNT-1:0][16:0] pair_sum_low_pipe;
   logic [PAIR_LANES-1:0][PAIR_COUNT-1:0][16:0] pair_sum_high_pipe;
-  logic pair_valid;
+  (* max_fanout = 32 *) logic pair_valid;
   logic pair_last;
   logic [OUT_LANES-1:0] pair_output_lanes;
 
   logic [PAIR_LANES-1:0][QUAD_COUNT-1:0][17:0] quad_sum_low_pipe;
   logic [PAIR_LANES-1:0][QUAD_COUNT-1:0][17:0] quad_sum_high_pipe;
-  logic quad_valid;
+  (* max_fanout = 32 *) logic quad_valid;
   logic quad_last;
   logic [OUT_LANES-1:0] quad_output_lanes;
 
   logic [PAIR_LANES-1:0][18:0] oct_sum_low_pipe;
   logic [PAIR_LANES-1:0][18:0] oct_sum_high_pipe;
-  logic oct_valid;
+  (* max_fanout = 32 *) logic oct_valid;
   logic oct_last;
   logic [OUT_LANES-1:0] oct_output_lanes;
   logic signed [OUT_LANES-1:0][31:0] oct_contrib_ext;
@@ -143,7 +143,7 @@ module gestureflow_mac_tile_dmp #(
   // tile that was the dominant setup-critical node.  It is split into two
   // single 32-bit two-term operations: stage 6 accumulates, stage 7 subtracts
   // the activation correction and emits the result.
-  logic retire_valid;
+  (* max_fanout = 32 *) logic retire_valid;
   logic [OUT_LANES-1:0] retire_output_lanes;
 
   assign weight_write_addr = {weight_bank_select,
