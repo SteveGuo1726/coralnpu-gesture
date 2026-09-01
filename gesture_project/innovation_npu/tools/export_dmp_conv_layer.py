@@ -138,7 +138,11 @@ def c_array(values: np.ndarray, c_type: str, name: str, columns: int = 16) -> st
         "    " + ", ".join(str(int(item)) for item in flat[index : index + columns])
         for index in range(0, len(flat), columns)
     ]
-    return f"static const {c_type} {name}[{len(flat)}] = {{\n" + ",\n".join(rows) + "\n};\n"
+    return (
+        f"static const {c_type} {name}[{len(flat)}] __attribute__((aligned(64))) = {{\n"
+        + ",\n".join(rows)
+        + "\n};\n"
+    )
 
 
 def sv32(value: int) -> str:
