@@ -40,12 +40,12 @@ set gpio_port [get_bd_intf_ports -quiet AXI_GPIO_KEY]
 if {[llength $gpio_port]} { delete_bd_objs $gpio_port }
 create_bd_cell -type ip -vlnv user.org:user:gestureflow_layer_chain_dmp_hp0_axil:1.0 gestureflow_0
 # PROJECT_LOCAL_SELF_RESEARCH_NOT_GOOGLE_OFFICIAL
-# DMP full-network build: 16 output lanes x 8 input lanes with one physical
-# dual-multiply tile.  This retires the same 128 signed INT8 products per
-# cycle as the legacy 32-output x 4-input tile but uses 64 DSP48E1 instead of
-# 128 and halves the 256-bit output-bank width to 128 bits.  MAX_INPUT_CHANNELS
-# =48 covers the widest body layer in six eight-channel groups.
-set_property -dict [list CONFIG.MAX_INPUT_CHANNELS {48} CONFIG.OUT_LANES {16} CONFIG.POOL_BANK_ADDR_W {12} CONFIG.ENABLE_WIDE_MODES {1} CONFIG.ENABLE_POSTPROCESS {1} CONFIG.ENABLE_RELAY {0} CONFIG.ENABLE_STREAM_STORE {0}] [get_bd_cells gestureflow_0]
+# DMP full-network build: 32 output lanes x 8 input lanes with one physical
+# dual-multiply tile.  This retires 256 signed INT8 products per cycle, twice
+# the legacy 32-output x 4-input tile, using the same 128 DSP48E1.  The full
+# output bank is removed by the streaming writer plus the fused line-buffer
+# 2x2 max-pool, so the wider tile still fits the 7020 BRAM budget.
+set_property -dict [list CONFIG.MAX_INPUT_CHANNELS {48} CONFIG.OUT_LANES {32} CONFIG.POOL_BANK_ADDR_W {12} CONFIG.ENABLE_WIDE_MODES {1} CONFIG.ENABLE_POSTPROCESS {1} CONFIG.ENABLE_RELAY {0} CONFIG.ENABLE_STREAM_STORE {1}] [get_bd_cells gestureflow_0]
 create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_smc
 set_property -dict [list CONFIG.NUM_SI {1} CONFIG.NUM_MI {1}] [get_bd_cells axi_smc]
 set_property -dict [list CONFIG.PCW_FPGA0_PERIPHERAL_FREQMHZ {60} CONFIG.PCW_USE_S_AXI_HP0 {1} CONFIG.PCW_S_AXI_HP0_DATA_WIDTH {64} CONFIG.PCW_S_AXI_HP0_ID_WIDTH {6}] [get_bd_cells processing_system7_0]

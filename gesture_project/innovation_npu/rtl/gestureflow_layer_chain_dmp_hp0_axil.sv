@@ -253,6 +253,11 @@ module gestureflow_layer_chain_dmp_hp0_axil #(
   logic stream_store_busy, stream_store_done, stream_store_fault, stream_store_ready;
   logic [13:0] stream_store_vectors_written; logic [31:0] stream_store_bytes_written;
   logic stream_store_mode;
+  logic stream_pool_mode;
+  logic stream_pool_ready, stream_pool_valid;
+  logic [OUT_LANES*8-1:0] stream_pool_data;
+  logic stream_pool_last;
+  logic [13:0] stream_pool_vector_count;
   logic stream_store_vector_last;
   logic [13:0] relay_bank_read_addr; logic relay_bank_read_enable;
   logic [13:0] relay_pool_read_addr;
@@ -306,10 +311,12 @@ module gestureflow_layer_chain_dmp_hp0_axil #(
   assign relay_mode = ENABLE_RELAY && relay_enable && (layer_mode == 1);
   assign relay_stream_mode = relay_mode && !relay_pool_2x2;
   assign relay_pool_mode = relay_mode && relay_pool_2x2;
-  assign stream_store_mode = ENABLE_STREAM_STORE && store_enable && !store_pool_2x2 &&
+  assign stream_store_mode = ENABLE_STREAM_STORE && store_enable &&
     (store_valid_bytes == 0 || (store_valid_bytes >= 8 && store_valid_bytes <= 6'(OUT_LANES))) &&
     (store_stride_bytes == 0 || (store_stride_bytes[2:0] == 0 && store_stride_bytes >=
       (store_valid_bytes == 0 ? 32'(OUT_LANES) : {26'd0, store_valid_bytes})));
+  assign stream_pool_mode = stream_store_mode && store_pool_2x2;
+  assign stream_pool_vector_count = 14'((job_width >> 1) * (job_height >> 1));
   assign store_busy = stream_store_mode ? stream_store_busy : legacy_store_busy;
   assign store_done = stream_store_mode ? stream_store_done : legacy_store_done;
   assign store_fault = stream_store_mode ? stream_store_fault : legacy_store_fault;
@@ -631,14 +638,14 @@ module gestureflow_layer_chain_dmp_hp0_axil #(
     .clk(aclk), .rst_n(aresetn), .in_valid(output_valid), .in_ready(quant_ready), .in_psum(output_psum),
     .in_lane_enable(output_lane_enable_valid), .enable(requant_enable), .relu_enable(requant_relu_enable),
     .output_zero_point(output_zero_point), .multiplier(requant_multiplier[OUT_LANES-1:0]), .right_shift(requant_right_shift[OUT_LANES-1:0]),
-    .out_valid(quant_valid), .out_ready(stream_store_mode ? stream_store_ready : 1'b1), .out_data(quant_data), .out_lane_enable(), .config_error(quant_fault)
+    .out_valid(quant_valid), .out_ready(stream_store_mode ? (stream_pool_mode ? stream_pool_ready : stream_store_ready) : 1'b1), .out_data(quant_data), .out_lane_enable(), .config_error(quant_fault)
   );
   assign stream_store_vector_last = quant_valid && stream_store_ready &&
     (output_vectors == 14'(dma_pixels - 1'b1));
   // Hashing and the legacy bank must observe the same transfer boundary as
   // the direct writer. In stream mode a stalled writer therefore cannot
   // duplicate a vector in the diagnostic hash or lose its ordering.
-  assign output_write_valid = quant_valid && (stream_store_mode ? stream_store_ready : 1'b1);
+  assign output_write_valid = quant_valid && (stream_store_mode ? (stream_pool_mode ? stream_pool_ready : stream_store_ready) : 1'b1);
   assign output_write_addr = OUTPUT_ADDR_W'(int'(quant_row) * int'(job_width) + int'(quant_column));
   assign output_write_data = quant_data;
   always_ff @(posedge aclk) begin
@@ -733,10 +740,23 @@ module gestureflow_layer_chain_dmp_hp0_axil #(
     .m_axi_bvalid(m_axi_bvalid), .m_axi_bready(legacy_bready)
   );
 
+  // Streaming 2x2 max-pool removes the full-frame output BRAM even for the
+  // pooled body layers.  It sits between requant and the direct writer only
+  // when store_pool_2x2 is set; otherwise the direct writer consumes the
+  // quantized vectors as they retire.
+  gestureflow_stream_pool2x2 #(
+    .VECTOR_BYTES(OUT_LANES), .MAX_WIDTH(IMAGE_WIDTH)
+  ) stream_pool (
+    .clk(aclk), .rst_n(aresetn), .frame_start(dma_start && stream_pool_mode),
+    .vector_valid(quant_valid && stream_pool_mode), .vector_ready(stream_pool_ready),
+    .vector_data(quant_data), .image_width(job_width), .image_height(job_height),
+    .pooled_valid(stream_pool_valid), .pooled_ready(stream_store_ready),
+    .pooled_data(stream_pool_data), .pooled_last(stream_pool_last)
+  );
+
   // Direct mode starts with the layer and consumes quantized vectors as they
-  // retire. It is deliberately restricted by stream_store_mode to contiguous
-  // full-width stores; tiled/pooled layouts continue using the proven bank
-  // reader above.
+  // retire.  Pooled layers instead feed the stream writer from the line-buffer
+  // pool, which supplies the already-downsampled NHWC vectors.
   gestureflow_hp0_stream_writer #(
     .VECTOR_BYTES(OUT_LANES), .MAX_BURST_VECTORS(4), .COUNT_W(OUTPUT_ADDR_W),
     .DEFAULT_VECTOR_COUNT(OUTPUTS)
@@ -744,9 +764,10 @@ module gestureflow_layer_chain_dmp_hp0_axil #(
     .clk(aclk), .rst_n(aresetn), .start(dma_start && stream_store_mode),
     .clear(dma_clear || store_clear), .destination_addr(store_destination),
     .destination_stride_bytes(store_stride_bytes),
-    .byte_count(store_bytes), .vector_count(dma_pixels), .valid_vector_bytes(store_valid_bytes),
-    .vector_valid(quant_valid), .vector_ready(stream_store_ready), .vector_data(quant_data),
-    .vector_last(stream_store_vector_last), .busy(stream_store_busy), .done(stream_store_done),
+    .byte_count(store_bytes), .vector_count(stream_pool_mode ? stream_pool_vector_count : dma_pixels), .valid_vector_bytes(store_valid_bytes),
+    .vector_valid(stream_pool_mode ? stream_pool_valid : quant_valid), .vector_ready(stream_store_ready),
+    .vector_data(stream_pool_mode ? stream_pool_data : quant_data),
+    .vector_last(stream_pool_mode ? stream_pool_last : stream_store_vector_last), .busy(stream_store_busy), .done(stream_store_done),
     .fault(stream_store_fault), .vectors_written(stream_store_vectors_written),
     .bytes_written(stream_store_bytes_written), .m_axi_awaddr(stream_awaddr), .m_axi_awid(stream_awid),
     .m_axi_awlen(stream_awlen), .m_axi_awsize(stream_awsize), .m_axi_awburst(stream_awburst),
