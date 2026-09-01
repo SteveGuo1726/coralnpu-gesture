@@ -40,15 +40,16 @@ set gpio_port [get_bd_intf_ports -quiet AXI_GPIO_KEY]
 if {[llength $gpio_port]} { delete_bd_objs $gpio_port }
 create_bd_cell -type ip -vlnv user.org:user:gestureflow_layer_chain_dmp_hp0_axil:1.0 gestureflow_0
 # PROJECT_LOCAL_SELF_RESEARCH_NOT_GOOGLE_OFFICIAL
-# DMP full-network build: 32 output lanes x 8 input lanes with one physical
-# dual-multiply tile.  This retires 256 signed INT8 products per cycle, twice
-# the legacy 32-output x 4-input tile, using the same 128 DSP48E1.  The full
-# output bank is removed by the streaming writer plus the fused line-buffer
-# 2x2 max-pool, so the wider tile still fits the 7020 BRAM budget.
-set_property -dict [list CONFIG.MAX_INPUT_CHANNELS {48} CONFIG.OUT_LANES {32} CONFIG.POOL_BANK_ADDR_W {12} CONFIG.ENABLE_WIDE_MODES {1} CONFIG.ENABLE_POSTPROCESS {1} CONFIG.ENABLE_RELAY {0} CONFIG.ENABLE_STREAM_STORE {1}] [get_bd_cells gestureflow_0]
+# DMP full-network build: 16 output lanes x 8 input lanes with one physical
+# dual-multiply tile.  This retires 128 signed INT8 products per cycle using
+# 64 DSP48E1, matching the non-DMP 32x4 throughput at half the DSP count.
+# 16 is a multiple of every layer width (16/32/48/64), so no output lane is
+# wasted.  The verified board-pass configuration is kept; the 32-lane +
+# streaming-store experiment exceeded 7020 capacity (211 DSP / 99% slice).
+set_property -dict [list CONFIG.MAX_INPUT_CHANNELS {48} CONFIG.OUT_LANES {16} CONFIG.POOL_BANK_ADDR_W {12} CONFIG.ENABLE_WIDE_MODES {1} CONFIG.ENABLE_POSTPROCESS {1} CONFIG.ENABLE_RELAY {0} CONFIG.ENABLE_STREAM_STORE {0}] [get_bd_cells gestureflow_0]
 create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_smc
 set_property -dict [list CONFIG.NUM_SI {1} CONFIG.NUM_MI {1}] [get_bd_cells axi_smc]
-set_property -dict [list CONFIG.PCW_FPGA0_PERIPHERAL_FREQMHZ {60} CONFIG.PCW_USE_S_AXI_HP0 {1} CONFIG.PCW_S_AXI_HP0_DATA_WIDTH {64} CONFIG.PCW_S_AXI_HP0_ID_WIDTH {6}] [get_bd_cells processing_system7_0]
+set_property -dict [list CONFIG.PCW_FPGA0_PERIPHERAL_FREQMHZ {80} CONFIG.PCW_USE_S_AXI_HP0 {1} CONFIG.PCW_S_AXI_HP0_DATA_WIDTH {64} CONFIG.PCW_S_AXI_HP0_ID_WIDTH {6}] [get_bd_cells processing_system7_0]
 connect_bd_net [get_bd_pins processing_system7_0/FCLK_CLK0] [get_bd_pins gestureflow_0/aclk] [get_bd_pins processing_system7_0/S_AXI_HP0_ACLK] [get_bd_pins axi_smc/aclk]
 set reset_pin [lindex [get_bd_pins -quiet */peripheral_aresetn] 0]
 if {$reset_pin eq ""} { error "Could not find PS peripheral_aresetn" }
@@ -68,6 +69,7 @@ set legacy_wrappers [get_files -quiet */imports/hdl/system_wrapper.v]
 if {[llength $legacy_wrappers]} { remove_files $legacy_wrappers }
 make_wrapper -files [get_files */system.bd] -top -import -force
 update_compile_order -fileset sources_1
+add_files -fileset constrs_1 [file join $script_dir gestureflow_hagrid18_dmp_7020_timing.xdc]
 reset_run synth_1; reset_run impl_1
 launch_runs impl_1 -to_step write_bitstream -jobs 8; wait_on_run impl_1
 if {[get_property PROGRESS [get_runs impl_1]] ne "100%"} { error "Implementation failed: [get_property STATUS [get_runs impl_1]]" }
