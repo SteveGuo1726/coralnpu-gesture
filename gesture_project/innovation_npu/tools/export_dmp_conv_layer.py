@@ -175,7 +175,7 @@ def main() -> None:
     pointwise = tuple(weights.shape[1:3]) == (1, 1)
     padded_channels = ((real_input_channels + 7) // 8) * 8
     active_taps = 1 if pointwise else kernel_height * kernel_width
-    padded = np.zeros((output_lanes, 16, padded_channels), dtype=np.int8)
+    padded = np.zeros((output_lanes, active_taps, padded_channels), dtype=np.int8)
     if pointwise:
         padded[:, 0, :real_input_channels] = weights[:, 0, 0, :]
     else:
