@@ -31,8 +31,13 @@ import numpy as np
 
 
 def int8_unsigned(value: int) -> int:
-    """Return the unsigned byte image of a signed INT8 value."""
-    return int(np.uint8(np.int8(value)))
+    """Return the -128-offset unsigned image of a signed INT8 value.
+
+    The RTL uses ``a' = a XOR 0x80`` and ``w' = w + 128``, not a two's
+    complement reinterpretation.  For signed -6 the correct operand is 122
+    (0x7A), while ``np.uint8(np.int8(-6))`` would be 250 (0xFA).
+    """
+    return int(value) + 128
 
 
 def pack_word(w_even: int, w_odd: int) -> int:

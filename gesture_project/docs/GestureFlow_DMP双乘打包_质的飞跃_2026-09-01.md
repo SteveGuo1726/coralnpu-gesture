@@ -86,6 +86,11 @@ bias'[oc] = bias[oc] − 128·Σw[oc] − 16384·N     // 权重修正折叠进 
 `tests/tb_gestureflow_conv4x4_cin_same_stream_dmp_pointwise.sv` 进一步覆盖同引擎
 的 `pointwise_mode`，证明 1×1 路径在 DMP tile 上同样逐点位精确。
 
+`tests/tb_gestureflow_conv4x4_cin_same_stream_dmp_full_layer.sv` 更进一步用
+**真实 18 类学生模型的 body2 层（16×96×96 → 16×96×96）**做整层对账：全部 9216
+个输出向量通过 raw FNV（`0x8F1602CE`）和 7 个探针向量验证。这证明 DMP 不是只对
+合成小张量有效，而是已通过真实 TFLite 数据链的逐层验证。
+
 软件数据链路由 `innovation_npu/tools/export_dmp_conv_layer.py` 完成：它从 TFLite
 卷积提取权重/bias，补零到 8 通道边界，输出 192 bit 权重 bank 的 6×32 bit DMA 字，
 并把 `(input_zp + 128)*sum(w) + 16384*N` 折叠进 bias。工具在写文件前会用随机数据
