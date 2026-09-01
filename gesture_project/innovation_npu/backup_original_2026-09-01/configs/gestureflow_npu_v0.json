@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "project_module": "GestureFlow-NPU",
+  "ownership": "PROJECT_LOCAL_SELF_RESEARCH_NOT_GOOGLE_OFFICIAL",
+  "description": "First parameter set for a streaming INT8 gesture CNN accelerator. It is derived from, but is not a modification of, the read-only Google CoralNPU repository.",
+  "clock_mhz": 100,
+  "array_candidates": [
+    {
+      "name": "gf32",
+      "spatial_parallel": 1,
+      "output_channel_parallel": 16,
+      "input_channel_parallel": 2,
+      "macs_per_cycle": 32,
+      "accumulator_bytes": 4,
+      "stripe_output_rows": 8,
+      "data_sram_bytes": 131072,
+      "weight_sram_bytes": 16384
+    },
+    {
+      "name": "gf64",
+      "spatial_parallel": 1,
+      "output_channel_parallel": 16,
+      "input_channel_parallel": 4,
+      "macs_per_cycle": 64,
+      "accumulator_bytes": 4,
+      "stripe_output_rows": 8,
+      "data_sram_bytes": 131072,
+      "weight_sram_bytes": 16384
+    }
+  ],
+  "network": {
+    "input_height": 96,
+    "input_width": 96,
+    "input_channels": 3,
+    "layers": [
+      {"name": "conv1_4x4_a", "kernel": 4, "output_channels": 16, "pool_after": 1},
+      {"name": "conv1_4x4_b", "kernel": 4, "output_channels": 16, "pool_after": 2},
+      {"name": "conv2_4x4_a", "kernel": 4, "output_channels": 32, "pool_after": 1},
+      {"name": "conv2_4x4_b", "kernel": 4, "output_channels": 32, "pool_after": 2},
+      {"name": "conv3_4x4_a", "kernel": 4, "output_channels": 48, "pool_after": 1},
+      {"name": "conv3_4x4_b", "kernel": 4, "output_channels": 48, "pool_after": 2},
+      {"name": "conv_head_1x1", "kernel": 1, "output_channels": 64, "pool_after": 1}
+    ],
+    "classifier": {"input_channels": 64, "output_classes": 18}
+  },
+  "assumptions": {
+    "activation_bytes": 1,
+    "weight_bytes": 1,
+    "output_bytes": 1,
+    "partial_sum_bytes": 4,
+    "bias_requant_relu_pool_fused": true,
+    "padding": "same",
+    "note": "The model reports deterministic operation and transfer counts. Cycle totals exclude DMA setup, AXI arbitration, SRAM banking conflicts and clock-domain overhead; they are architecture-comparison estimates, not RTL or FPGA timing claims."
+  }
+}

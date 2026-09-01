@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# PROJECT_LOCAL_SELF_RESEARCH_NOT_GOOGLE_OFFICIAL
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+board="$root/board_7020"
+dst=/mnt/e/coralnpu_vivado/projects/gestureflow_body2_dmp_7020_v1
+template=/mnt/e/coralnpu_vivado/projects/gestureflow_full_layer_hp0_7020_v1
+if [[ ! -f "$dst/axi_gpio.xpr" ]]; then cp -a "$template" "$dst"; fi
+mkdir -p "$dst/gestureflow_src" "$dst/project_local_gestureflow"
+cp -f "$root"/rtl/{gestureflow_line_delay_bank,gestureflow_line_window,gestureflow_line_delay_vector_bank,gestureflow_line_window_vector,gestureflow_same4x4_cin_window,gestureflow_weight_bank,gestureflow_mac_tile_dmp,gestureflow_conv4x4_cin_same_stream_dmp,gestureflow_requant_relu,gestureflow_hp0_tensor_loader,gestureflow_body2_dmp_hp0_axil}.sv "$dst/gestureflow_src/"
+cp -f "$board/build_gestureflow_body2_dmp_7020.tcl" "$dst/project_local_gestureflow/"
+cmd.exe /d /s /c "pushd E:\coralnpu_vivado\projects\gestureflow_body2_dmp_7020_v1\project_local_gestureflow && call E:\Xilinx\Vivado\2023.2\bin\vivado.bat -mode batch -source build_gestureflow_body2_dmp_7020.tcl > E:\coralnpu_vivado\projects\gestureflow_body2_dmp_7020_v1\project_local_gestureflow\vivado_build.log 2>&1"
