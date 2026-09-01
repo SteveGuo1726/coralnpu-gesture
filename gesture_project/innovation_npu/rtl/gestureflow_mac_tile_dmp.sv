@@ -109,8 +109,8 @@ module gestureflow_mac_tile_dmp #(
   // signed 43-bit (25x18) by construction, but both operands are positive so
   // the useful part lies in bits [31:0]; bit 42 is an unused sign/extension
   // bit and is never used in the add tree below.
-  (* use_dsp = "yes" *) logic signed [PAIR_LANES-1:0][INPUT_LANES-1:0][42:0] product_comb;
-  (* use_dsp = "yes" *) logic signed [PAIR_LANES-1:0][INPUT_LANES-1:0][42:0] product_pipe;
+  (* use_dsp = "yes" *) logic signed [PAIR_LANES-1:0][INPUT_LANES-1:0][31:0] product_comb;
+  (* use_dsp = "yes" *) logic signed [PAIR_LANES-1:0][INPUT_LANES-1:0][31:0] product_pipe;
   logic product_valid;
   logic product_last;
   logic [OUT_LANES-1:0] product_output_lanes;
@@ -136,6 +136,15 @@ module gestureflow_mac_tile_dmp #(
   logic oct_last;
   logic [OUT_LANES-1:0] oct_output_lanes;
   logic signed [OUT_LANES-1:0][31:0] oct_contrib_ext;
+
+  // Stage 7: the original retire combined the per-group accumulation with the
+  // shared -128*sum(a) correction in one three-term 32-bit expression
+  // (accum + oct_contrib - activation_sum<<7).  For a widened OUT_LANES=32
+  // tile that was the dominant setup-critical node.  It is split into two
+  // single 32-bit two-term operations: stage 6 accumulates, stage 7 subtracts
+  // the activation correction and emits the result.
+  logic retire_valid;
+  logic [OUT_LANES-1:0] retire_output_lanes;
 
   assign weight_write_addr = {weight_bank_select,
     WEIGHT_ADDR_W'(int'(weight_write_tap) * MAX_IC_GROUPS + int'(weight_write_ic_group))};
@@ -163,8 +172,8 @@ module gestureflow_mac_tile_dmp #(
         if ((output_lanes_s1[2*p] || output_lanes_s1[2*p+1]) &&
             input_lane_enable_s1_padded[ic]) begin
           product_comb[p][ic] =
-            $signed({1'b0, weight_pipe[p][ic*24 +: 24]}) *
-            $signed({10'b0, activation_offset_s1[ic]});
+            32'($signed({1'b0, weight_pipe[p][ic*24 +: 24]}) *
+                $signed({10'b0, activation_offset_s1[ic]}));
         end
       end
     end
@@ -180,13 +189,13 @@ module gestureflow_mac_tile_dmp #(
   end
 
   assign start_ready = !busy && !s0_valid && !s1_valid && !product_valid &&
-                       !pair_valid && !quad_valid && !oct_valid && !result_valid;
+                       !pair_valid && !quad_valid && !oct_valid && !retire_valid && !result_valid;
   // The last input group may be in any of the five pipeline stages.  Once it
   // is accepted, no later group enters until the result has retired.
   assign mac_ready = busy && !result_valid &&
     !(s0_valid && s0_last) && !(s1_valid && s1_last) &&
     !(product_valid && product_last) && !(pair_valid && pair_last) &&
-    !(quad_valid && quad_last) && !(oct_valid && oct_last);
+    !(quad_valid && quad_last) && !(oct_valid && oct_last) && !retire_valid;
 
   always_ff @(posedge clk) begin
     if (!rst_n) begin
@@ -224,6 +233,8 @@ module gestureflow_mac_tile_dmp #(
       oct_valid <= 1'b0;
       oct_last <= 1'b0;
       oct_output_lanes <= '0;
+      retire_valid <= 1'b0;
+      retire_output_lanes <= '0;
       result_valid <= 1'b0;
       result_psum <= '0;
       result_lane_enable <= '0;
@@ -235,6 +246,9 @@ module gestureflow_mac_tile_dmp #(
       end
       if (result_valid && result_ready) begin
         result_valid <= 1'b0;
+      end
+      if (retire_valid) begin
+        retire_valid <= 1'b0;
       end
       if (start_valid && !start_ready) begin
         protocol_error <= 1'b1;
@@ -330,28 +344,28 @@ module gestureflow_mac_tile_dmp #(
         end
       end
 
-      // Stage 6: retire one fully reduced group into local INT32 sums and, on
-      // the final group, apply the shared signed-activation correction.
+      // Stage 6: retire one fully reduced group into local INT32 sums.
+      // oct_contrib_ext is already zeroed for disabled output lanes, so the
+      // per-lane guard can be removed and the update becomes a single 32-bit
+      // two-term add (fewer clock-enable control sets, shorter carry path).
       if (oct_valid) begin
-        for (int p = 0; p < PAIR_LANES; p++) begin
-          if (oct_output_lanes[2*p]) begin
-            accum[2*p] <= accum[2*p] + oct_contrib_ext[2*p];
-          end
-          if (oct_output_lanes[2*p+1]) begin
-            accum[2*p+1] <= accum[2*p+1] + oct_contrib_ext[2*p+1];
-          end
+        for (int oc = 0; oc < OUT_LANES; oc++) begin
+          accum[oc] <= accum[oc] + oct_contrib_ext[oc];
         end
-        if (oct_last) begin
-          for (int oc = 0; oc < OUT_LANES; oc++) begin
-            if (oct_output_lanes[oc]) begin
-              result_psum[oc] <= accum[oc] + oct_contrib_ext[oc] -
-                                 (activation_sum <<< 7);
-            end
-          end
-          result_lane_enable <= oct_output_lanes;
-          result_valid <= 1'b1;
-          busy <= 1'b0;
+        retire_valid <= oct_last;
+        retire_output_lanes <= oct_output_lanes;
+      end
+
+      // Stage 7: apply the shared signed-activation correction as a second
+      // two-term 32-bit subtraction.  accum already contains the final group
+      // because stage 6 updated it one cycle earlier.
+      if (retire_valid) begin
+        for (int oc = 0; oc < OUT_LANES; oc++) begin
+          result_psum[oc] <= accum[oc] - (activation_sum <<< 7);
         end
+        result_lane_enable <= retire_output_lanes;
+        result_valid <= 1'b1;
+        busy <= 1'b0;
       end
     end
   end
