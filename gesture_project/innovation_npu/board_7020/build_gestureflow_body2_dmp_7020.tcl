@@ -27,6 +27,10 @@ set source_dir [file join $project_root gestureflow_src]
 set log_dir [file join $project_root logs]
 file mkdir $log_dir
 set repo [package_ip $source_dir $project_root]
+set fclk_mhz 80
+if {[info exists ::env(GESTUREFLOW_BODY2_DMP_FCLK_MHZ)] && $::env(GESTUREFLOW_BODY2_DMP_FCLK_MHZ) ne ""} {
+  set fclk_mhz $::env(GESTUREFLOW_BODY2_DMP_FCLK_MHZ)
+}
 open_project [file join $project_root axi_gpio.xpr]
 set_property ip_repo_paths $repo [current_project]; update_ip_catalog
 set tutorial_xdc_files [get_files -quiet */Navigator.xdc]
@@ -43,7 +47,7 @@ create_bd_cell -type ip -vlnv user.org:user:gestureflow_body2_dmp_hp0_axil:1.0 g
 create_bd_cell -type ip -vlnv xilinx.com:ip:smartconnect:1.0 axi_smc
 set_property -dict [list CONFIG.NUM_SI {1} CONFIG.NUM_MI {1}] [get_bd_cells axi_smc]
 set_property -dict [list \
-  CONFIG.PCW_FPGA0_PERIPHERAL_FREQMHZ {25} \
+  CONFIG.PCW_FPGA0_PERIPHERAL_FREQMHZ $fclk_mhz \
   CONFIG.PCW_USE_S_AXI_HP0 {1} \
   CONFIG.PCW_S_AXI_HP0_DATA_WIDTH {64} \
   CONFIG.PCW_S_AXI_HP0_ID_WIDTH {6} \

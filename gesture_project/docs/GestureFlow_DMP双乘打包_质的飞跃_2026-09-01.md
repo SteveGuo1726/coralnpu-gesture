@@ -107,6 +107,22 @@ PROBE[05]    = 0x0005C87F   # 约 379007 cycles
 endpoints，Worst Slack 20.672ns；Hold 0 failing endpoints，Worst Slack 0.039ns。
 这说明 DMP 双乘数据链已经在真实 7020 上运行，不再是纯仿真假设。
 
+进一步把同一独立工程升频到 **80MHz**，并将共享修正项 `activation_sum` 拆成一级
+流水后，时序同样闭合：
+
+```text
+Setup : 0 Failing Endpoints, Worst Slack 0.844ns
+Hold  : 0 Failing Endpoints, Worst Slack 0.060ns
+```
+
+80MHz 实板结果：
+
+```text
+FINAL_RESULT = 0x600D600D
+PROBE[08]    = 0x7E276C7B
+PROBE[05]    = 0x0005C92D
+```
+
 软件数据链路由 `innovation_npu/tools/export_dmp_conv_layer.py` 完成：它从 TFLite
 卷积提取权重/bias，补零到 8 通道边界，输出 192 bit 权重 bank 的 6×32 bit DMA 字，
 并把 `(input_zp + 128)*sum(w) + 16384*N` 折叠进 bias。工具在写文件前会用随机数据

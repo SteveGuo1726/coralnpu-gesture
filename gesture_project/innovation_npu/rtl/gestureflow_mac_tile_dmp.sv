@@ -83,7 +83,8 @@ module gestureflow_mac_tile_dmp #(
   logic [INPUT_LANES-1:0][7:0] activation_offset_s1;
   logic signed [INPUT_LANES-1:0][7:0] activation_s1_padded;
   logic [INPUT_LANES-1:0] input_lane_enable_s1_padded;
-  logic signed [31:0] activation_group_sum;
+  logic signed [31:0] activation_group_sum_s0;
+  logic signed [31:0] activation_group_sum_s1;
 
   for (genvar p = 0; p < PAIR_LANES; p++) begin : pair_weight_banks
     gestureflow_weight_bank #(
@@ -145,14 +146,14 @@ module gestureflow_mac_tile_dmp #(
     activation_s1_padded = '0;
     input_lane_enable_s1_padded = '0;
     activation_offset_s1 = '0;
-    activation_group_sum = '0;
+    activation_group_sum_s0 = '0;
     oct_contrib_ext = '0;
     for (int ic = 0; ic < INPUT_LANES; ic++) begin
       activation_s1_padded[ic] = activation_s1[ic];
       input_lane_enable_s1_padded[ic] = input_lane_enable_s1[ic];
       activation_offset_s1[ic] = activation_s1[ic] ^ 8'h80;
-      if (input_lane_enable[ic]) begin
-        activation_group_sum = activation_group_sum + 32'($signed(activation[ic]));
+      if (input_lane_enable_s0[ic]) begin
+        activation_group_sum_s0 = activation_group_sum_s0 + 32'($signed(activation_s0[ic]));
       end
     end
 
@@ -194,6 +195,7 @@ module gestureflow_mac_tile_dmp #(
       active_output_lanes <= '0;
       activation_s0 <= '0;
       activation_s1 <= '0;
+      activation_group_sum_s1 <= '0;
       input_lane_enable_s0 <= '0;
       input_lane_enable_s1 <= '0;
       weight_addr_s0 <= '0;
@@ -258,12 +260,15 @@ module gestureflow_mac_tile_dmp #(
         output_lanes_s0 <= active_output_lanes;
         s0_last <= mac_last;
         s0_valid <= 1'b1;
-        activation_sum <= activation_sum + activation_group_sum;
       end
 
       // Stage 1: synchronous packed-weight read; activation moves with it.
       s1_valid <= s0_valid;
       s1_last <= s0_last;
+      activation_group_sum_s1 <= activation_group_sum_s0;
+      if (s1_valid) begin
+        activation_sum <= activation_sum + activation_group_sum_s1;
+      end
       activation_s1 <= activation_s0;
       input_lane_enable_s1 <= input_lane_enable_s0;
       output_lanes_s1 <= output_lanes_s0;
