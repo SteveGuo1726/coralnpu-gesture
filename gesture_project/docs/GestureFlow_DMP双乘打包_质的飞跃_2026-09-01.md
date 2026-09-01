@@ -91,6 +91,22 @@ bias'[oc] = bias[oc] − 128·Σw[oc] − 16384·N     // 权重修正折叠进 
 个输出向量通过 raw FNV（`0x8F1602CE`）和 7 个探针向量验证。这证明 DMP 不是只对
 合成小张量有效，而是已通过真实 TFLite 数据链的逐层验证。
 
+## 3.1 实板验证
+
+独立板级工程 `gestureflow_body2_dmp_7020_v1` 已完成 Vivado 25MHz 布线、XSA 导出、
+ARM ELF 编译与 XSCT 烧录：
+
+```text
+GESTUREFLOW_BODY2_DMP_BOARD_PASS
+FINAL_RESULT = 0x600D600D
+PROBE[08]    = 0x7E276C7B
+PROBE[05]    = 0x0005C87F   # 约 379007 cycles
+```
+
+时序签核：`All user specified timing constraints are met.`，Setup 0 failing
+endpoints，Worst Slack 20.672ns；Hold 0 failing endpoints，Worst Slack 0.039ns。
+这说明 DMP 双乘数据链已经在真实 7020 上运行，不再是纯仿真假设。
+
 软件数据链路由 `innovation_npu/tools/export_dmp_conv_layer.py` 完成：它从 TFLite
 卷积提取权重/bias，补零到 8 通道边界，输出 192 bit 权重 bank 的 6×32 bit DMA 字，
 并把 `(input_zp + 128)*sum(w) + 16384*N` 折叠进 bias。工具在写文件前会用随机数据
