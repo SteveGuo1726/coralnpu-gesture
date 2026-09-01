@@ -138,7 +138,16 @@ module gestureflow_layer_chain_dmp_hp0_axil #(
       $error("POOL_BANK_ADDR_W must be in [1, OUTPUT_ADDR_W]");
   end
 
-  logic [31:0] awaddr, wdata; logic [3:0] wstrb; logic aw_seen, w_seen;
+  // The AXI-Lite write-data/address registers fan out to every bias-bank,
+  // per-channel multiplier and mode-config register across the whole die.
+  // At 80 MHz the wdata_reg[8] -> bias_bank_reg[*][*][8] net became the worst
+  // setup path (11.8 ns, 96.8% routing, zero logic levels).  max_fanout asks
+  // synthesis to replicate these registers per physical region, trading a few
+  // extra FFs for dramatically shorter, lower-fanout routing.
+  (* max_fanout = 16 *) logic [31:0] awaddr;
+  (* max_fanout = 16 *) logic [31:0] wdata;
+  (* max_fanout = 16 *) logic [3:0] wstrb;
+  logic aw_seen, w_seen;
   logic running, done, fault;
   logic [2:0] layer_mode;
   logic dma_start, dma_clear, store_start, store_clear, store_enable, store_pool_2x2;
