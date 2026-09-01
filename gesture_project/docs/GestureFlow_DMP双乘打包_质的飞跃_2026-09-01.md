@@ -128,6 +128,10 @@ PROBE[05]    = 0x0005C92D
 `9635 slices required > 9040 available`，无法放入 7020。因此整网 DMP 必须走
 8-lane 数据通路并同步修改权重 DMA/软件，不能只替换 MAC tile。
 
+当前已补齐 DMP 专用权重 DMA loader：`gestureflow_hp0_weight_dma_loader_dmp.sv`
+会把 DDR 中连续 6 个 32bit word 组装成 192bit weight-bank word，并用
+`weight_write_pair/tap/ic_group` 坐标提交。
+
 软件数据链路由 `innovation_npu/tools/export_dmp_conv_layer.py` 完成：它从 TFLite
 卷积提取权重/bias，补零到 8 通道边界，输出 192 bit 权重 bank 的 6×32 bit DMA 字，
 并把 `(input_zp + 128)*sum(w) + 16384*N` 折叠进 bias。工具在写文件前会用随机数据
