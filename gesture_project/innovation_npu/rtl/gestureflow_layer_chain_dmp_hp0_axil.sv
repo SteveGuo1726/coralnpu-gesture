@@ -15,9 +15,10 @@ module gestureflow_layer_chain_dmp_hp0_axil #(
   parameter int OUTPUTS = IMAGE_WIDTH * IMAGE_HEIGHT,
   parameter int OUT_LANES = 16,
   // Quantization is a tail operation, while convolution is the throughput
-  // driver. One lane keeps the 7020 tail compact and removes the wide
-  // variable-shift fanout from the routed critical path.
-  parameter int REQUANT_PARALLEL_LANES = 1,
+  // driver. Four lanes keep the 7020 tail compact, add only three DSP48E1
+  // blocks, and remove the per-vector 16-cycle serial requantization stall
+  // that limited the DMP body layers. This is the production 80 MHz build.
+  parameter int REQUANT_PARALLEL_LANES = 4,
   parameter int OUTPUT_ADDR_W = 14,
   // Pooling reads the pre-pool source tensor. The production HaGRID-18
   // schedule uses at most 48x48 source vectors, so it does not need the

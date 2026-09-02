@@ -13,6 +13,9 @@ proc dump_hagrid18_dmp_diagnostics {} {
   foreach {name address} {
     STATUS 0x43c0000c
     LAYER_MODE 0x43c00064
+    CYCLES 0x43c00034
+    OUTPUT_VECTORS 0x43c0003c
+    OUTPUT_FNV1A 0x43c00040
     DMA_SOURCE 0x43c00044
     DMA_BYTES 0x43c00048
     DMA_PIXELS 0x43c0004c
