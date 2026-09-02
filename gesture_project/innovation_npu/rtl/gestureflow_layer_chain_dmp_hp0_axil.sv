@@ -919,14 +919,17 @@ module gestureflow_layer_chain_dmp_hp0_axil #(
       if (running) layer_cycles <= layer_cycles + 1'b1;
       if (protocol_error || quant_fault || dma_fault || store_fault || weight_dma_fault) fault <= 1'b1;
       if (hash_active) begin
-        hash_value <= fnv_step(hash_value, hash_vector[hash_byte_index*8 +: 8]);
-        if (hash_byte_index == 15) begin
-          completed_hash <= fnv_step(hash_value, hash_vector[hash_byte_index*8 +: 8]); hash_active <= 0;
+        hash_value <= fnv_step(fnv_step(hash_value, hash_vector[hash_byte_index*8 +: 8]),
+                               hash_vector[(hash_byte_index + 1'b1)*8 +: 8]);
+        if (hash_byte_index == 5'd14) begin
+          completed_hash <= fnv_step(fnv_step(hash_value, hash_vector[hash_byte_index*8 +: 8]),
+                                     hash_vector[(hash_byte_index + 1'b1)*8 +: 8]);
+          hash_active <= 0;
           if (last_output_seen) begin
             if (store_enable && !stream_store_mode) store_start <= 1'b1;
             else if (!store_enable) begin running<=0; done<=1; end
           end
-        end else hash_byte_index <= hash_byte_index + 1'b1;
+        end else hash_byte_index <= hash_byte_index + 2'd2;
       end
       if (output_write_valid) begin
         if (hash_active) fault <= 1'b1;
