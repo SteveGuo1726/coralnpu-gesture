@@ -257,6 +257,7 @@ module gestureflow_layer_chain_dmp_hp0_axil #(
   logic [31:0] hash_value, completed_hash; logic hash_active, last_output_seen; logic [13:0] output_vectors;
   logic [127:0] pending_hash_vector; logic pending_hash_valid;
   logic store_busy, store_done, store_fault; logic [13:0] store_vectors_written;
+  logic [7:0] fault_source;
   logic [31:0] store_bytes_written; logic [13:0] output_read_addr; logic output_read_enable;
   logic legacy_store_busy, legacy_store_done, legacy_store_fault;
   logic [13:0] legacy_store_vectors_written; logic [31:0] legacy_store_bytes_written;
@@ -919,7 +920,10 @@ module gestureflow_layer_chain_dmp_hp0_axil #(
         default: begin end
       endcase
       if (running) layer_cycles <= layer_cycles + 1'b1;
-      if (protocol_error || quant_fault || dma_fault || store_fault || weight_dma_fault) fault <= 1'b1;
+      if (protocol_error || quant_fault || dma_fault || store_fault || weight_dma_fault) begin
+        fault <= 1'b1;
+        fault_source <= {3'd0, weight_dma_fault, store_fault, dma_fault, quant_fault, protocol_error};
+      end
       if (hash_active) begin
         hash_value <= fnv_step(hash_value, hash_vector[hash_byte_index*8 +: 8]);
         if (hash_byte_index == 15) begin
@@ -1119,7 +1123,7 @@ module gestureflow_layer_chain_dmp_hp0_axil #(
           POST_QCFG:s_axi_rdata<={8'd0,post_fc_output_zero_point,post_gap_output_zero_point,post_gap_input_zero_point};
           POST_GAP_FNV1A:s_axi_rdata<=post_gap_fnv1a; POST_FC_FNV1A:s_axi_rdata<=post_fc_fnv1a;
           POST_CLASS:s_axi_rdata<={15'd0,post_fc_values_done,post_gap_values_done,post_predicted_class}; POST_CYCLES:s_axi_rdata<=post_cycles;
-          POST_PROGRESS:s_axi_rdata<={17'd0,post_fc_values_done,post_gap_values_done,post_busy,post_fault,post_done};
+          POST_PROGRESS:s_axi_rdata<={24'd0,fault_source};
           POST_DEBUG_GAP_SUM0:s_axi_rdata<=post_debug_gap_sum0; POST_DEBUG_GAP_SUM6:s_axi_rdata<=post_debug_gap_sum6;
           POST_DEBUG_FC0:s_axi_rdata<={{24{post_debug_fc_value[0][7]}},post_debug_fc_value[0]};
           POST_DEBUG_FC1:s_axi_rdata<={{24{post_debug_fc_value[1][7]}},post_debug_fc_value[1]};

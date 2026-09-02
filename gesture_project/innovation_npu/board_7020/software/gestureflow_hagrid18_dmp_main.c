@@ -201,10 +201,13 @@ static void prefetch_abort(void *unused)
 
 static void wait_layer_done(void)
 {
-    u32 poll, status = 0U;
+    u32 poll, status = 0U, first_bad = 0U;
     for (poll = 0U; poll < 12000000U; ++poll) {
         status = Xil_In32(GF_BASE + GF_STATUS);
-        if (status & (GF_FAULT_BIT | GF_LAYER_FAULT_BIT)) terminal_failure(0x4001U, status);
+        if (status & (GF_FAULT_BIT | GF_LAYER_FAULT_BIT)) {
+            if (first_bad == 0U) first_bad = status;
+            terminal_failure(0x4001U, first_bad);
+        }
         if (status & GF_DONE_BIT) return;
     }
     terminal_failure(0x4002U, status);
