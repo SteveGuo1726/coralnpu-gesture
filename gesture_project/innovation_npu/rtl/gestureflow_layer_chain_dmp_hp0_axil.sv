@@ -255,7 +255,6 @@ module gestureflow_layer_chain_dmp_hp0_axil #(
   logic [127:0] relay_bank_read_data, hash_vector;
   logic [4:0] hash_byte_index;
   logic [31:0] hash_value, completed_hash; logic hash_active, last_output_seen; logic [13:0] output_vectors;
-  logic [127:0] pending_hash_vector; logic pending_hash_valid;
   logic store_busy, store_done, store_fault; logic [13:0] store_vectors_written;
   logic [31:0] store_bytes_written; logic [13:0] output_read_addr; logic output_read_enable;
   logic legacy_store_busy, legacy_store_done, legacy_store_fault;
@@ -829,7 +828,6 @@ module gestureflow_layer_chain_dmp_hp0_axil #(
       requant_enable<=0; requant_relu_enable<=0; requant_index<=0; requant_multiplier<='0; requant_right_shift<='0;
       post_gap_multiplier<=0; post_gap_right_shift<=0; post_gap_input_zero_point<=0; post_gap_output_zero_point<=0; post_fc_output_zero_point<=0;
       hash_active<=0; last_output_seen<=0; hash_vector<='0; hash_byte_index<=0; hash_value<=FNV_OFFSET;
-      pending_hash_valid<=1'b0; pending_hash_vector<='0;
       completed_hash<=FNV_OFFSET; output_vectors<=0;
       weight_key<=0; weight_resident_key<=0; weight_write_count<=0; weight_hit_count<=0;
       weight_miss_count<=0; weight_bytes<=0; weight_keyed_mode<=0; weight_resident_valid<=0; weight_key_hit<=0;
@@ -921,30 +919,21 @@ module gestureflow_layer_chain_dmp_hp0_axil #(
       if (running) layer_cycles <= layer_cycles + 1'b1;
       if (protocol_error || quant_fault || dma_fault || store_fault || weight_dma_fault) fault <= 1'b1;
       if (hash_active) begin
-        hash_value <= fnv_step(hash_value, hash_vector[hash_byte_index*8 +: 8]);
-        if (hash_byte_index == 15) begin
-          completed_hash <= fnv_step(hash_value, hash_vector[hash_byte_index*8 +: 8]);
-          if (pending_hash_valid) begin
-            hash_vector <= pending_hash_vector;
-            hash_byte_index <= 0;
-            pending_hash_valid <= 1'b0;
-          end else begin
-            hash_active <= 1'b0;
-            if (last_output_seen) begin
-              if (store_enable && !stream_store_mode) store_start <= 1'b1;
-              else if (!store_enable) begin running<=0; done<=1; end
-            end
+        hash_value <= fnv_step(fnv_step(hash_value, hash_vector[hash_byte_index*8 +: 8]),
+                               hash_vector[(hash_byte_index + 1'b1)*8 +: 8]);
+        if (hash_byte_index == 5'd14) begin
+          completed_hash <= fnv_step(fnv_step(hash_value, hash_vector[hash_byte_index*8 +: 8]),
+                                     hash_vector[(hash_byte_index + 1'b1)*8 +: 8]);
+          hash_active <= 0;
+          if (last_output_seen) begin
+            if (store_enable && !stream_store_mode) store_start <= 1'b1;
+            else if (!store_enable) begin running<=0; done<=1; end
           end
-        end else hash_byte_index <= hash_byte_index + 1'b1;
+        end else hash_byte_index <= hash_byte_index + 2'd2;
       end
       if (output_write_valid) begin
-        if (hash_active) begin
-          pending_hash_vector <= output_write_data[15:0];
-          pending_hash_valid <= 1'b1;
-        end else begin
-          hash_vector <= output_write_data[15:0]; hash_byte_index<=0; hash_active<=1;
-        end
-        output_vectors<=output_vectors+1'b1;
+        if (hash_active) fault <= 1'b1;
+        hash_vector <= output_write_data[15:0]; hash_byte_index<=0; hash_active<=1; output_vectors<=output_vectors+1'b1;
         if (output_vectors == 14'(dma_pixels-1'b1)) last_output_seen<=1;
       end
       if (s_axi_awvalid && s_axi_awready) begin awaddr<=s_axi_awaddr; aw_seen<=1; end
@@ -955,7 +944,6 @@ module gestureflow_layer_chain_dmp_hp0_axil #(
             if (wdata[0]) begin
               running<=0; done<=0; fault<=0; dma_clear<=1; post_clear<=1; store_clear<=1;
               hash_active<=0; last_output_seen<=0; hash_value<=FNV_OFFSET; completed_hash<=FNV_OFFSET;
-              pending_hash_valid<=1'b0; pending_hash_vector<='0;
               layer_cycles<=0; output_vectors<=0; descriptor_active<=0; desc_state<=DESC_IDLE;
             end
             if (wdata[1]) begin
@@ -969,7 +957,7 @@ module gestureflow_layer_chain_dmp_hp0_axil #(
                   requant_multiplier[pi] <= requant_multiplier_bank[param_bank_select][pi];
                   requant_right_shift[pi] <= requant_right_shift_bank[param_bank_select][pi];
                 end
-                running<=1; done<=0; fault<=0; if (layer_mode == 4) post_start<=1; else dma_start<=1; hash_active<=0; last_output_seen<=0; hash_value<=FNV_OFFSET; completed_hash<=FNV_OFFSET; pending_hash_valid<=1'b0; pending_hash_vector<='0; layer_cycles<=0; output_vectors<=0;
+                running<=1; done<=0; fault<=0; if (layer_mode == 4) post_start<=1; else dma_start<=1; hash_active<=0; last_output_seen<=0; hash_value<=FNV_OFFSET; completed_hash<=FNV_OFFSET; layer_cycles<=0; output_vectors<=0;
               end
             end
           end
