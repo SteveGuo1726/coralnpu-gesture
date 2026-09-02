@@ -119,6 +119,7 @@
 #define GF_WEIGHT_DMA_FAULT_BIT (1U << 2)
 #define GF_DMA_BYTES_READ(value) ((value) >> 3)
 #define GF_STORE_BYTES_WRITTEN(value) ((value) >> 3)
+#define GF_RUNNING_BIT (1U << 0)
 
 /* 18-class tensor sizes. */
 #define GF_RGB_BYTES (96U * 96U * 3U)
@@ -208,7 +209,7 @@ static void wait_layer_done(void)
             if (first_bad == 0U) first_bad = status;
             terminal_failure(0x4001U, first_bad);
         }
-        if (status & GF_DONE_BIT) return;
+        if ((status & GF_DONE_BIT) && !(status & GF_RUNNING_BIT)) return;
     }
     terminal_failure(0x4002U, status);
 }
