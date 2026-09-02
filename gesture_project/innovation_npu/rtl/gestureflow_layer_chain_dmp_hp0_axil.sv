@@ -258,6 +258,7 @@ module gestureflow_layer_chain_dmp_hp0_axil #(
   logic [127:0] pending_hash_vector; logic pending_hash_valid;
   logic store_busy, store_done, store_fault; logic [13:0] store_vectors_written;
   logic [7:0] fault_source;
+  logic [11:0] last_write_addr;
   logic [31:0] store_bytes_written; logic [13:0] output_read_addr; logic output_read_enable;
   logic legacy_store_busy, legacy_store_done, legacy_store_fault;
   logic [13:0] legacy_store_vectors_written; logic [31:0] legacy_store_bytes_written;
@@ -954,6 +955,7 @@ module gestureflow_layer_chain_dmp_hp0_axil #(
       if (s_axi_awvalid && s_axi_awready) begin awaddr<=s_axi_awaddr; aw_seen<=1; end
       if (s_axi_wvalid && s_axi_wready) begin wdata<=s_axi_wdata; wstrb<=s_axi_wstrb; w_seen<=1; end
       if (aw_seen && w_seen && !s_axi_bvalid) begin
+        last_write_addr <= awaddr[11:0];
         case (awaddr[11:0])
           CONTROL: begin
             if (wdata[0]) begin
@@ -1123,7 +1125,7 @@ module gestureflow_layer_chain_dmp_hp0_axil #(
           POST_QCFG:s_axi_rdata<={8'd0,post_fc_output_zero_point,post_gap_output_zero_point,post_gap_input_zero_point};
           POST_GAP_FNV1A:s_axi_rdata<=post_gap_fnv1a; POST_FC_FNV1A:s_axi_rdata<=post_fc_fnv1a;
           POST_CLASS:s_axi_rdata<={15'd0,post_fc_values_done,post_gap_values_done,post_predicted_class}; POST_CYCLES:s_axi_rdata<=post_cycles;
-          POST_PROGRESS:s_axi_rdata<={24'd0,fault_source};
+          POST_PROGRESS:s_axi_rdata<={20'd0,last_write_addr};
           POST_DEBUG_GAP_SUM0:s_axi_rdata<=post_debug_gap_sum0; POST_DEBUG_GAP_SUM6:s_axi_rdata<=post_debug_gap_sum6;
           POST_DEBUG_FC0:s_axi_rdata<={{24{post_debug_fc_value[0][7]}},post_debug_fc_value[0]};
           POST_DEBUG_FC1:s_axi_rdata<={{24{post_debug_fc_value[1][7]}},post_debug_fc_value[1]};
