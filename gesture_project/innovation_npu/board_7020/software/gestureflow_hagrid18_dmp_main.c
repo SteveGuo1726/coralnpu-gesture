@@ -682,6 +682,16 @@ int main(void)
     for (index = 0U; index < 3U; ++index) pl_cycles_total += conv4_cycles[index] + pool3_cycles[index];
     for (index = 0U; index < 4U; ++index) pl_cycles_total += head1x1_cycles[index];
     store_probe(130U, frame_ticks); store_probe(131U, weight_ticks32); store_probe(133U, pl_cycles_total);
+    /* Per-layer cycle breakdown for performance profiling. */
+    store_probe(10U, cycles0);
+    store_probe(11U, pool_cycles);
+    store_probe(12U, conv2_cycles[0]); store_probe(13U, conv2_cycles[1]);
+    store_probe(14U, pool2_cycles[0]); store_probe(15U, pool2_cycles[1]);
+    store_probe(16U, conv4_cycles[0]); store_probe(17U, conv4_cycles[1]); store_probe(18U, conv4_cycles[2]);
+    store_probe(19U, pool3_cycles[0]); store_probe(20U, pool3_cycles[1]); store_probe(21U, pool3_cycles[2]);
+    store_probe(22U, head1x1_cycles[0]); store_probe(23U, head1x1_cycles[1]);
+    store_probe(24U, head1x1_cycles[2]); store_probe(25U, head1x1_cycles[3]);
+    store_probe(26U, gap_fc_cycles);
     store_probe(0U, GF_RESULT_PASS);
     xil_printf("GESTUREFLOW_HAGRID18_BOARD_PASS frame_ticks=%lu weight_ticks=%lu pl_cycles=%lu gap=%08lx fc=%08lx class=%lu\r\n",
                (unsigned long)frame_ticks, (unsigned long)weight_ticks32, (unsigned long)pl_cycles_total,
