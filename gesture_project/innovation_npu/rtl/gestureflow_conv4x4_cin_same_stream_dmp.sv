@@ -66,6 +66,8 @@ module gestureflow_conv4x4_cin_same_stream_dmp #(
   logic signed [INPUT_CHANNELS-1:0][7:0] held_pixel;
   logic [15:0] window_row;
   logic [15:0] window_column;
+  logic [15:0] result_row;
+  logic [15:0] result_column;
   logic [15:0] held_row;
   logic [15:0] held_column;
   logic [15:0] point_next_row;
@@ -86,8 +88,8 @@ module gestureflow_conv4x4_cin_same_stream_dmp #(
     if ((OUT_LANES % 2) != 0) $error("OUT_LANES must be even for DMP pairs");
   end
 
-  assign spatial_window_ready = !pointwise_mode && !pending_window && !mac_active && !busy && !output_valid;
-  assign point_pixel_ready = point_active && !pending_window && !mac_active && !busy && !output_valid;
+  assign spatial_window_ready = !pointwise_mode && !pending_window && !mac_active;
+  assign point_pixel_ready = point_active && !pending_window && !mac_active;
   assign point_pixel_accept = pointwise_mode && pixel_valid && point_pixel_ready;
   assign pixel_ready = pointwise_mode ? point_pixel_ready : spatial_pixel_ready;
   assign frame_input_done = pointwise_mode ? point_frame_done_pulse : spatial_frame_done;
@@ -113,8 +115,6 @@ module gestureflow_conv4x4_cin_same_stream_dmp #(
         tile_activation[lane] = held_window[int'(ic_group_index) * 8 + lane][tap_index];
       end
     end
-    output_row = held_row;
-    output_column = held_column;
   end
 
   gestureflow_mac_tile_dmp #(
@@ -124,7 +124,8 @@ module gestureflow_conv4x4_cin_same_stream_dmp #(
     .weight_write_pair(weight_write_pair), .weight_write_tap(weight_write_tap),
     .weight_write_ic_group(weight_write_ic_group), .weight_write_data(weight_write_data),
     .weight_bank_select(weight_bank_select), .read_bank_select(read_bank_select),
-    .start_valid(pending_window), .start_ready(tile_start_ready), .bias(bias),
+    .start_valid(pending_window), .start_ready(tile_start_ready),
+    .window_row(held_row), .window_column(held_column), .bias(bias),
     .output_lane_enable(output_lane_enable), .mac_valid(mac_active), .mac_ready(tile_mac_ready),
     .mac_tap(pointwise_mode ? 4'd0 : tap_index), .mac_ic_group(ic_group_index),
     .activation(tile_activation), .input_lane_enable(input_lane_enable),
@@ -133,8 +134,13 @@ module gestureflow_conv4x4_cin_same_stream_dmp #(
       ((tap_index == 4'(ACTIVE_TAPS - 1)) &&
        (ic_group_index == IC_GROUP_W'(input_group_count - 1'b1)))),
     .result_valid(output_valid), .result_ready(output_ready), .result_psum(output_psum),
-    .result_lane_enable(output_lane_enable_valid), .busy(busy), .protocol_error(protocol_error)
+    .result_lane_enable(output_lane_enable_valid),
+    .result_row(result_row), .result_column(result_column),
+    .busy(busy), .protocol_error(protocol_error)
   );
+
+  assign output_row = result_row;
+  assign output_column = result_column;
 
   always_ff @(posedge clk) begin
     if (!rst_n) begin
@@ -184,7 +190,7 @@ module gestureflow_conv4x4_cin_same_stream_dmp #(
           point_next_column <= point_next_column + 1'b1;
         end
       end
-      if (pending_window && tile_start_ready) begin
+      if (pending_window && tile_start_ready && !mac_active) begin
         pending_window <= 1'b0;
         mac_active <= 1'b1;
         tap_index <= '0;
