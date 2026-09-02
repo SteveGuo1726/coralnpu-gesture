@@ -37,8 +37,6 @@ module gestureflow_mac_tile_dmp #(
 
   input  logic start_valid,
   output logic start_ready,
-  input  logic [15:0] window_row,
-  input  logic [15:0] window_column,
   input  logic signed [OUT_LANES-1:0][31:0] bias,
   input  logic [OUT_LANES-1:0] output_lane_enable,
 
@@ -54,8 +52,6 @@ module gestureflow_mac_tile_dmp #(
   input  logic result_ready,
   output logic signed [OUT_LANES-1:0][31:0] result_psum,
   output logic [OUT_LANES-1:0] result_lane_enable,
-  output logic [15:0] result_row,
-  output logic [15:0] result_column,
   output logic busy,
   output logic protocol_error
 );
@@ -67,19 +63,9 @@ module gestureflow_mac_tile_dmp #(
   localparam int PAIR_COUNT = INPUT_LANES / 2;
   localparam int QUAD_COUNT = PAIR_COUNT / 2;
 
-  // Multi-window streaming: per-window accumulator state is double-buffered
-  // so the next window's first group can enter while the previous window's
-  // tail drains.  A 1-bit window id toggles at each start and travels with the
-  // pipeline; a small active-window counter replaces the single busy flag so
-  // one window's retire cannot clear the busy state of an overlapping one.
-  logic signed [1:0][OUT_LANES-1:0][31:0] accum;
-  logic [1:0][OUT_LANES-1:0] active_output_lanes;
-  logic signed [1:0][31:0] activation_sum;
-  logic [1:0][15:0] window_row_reg;
-  logic [1:0][15:0] window_column_reg;
-  logic [1:0] windows_active;
-  logic cur_win_id;
-  logic s0_id, s1_id, product_id, pair_id, quad_id, oct_id, retire_id;
+  logic signed [OUT_LANES-1:0][31:0] accum;
+  logic [OUT_LANES-1:0] active_output_lanes;
+  logic signed [31:0] activation_sum;
 
   logic [WEIGHT_ADDR_W:0] weight_write_addr;
   logic [WEIGHT_ADDR_W-1:0] mac_weight_addr;
@@ -202,33 +188,20 @@ module gestureflow_mac_tile_dmp #(
     end
   end
 
-  assign busy = (windows_active != 2'd0);
-  // A new window launches as soon as the s0 input stage is free and no result
-  // is still parked on the requant handshake.  Per-window state is double
-  // buffered, so the previous window's tail drains in parallel with the next
-  // window's fill, removing the per-window pipeline drain bubble.
-  assign start_ready = !s0_valid && !retire_valid && !result_valid;
-  // A new input group is accepted every cycle the tile has an active window
-  // and the result register is free; the fixed shift register backpressures
-  // naturally because s0 is only captured on mac_ready.
-  assign mac_ready = (windows_active != 2'd0) && !retire_valid && !result_valid;
+  assign start_ready = !busy && !s0_valid && !s1_valid && !product_valid &&
+                       !pair_valid && !quad_valid && !oct_valid && !retire_valid && !result_valid;
+  // The last input group may be in any of the five pipeline stages.  Once it
+  // is accepted, no later group enters until the result has retired.
+  assign mac_ready = busy && !result_valid &&
+    !(s0_valid && s0_last) && !(s1_valid && s1_last) &&
+    !(product_valid && product_last) && !(pair_valid && pair_last) &&
+    !(quad_valid && quad_last) && !(oct_valid && oct_last) && !retire_valid;
 
   always_ff @(posedge clk) begin
     if (!rst_n) begin
       accum <= '0;
       activation_sum <= '0;
       active_output_lanes <= '0;
-      window_row_reg <= '0;
-      window_column_reg <= '0;
-      windows_active <= 2'd0;
-      cur_win_id <= 1'b0;
-      s0_id <= 1'b0;
-      s1_id <= 1'b0;
-      product_id <= 1'b0;
-      pair_id <= 1'b0;
-      quad_id <= 1'b0;
-      oct_id <= 1'b0;
-      retire_id <= 1'b0;
       activation_s0 <= '0;
       activation_s1 <= '0;
       activation_group_sum_s1 <= '0;
@@ -265,6 +238,7 @@ module gestureflow_mac_tile_dmp #(
       result_valid <= 1'b0;
       result_psum <= '0;
       result_lane_enable <= '0;
+      busy <= 1'b0;
       protocol_error <= 1'b0;
     end else begin
       if (weight_write_valid && busy && (weight_bank_select == read_bank_select)) begin
@@ -273,37 +247,41 @@ module gestureflow_mac_tile_dmp #(
       if (result_valid && result_ready) begin
         result_valid <= 1'b0;
       end
+      if (retire_valid) begin
+        retire_valid <= 1'b0;
+      end
+      if (start_valid && !start_ready) begin
+        protocol_error <= 1'b1;
+      end
+      if (mac_valid && !mac_ready) begin
+        protocol_error <= 1'b1;
+      end
 
       if (start_valid && start_ready) begin
-        cur_win_id <= !cur_win_id;
-        accum[!cur_win_id] <= bias;
-        activation_sum[!cur_win_id] <= '0;
-        active_output_lanes[!cur_win_id] <= output_lane_enable;
-        window_row_reg[!cur_win_id] <= window_row;
-        window_column_reg[!cur_win_id] <= window_column;
-        windows_active <= windows_active + 2'd1;
+        accum <= bias;
+        activation_sum <= '0;
+        active_output_lanes <= output_lane_enable;
+        busy <= 1'b1;
       end
 
       // Stage 0: capture the weight address, activation group and the shared
       // signed activation sum used by the final DMP correction.
       s0_valid <= 1'b0;
       if (mac_valid && mac_ready) begin
-        s0_id <= cur_win_id;
         activation_s0 <= activation;
         input_lane_enable_s0 <= input_lane_enable;
         weight_addr_s0 <= {read_bank_select, mac_weight_addr};
-        output_lanes_s0 <= active_output_lanes[cur_win_id];
+        output_lanes_s0 <= active_output_lanes;
         s0_last <= mac_last;
         s0_valid <= 1'b1;
       end
 
       // Stage 1: synchronous packed-weight read; activation moves with it.
       s1_valid <= s0_valid;
-      s1_id <= s0_id;
       s1_last <= s0_last;
       activation_group_sum_s1 <= activation_group_sum_s0;
       if (s1_valid) begin
-        activation_sum[s1_id] <= activation_sum[s1_id] + activation_group_sum_s1;
+        activation_sum <= activation_sum + activation_group_sum_s1;
       end
       activation_s1 <= activation_s0;
       input_lane_enable_s1 <= input_lane_enable_s0;
@@ -311,7 +289,6 @@ module gestureflow_mac_tile_dmp #(
 
       // Stage 2: register the 25x18 DMP products.
       product_valid <= s1_valid;
-      product_id <= s1_id;
       product_last <= s1_last;
       product_output_lanes <= output_lanes_s1;
       if (s1_valid) begin
@@ -320,7 +297,6 @@ module gestureflow_mac_tile_dmp #(
 
       // Stage 3: reduce pairs of low and high DMP products.
       pair_valid <= product_valid;
-      pair_id <= product_id;
       pair_last <= product_last;
       pair_output_lanes <= product_output_lanes;
       if (product_valid) begin
@@ -338,7 +314,6 @@ module gestureflow_mac_tile_dmp #(
 
       // Stage 4: reduce the four pair sums to two quad sums.
       quad_valid <= pair_valid;
-      quad_id <= pair_id;
       quad_last <= pair_last;
       quad_output_lanes <= pair_output_lanes;
       if (pair_valid) begin
@@ -356,7 +331,6 @@ module gestureflow_mac_tile_dmp #(
 
       // Stage 5: complete the eight-way add tree.
       oct_valid <= quad_valid;
-      oct_id <= quad_id;
       oct_last <= quad_last;
       oct_output_lanes <= quad_output_lanes;
       if (quad_valid) begin
@@ -376,9 +350,8 @@ module gestureflow_mac_tile_dmp #(
       // two-term add (fewer clock-enable control sets, shorter carry path).
       if (oct_valid) begin
         for (int oc = 0; oc < OUT_LANES; oc++) begin
-          accum[oct_id][oc] <= accum[oct_id][oc] + oct_contrib_ext[oc];
+          accum[oc] <= accum[oc] + oct_contrib_ext[oc];
         end
-        retire_id <= oct_id;
         retire_valid <= oct_last;
         retire_output_lanes <= oct_output_lanes;
       end
@@ -386,16 +359,13 @@ module gestureflow_mac_tile_dmp #(
       // Stage 7: apply the shared signed-activation correction as a second
       // two-term 32-bit subtraction.  accum already contains the final group
       // because stage 6 updated it one cycle earlier.
-      if (retire_valid && !result_valid) begin
+      if (retire_valid) begin
         for (int oc = 0; oc < OUT_LANES; oc++) begin
-          result_psum[oc] <= accum[retire_id][oc] - (activation_sum[retire_id] <<< 7);
+          result_psum[oc] <= accum[oc] - (activation_sum <<< 7);
         end
         result_lane_enable <= retire_output_lanes;
-        result_row <= window_row_reg[retire_id];
-        result_column <= window_column_reg[retire_id];
         result_valid <= 1'b1;
-        retire_valid <= 1'b0;
-        windows_active <= windows_active - 2'd1;
+        busy <= 1'b0;
       end
     end
   end
