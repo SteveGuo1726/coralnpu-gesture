@@ -522,16 +522,30 @@ static int copy_weights(void)
 
 int gf_npu_load_weights(void)
 {
-    size_t bytes_needed = sizeof gf_dmp_full_weights_dma + sizeof gf_dmp_body2_weights_dma +
-                          sizeof gf_dmp_conv2a_weights_dma + sizeof gf_dmp_conv2b_weights_dma +
-                          sizeof gf_dmp_conv3a_weights_dma + sizeof gf_dmp_conv3b_weights_dma +
-                          sizeof gf_dmp_head1x1_weights_dma +
-                          GF_RGB_BYTES + GF_ACTIVATION_BYTES + GF_POOL1_BYTES +
-                          GF_CONV2_BYTES + GF_CONV3_BYTES + GF_POOL2_BYTES +
-                          GF_CONV4_BYTES + GF_CONV5_BYTES + GF_POOL3_BYTES +
-                          GF_HEAD1X1_BYTES + (32U * 4096U);   /* alignment slack */
+    /* Upper bound on what the arena must hold: every weight image plus every
+     * tensor, with alignment slack.  Checked here so that a future tensor
+     * outgrowing the device-tree reserved-memory size fails loudly instead of
+     * silently walking off the mapping. */
+    const size_t bytes_needed =
+        sizeof gf_dmp_full_weights_dma + sizeof gf_dmp_body2_weights_dma +
+        sizeof gf_dmp_conv2a_weights_dma + sizeof gf_dmp_conv2b_weights_dma +
+        sizeof gf_dmp_conv3a_weights_dma + sizeof gf_dmp_conv3b_weights_dma +
+        sizeof gf_dmp_head1x1_weights_dma +
+        (10U * 4096U) +                       /* 10 tensors, 4 KiB alignment each */
+        GF_RGB_BYTES + GF_ACTIVATION_BYTES + GF_POOL1_BYTES +
+        GF_CONV2_BYTES + GF_CONV3_BYTES + GF_POOL2_BYTES +
+        GF_CONV4_BYTES + GF_CONV5_BYTES + GF_POOL3_BYTES +
+        GF_HEAD1X1_BYTES;
 
     if (!g_bufs) return -1;
+
+    if (bytes_needed > (size_t)GF_BUF_SIZE) {
+        fprintf(stderr,
+                "gf_npu: device-tree scratch region too small: need %zu bytes, "
+                "have %u.\n        Widen the reserved-memory node in system-user.dtsi.\n",
+                bytes_needed, (unsigned)GF_BUF_SIZE);
+        return -1;
+    }
 
     g_arena_cur = g_bufs;
     g_arena_end = g_bufs + GF_BUF_SIZE;
@@ -550,11 +564,36 @@ int gf_npu_load_weights(void)
     g_pool3   = buf_alloc(GF_POOL3_BYTES,      4096U);
     g_head1x1 = buf_alloc(GF_HEAD1X1_BYTES,    4096U);
 
-    if (!g_in_rgb || !g_act1 || !g_pool1 || !g_conv2 || !g_conv3 ||
-        !g_pool2 || !g_conv4 || !g_conv5 || !g_pool3 || !g_head1x1) {
+    if (!g_head1x1 || !g_in_rgb || !g_act1 || !g_pool1 || !g_conv2 || !g_conv3 ||
+        !g_pool2 || !g_conv4 || !g_conv5 || !g_pool3) {
         fprintf(stderr, "gf_npu: scratch region too small for the activation pool\n");
         return -1;
     }
+
+    /* Zero the activation pool ONCE, here -- deliberately NOT per frame.
+     *
+     * The tiles cover their regions exactly (conv0 1x147456, conv1 1x36864,
+     * conv2a 2x36864, conv2b 2x9216, conv3a 3x9216, conv3b 3x2304, head
+     * 4x2304), and gf_npu_run_frame asserts the store byte counts, so
+     * per-frame zeroing is not needed for correctness.  It would however cost
+     * ~435 KB of *uncached* writes every frame -- precisely the class of
+     * CPU-side overhead this port exists to measure -- and would corrupt the
+     * V4 comparison against the baremetal 10.04 ms.  The baremetal driver did
+     * not zero either.  (Zeroing must not touch the weight images, which sit
+     * earlier in the same arena.)
+     *
+     * GF_CONV3 / GF_CONV5 are unused scratch in the current schedule; they are
+     * zeroed for a deterministic initial state only. */
+    memset(g_in_rgb,  0, GF_RGB_BYTES);
+    memset(g_act1,    0, GF_ACTIVATION_BYTES);
+    memset(g_pool1,   0, GF_POOL1_BYTES);
+    memset(g_conv2,   0, GF_CONV2_BYTES);
+    memset(g_conv3,   0, GF_CONV3_BYTES);
+    memset(g_pool2,   0, GF_POOL2_BYTES);
+    memset(g_conv4,   0, GF_CONV4_BYTES);
+    memset(g_conv5,   0, GF_CONV5_BYTES);
+    memset(g_pool3,   0, GF_POOL3_BYTES);
+    memset(g_head1x1, 0, GF_HEAD1X1_BYTES);
 
     printf("gf_npu: staged weights + activations, %u bytes used of %u MiB\n",
            (unsigned)(g_arena_cur - g_bufs), (unsigned)(GF_BUF_SIZE >> 20));
@@ -564,7 +603,6 @@ int gf_npu_load_weights(void)
            (unsigned)buf_phys(g_conv2), (unsigned)buf_phys(g_conv3), (unsigned)buf_phys(g_pool2),
            (unsigned)buf_phys(g_conv4), (unsigned)buf_phys(g_conv5), (unsigned)buf_phys(g_pool3),
            (unsigned)buf_phys(g_head1x1));
-    (void)bytes_needed;
     return 0;
 }
 
@@ -586,17 +624,14 @@ int gf_npu_run_frame(const uint8_t *rgb96, uint32_t *out_class, gf_npu_stats *st
     g_fail_msg[0] = '\0';
     t_start = now_ms();
 
-    /* Raw uint8 pixels.  The PL recenters to q = u - 128 itself. */
+    /* Raw uint8 pixels.  The PL recenters to q = u - 128 itself (see the note
+     * at the top of this file) -- do NOT subtract 128 here.
+     *
+     * Deliberately no per-frame memset of the intermediate tensors: it would be
+     * ~435 KB of uncached writes and would show up as CPU overhead in the very
+     * measurement V4 is about.  The tiles overwrite their regions completely
+     * and that is asserted by the byte-count checks below. */
     memcpy(g_in_rgb, rgb96, GF_RGB_BYTES);
-    memset(g_act1, 0, GF_ACTIVATION_BYTES);
-    memset(g_pool1, 0, GF_POOL1_BYTES);
-    memset(g_conv2, 0, GF_CONV2_BYTES);
-    memset(g_conv3, 0, GF_CONV3_BYTES);
-    memset(g_pool2, 0, GF_POOL2_BYTES);
-    memset(g_conv4, 0, GF_CONV4_BYTES);
-    memset(g_conv5, 0, GF_CONV5_BYTES);
-    memset(g_pool3, 0, GF_POOL3_BYTES);
-    memset(g_head1x1, 0, GF_HEAD1X1_BYTES);
 
     /* conv0: 3 -> 16 */
     cycles0 = exec_conv_tile(0U, buf_phys(g_in_rgb), GF_RGB_BYTES, buf_phys(g_act1),
