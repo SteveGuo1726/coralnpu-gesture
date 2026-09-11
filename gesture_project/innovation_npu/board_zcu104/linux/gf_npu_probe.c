@@ -36,29 +36,44 @@ static void print_stats(const gf_npu_stats *s, int print_layers)
         printf("    PL total         %10u cycles  (%.2f ms @100 MHz)\n",
                s->pl_cycles_total, s->pl_cycles_total / 100000.0);
 
-        printf("  checksums:\n");
-        printf("    hw FNV conv0     %10u  (expect %08X)\n",
-               s->hw_fnv_conv0, (unsigned)gf_npu_expected_fnv_conv0());
-        printf("    hw FNV pool1     %10u  (expect %08X)\n",
-               s->hw_fnv_pool1, (unsigned)gf_npu_expected_fnv_pool1());
-        printf("    sw FNV conv0     %10u\n", s->sw_fnv_conv0);
-        printf("    sw FNV pool1     %10u\n", s->sw_fnv_pool1);
-        printf("    sw FNV conv2     %10u\n", s->sw_fnv_conv2);
-        printf("    sw FNV pool2     %10u\n", s->sw_fnv_pool2);
-        printf("    sw FNV conv4     %10u\n", s->sw_fnv_conv4);
-        printf("    sw FNV pool3     %10u\n", s->sw_fnv_pool3);
-        printf("    sw FNV head1x1   %10u\n", s->sw_fnv_head1x1);
+        printf("  --- golden content checks (bit-exact memcmp) ---\n");
+        for (i = 0; i < GF_CHK_COUNT; ++i) {
+            printf("    %-6s %s\n", gf_npu_check_name[i],
+                   s->content_rc[i] == 0 ? "MATCH" : "*** MISMATCH ***");
+        }
+        printf("    %d/%d matched\n", s->content_checked - s->content_failed,
+               s->content_checked);
 
-        printf("  GAP/FC:\n");
-        printf("    gap FNV          %10u\n", s->gap_fnv);
-        printf("    fc  FNV          %10u\n", s->fc_fnv);
-        printf("    progress         %10u\n", s->gap_progress);
+        printf("  --- hardware FNV registers ---\n");
+        printf("    hw FNV conv0   %10u  (expect %08X)\n",
+               s->hw_fnv_conv0, (unsigned)gf_npu_expected_fnv_conv0());
+        printf("    hw FNV pool1   %10u  (expect %08X = pre-pool conv1 output)\n",
+               s->hw_fnv_pool1, (unsigned)gf_npu_expected_fnv_pool1());
+
+        printf("  --- software FNV1A of what the PL wrote (baseline) ---\n");
+        printf("    conv0 %10u   pool1 %10u   conv2 %10u\n",
+               s->sw_fnv_conv0, s->sw_fnv_pool1, s->sw_fnv_conv2);
+        printf("    pool2 %10u   conv4 %10u   pool3 %10u\n",
+               s->sw_fnv_pool2, s->sw_fnv_conv4, s->sw_fnv_pool3);
+        printf("    head  %10u   (no golden exists for this one)\n",
+               s->sw_fnv_head1x1);
+
+        printf("  --- GAP/FC ---\n");
+        printf("    gap FNV        %10u  (expect %08X)\n",
+               s->gap_fnv, (unsigned)gf_npu_expected_fnv_gap());
+        printf("    fc  FNV        %10u  (expect %08X)\n",
+               s->fc_fnv, (unsigned)gf_npu_expected_fnv_fc());
+        printf("    progress       %10u\n", s->gap_progress);
     }
-    printf("  CPU wall time      %10.2f ms  (of which weight DMA waits %10.2f ms)\n",
-           s->cpu_total_ms, s->weight_load_ms);
     printf("  ------------------------------------------------\n");
     printf("  PL compute         %10.2f ms\n", s->pl_cycles_total / 100000.0);
-    printf("  CPU overhead       %10.2f ms\n", s->cpu_total_ms - s->pl_cycles_total / 100000.0);
+    printf("  CPU total (wall)   %10.2f ms\n", s->cpu_total_ms);
+    printf("    of which checks  %10.2f ms   (memcmp+FNV1A; not part of P4's budget)\n",
+           s->cpu_checks_ms);
+    printf("    of which weights %10.2f ms\n", s->weight_load_ms);
+    printf("  CPU overhead       %10.2f ms   <- compare against the baremetal 10.04 ms\n",
+           s->cpu_total_ms - s->cpu_checks_ms - s->pl_cycles_total / 100000.0);
+    printf("  ------------------------------------------------\n");
 }
 
 static void write_ppm(const char *path)

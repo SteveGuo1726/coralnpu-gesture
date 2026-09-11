@@ -159,6 +159,76 @@ static uint32_t fnv1a(const void *data, size_t count)
     return value;
 }
 
+/* ---------------------------------------------------- content verification -- *
+ * Every stage's stored tensor is compared byte-for-byte against the golden
+ * array the exporter emitted next to that layer's weights.  This is stronger
+ * than what the baremetal driver did -- it only checked DMA byte counts for
+ * these six stages, and checked FNV registers for two of them.
+ *
+ * Which golden array belongs to which stage was established empirically by
+ * computing FNV1A over each exported array and matching the header macros:
+ *
+ *   stage   stored tensor bytes   golden array                 golden FNV1A
+ *   conv0   96x96x16   = 147456   gf_body2_layer_input         05307466  = GF_FULL_OUTPUT_FNV1A
+ *   pool1   48x48x16   =  36864   gf_pool_output               33B1A130  = GF_POOL_OUTPUT_FNV1A
+ *   conv2   48x48x32   =  73728   gf_conv2b_layer_input        90D6DF2F  = GF_CONV2A_OUTPUT_FNV1A
+ *   pool2   24x24x32   =  18432   gf_pool2_output              8439E9C9  = GF_POOL2_OUTPUT_FNV1A
+ *   conv4   24x24x48   =  27648   gf_conv3b_layer_input        591D321E  = GF_CONV3A_OUTPUT_FNV1A
+ *   pool3   12x12x16   =   6912   gf_pool3_output              D10D7766  = GF_POOL3_OUTPUT_FNV1A
+ *
+ * Worth knowing, because it is easy to misread: the hardware GF_OUTPUT_FNV1A
+ * register does NOT report the stored pooled tensor for a fused conv+pool
+ * layer.  After conv1 it reads GF_BODY2_OUTPUT_FNV1A = GF_POOL_INPUT_FNV1A =
+ * 0x7E276C7B, which is the FNV of the *pre-pool* conv output, not of
+ * gf_pool_output (0x33B1A130).  The baremetal driver's check is therefore on the
+ * MAC output stream, and the models tile's pooled result is verified here
+ * instead.
+ * --------------------------------------------------------------------------- */
+
+const char *const gf_npu_check_name[GF_CHK_COUNT] = {
+    "conv0", "pool1", "conv2", "pool2", "conv4", "pool3"
+};
+
+/* Returns 0 on bit-exact match, -1 otherwise.  `stats` may be NULL, in which
+ * case the check is skipped entirely -- that is the fast path used by the live
+ * camera loop, where a full-tensor memcmp on uncached memory every frame would
+ * dominate the CPU-side budget being measured. */
+static int verify_tensor(gf_npu_stats *stats, int chk, const int8_t *buf,
+                         size_t bytes, const int8_t *golden, const char *golden_name,
+                         uint32_t *out_fnv, double *checks_ms)
+{
+    double t0, t1;
+    size_t i;
+    int rc = 0;
+    uint32_t got;
+
+    if (g_fail || !stats) return 0;
+
+    t0 = now_ms();
+    got = fnv1a(buf, bytes);
+    if (memcmp(buf, golden, bytes) != 0) {
+        for (i = 0U; i < bytes; ++i) {
+            if (buf[i] != golden[i]) break;
+        }
+        fprintf(stderr,
+                "gf_npu: CONTENT MISMATCH  %-6s vs %s\n"
+                "        first difference at byte %zu of %zu: got %d, golden %d\n"
+                "        FNV1A got %08X, golden %08X\n",
+                (chk >= 0 && chk < GF_CHK_COUNT) ? gf_npu_check_name[chk] : "?",
+                golden_name, i, bytes, (int)buf[i], (int)golden[i],
+                (unsigned)got, (unsigned)fnv1a(golden, bytes));
+        rc = -1;
+    }
+    t1 = now_ms();
+    if (checks_ms) *checks_ms += (t1 - t0);
+
+    if (chk >= 0 && chk < GF_CHK_COUNT) stats->content_rc[chk] = (int8_t)rc;
+    stats->content_checked++;
+    if (rc != 0) stats->content_failed++;
+    if (out_fnv) *out_fnv = got;
+    return rc;
+}
+
 /* ------------------------------------------------------------- tile core -- */
 static void wait_layer_done(void)
 {
@@ -507,7 +577,7 @@ int gf_npu_run_frame(const uint8_t *rgb96, uint32_t *out_class, gf_npu_stats *st
     uint32_t conv4_cycles[3] = {0U}, pool3_cycles[3] = {0U};
     uint32_t head1x1_cycles[4] = {0U};
     uint32_t gap_fnv, fc_fnv, post_class, post_progress;
-    double t_start, t_end, weight_ms = 0.0;
+    double t_start, t_end, weight_ms = 0.0, checks_ms = 0.0;
 
     if (!g_regs || !g_head1x1) return -1;
     if (!rgb96) { fprintf(stderr, "gf_npu: null input\n"); return -1; }
@@ -538,9 +608,13 @@ int gf_npu_run_frame(const uint8_t *rgb96, uint32_t *out_class, gf_npu_stats *st
     check_store_bytes(GF_ACTIVATION_BYTES, 0x4103U);
     hash = REG(GF_OUTPUT_FNV1A);
     if (!g_fail && hash != GF_FULL_OUTPUT_FNV1A) gf_fail(0x4103U, hash);
-    if (stats) { stats->hw_fnv_conv0 = hash; }
-    if (stats) { stats->sw_fnv_conv0 = fnv1a(g_act1, GF_ACTIVATION_BYTES); }
-    if (stats) { stats->conv0 = cycles0; }
+    if (stats) {
+        stats->hw_fnv_conv0 = hash;
+        stats->conv0 = cycles0;
+        verify_tensor(stats, GF_CHK_CONV0, g_act1, GF_ACTIVATION_BYTES,
+                      gf_body2_layer_input, "gf_body2_layer_input",
+                      &stats->sw_fnv_conv0, &checks_ms);
+    }
 
     /* conv1 (body2): 16 -> 16, fused pool1 */
     pool_cycles = exec_conv_tile(1U, buf_phys(g_act1), GF_ACTIVATION_BYTES, buf_phys(g_pool1),
@@ -552,9 +626,17 @@ int gf_npu_run_frame(const uint8_t *rgb96, uint32_t *out_class, gf_npu_stats *st
     check_store_bytes(GF_POOL1_BYTES, 0x4105U);
     hash = REG(GF_OUTPUT_FNV1A);
     if (!g_fail && hash != GF_BODY2_OUTPUT_FNV1A) gf_fail(0x4105U, hash);
-    if (stats) { stats->hw_fnv_pool1 = hash; }
-    if (stats) { stats->sw_fnv_pool1 = fnv1a(g_pool1, GF_POOL1_BYTES); }
-    if (stats) { stats->conv1_pool1 = pool_cycles; }
+    if (stats) {
+        /* Note: this register reads the PRE-pool conv output FNV
+         * (GF_POOL_INPUT_FNV1A == GF_BODY2_OUTPUT_FNV1A), while the tensor
+         * stored in DDR is the pooled one.  verify_tensor checks the stored
+         * tensor against gf_pool_output, whose FNV is GF_POOL_OUTPUT_FNV1A. */
+        stats->hw_fnv_pool1 = hash;
+        stats->conv1_pool1 = pool_cycles;
+        verify_tensor(stats, GF_CHK_POOL1, g_pool1, GF_POOL1_BYTES,
+                      gf_pool_output, "gf_pool_output",
+                      &stats->sw_fnv_pool1, &checks_ms);
+    }
 
     /* conv2a: 16 -> 32, two 16-output tiles */
     for (index = 0U; index < 2U; ++index) {
@@ -571,7 +653,9 @@ int gf_npu_run_frame(const uint8_t *rgb96, uint32_t *out_class, gf_npu_stats *st
     if (stats) {
         stats->conv2a[0] = conv2_cycles[0];
         stats->conv2a[1] = conv2_cycles[1];
-        stats->sw_fnv_conv2 = fnv1a(g_conv2, GF_CONV2_BYTES);
+        verify_tensor(stats, GF_CHK_CONV2, g_conv2, GF_CONV2_BYTES,
+                      gf_conv2b_layer_input, "gf_conv2b_layer_input",
+                      &stats->sw_fnv_conv2, &checks_ms);
     }
 
     /* conv2b: 32 -> 32, fused pool2, two 16-output tiles */
@@ -589,7 +673,9 @@ int gf_npu_run_frame(const uint8_t *rgb96, uint32_t *out_class, gf_npu_stats *st
     if (stats) {
         stats->conv2b_pool2[0] = pool2_cycles[0];
         stats->conv2b_pool2[1] = pool2_cycles[1];
-        stats->sw_fnv_pool2 = fnv1a(g_pool2, GF_POOL2_BYTES);
+        verify_tensor(stats, GF_CHK_POOL2, g_pool2, GF_POOL2_BYTES,
+                      gf_pool2_output, "gf_pool2_output",
+                      &stats->sw_fnv_pool2, &checks_ms);
     }
 
     /* conv3a: 32 -> 48, three 16-output tiles */
@@ -608,7 +694,9 @@ int gf_npu_run_frame(const uint8_t *rgb96, uint32_t *out_class, gf_npu_stats *st
         stats->conv3a[0] = conv4_cycles[0];
         stats->conv3a[1] = conv4_cycles[1];
         stats->conv3a[2] = conv4_cycles[2];
-        stats->sw_fnv_conv4 = fnv1a(g_conv4, GF_CONV4_BYTES);
+        verify_tensor(stats, GF_CHK_CONV4, g_conv4, GF_CONV4_BYTES,
+                      gf_conv3b_layer_input, "gf_conv3b_layer_input",
+                      &stats->sw_fnv_conv4, &checks_ms);
     }
 
     /* conv3b: 48 -> 48, fused pool3, three 16-output tiles */
@@ -627,7 +715,9 @@ int gf_npu_run_frame(const uint8_t *rgb96, uint32_t *out_class, gf_npu_stats *st
         stats->conv3b_pool3[0] = pool3_cycles[0];
         stats->conv3b_pool3[1] = pool3_cycles[1];
         stats->conv3b_pool3[2] = pool3_cycles[2];
-        stats->sw_fnv_pool3 = fnv1a(g_pool3, GF_POOL3_BYTES);
+        verify_tensor(stats, GF_CHK_POOL3, g_pool3, GF_POOL3_BYTES,
+                      gf_pool3_output, "gf_pool3_output",
+                      &stats->sw_fnv_pool3, &checks_ms);
     }
 
     /* head 1x1: 48 -> 64, four 16-output tiles */
@@ -647,6 +737,9 @@ int gf_npu_run_frame(const uint8_t *rgb96, uint32_t *out_class, gf_npu_stats *st
         stats->head1x1[1] = head1x1_cycles[1];
         stats->head1x1[2] = head1x1_cycles[2];
         stats->head1x1[3] = head1x1_cycles[3];
+        /* No golden array was exported for the 12x12x64 head output, so this is
+         * a baseline only -- recorded so a future change can be diffed against
+         * it.  The GAP/FC stages after it ARE verified (below). */
         stats->sw_fnv_head1x1 = fnv1a(g_head1x1, GF_HEAD1X1_BYTES);
     }
 
@@ -684,12 +777,18 @@ int gf_npu_run_frame(const uint8_t *rgb96, uint32_t *out_class, gf_npu_stats *st
         for (index = 0U; index < 4U; ++index) stats->pl_cycles_total += head1x1_cycles[index];
         stats->cpu_total_ms   = t_end - t_start;
         stats->weight_load_ms = weight_ms;
+        stats->cpu_checks_ms  = checks_ms;
     }
 
     if (out_class) *out_class = post_class & 31U;
 
     if (g_fail) {
         fprintf(stderr, "gf_npu: run failed: %s\n", g_fail_msg);
+        return -1;
+    }
+    if (stats && stats->content_failed != 0) {
+        fprintf(stderr, "gf_npu: %d of %d golden content checks failed\n",
+                stats->content_failed, stats->content_checked);
         return -1;
     }
     return 0;
@@ -742,4 +841,14 @@ uint32_t gf_npu_expected_fnv_pool1(void)
 uint32_t gf_npu_expected_class(void)
 {
     return GF_POST_EXPECTED_CLASS;
+}
+
+uint32_t gf_npu_expected_fnv_gap(void)
+{
+    return GF_POST_GAP_EXPECTED_FNV1A;
+}
+
+uint32_t gf_npu_expected_fnv_fc(void)
+{
+    return GF_POST_FC_EXPECTED_FNV1A;
 }

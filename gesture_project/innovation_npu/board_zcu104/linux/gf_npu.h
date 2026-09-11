@@ -149,11 +149,28 @@ typedef struct {
 
     uint32_t pl_cycles_total;    /* sum of the tile cycles above */
 
-    /* Software-side FNV1A over each intermediate tensor, computed by the CPU
-     * after the layer that produced it.  conv0/conv1 must equal
-     * GF_FULL_OUTPUT_FNV1A / GF_BODY2_OUTPUT_FNV1A; the rest are recorded as a
-     * baseline so a later change can be diffed against them. */
-    uint32_t sw_fnv_conv0;
+    /* Hardware GF_OUTPUT_FNV1A read after the two layers the baremetal driver
+     * also checked.  For conv0 it is the FNV of the stored 96x96x16 tensor; for
+     * conv1 it is the FNV of the *pre-pool* conv output
+     * (= GF_POOL_INPUT_FNV1A = GF_BODY2_OUTPUT_FNV1A), not of the stored pooled
+     * tensor -- established by computing FNV1A over the exported golden arrays. */
+    uint32_t hw_fnv_conv0;
+    uint32_t hw_fnv_pool1;
+
+    uint32_t gap_fnv;            /* GF_POST_GAP_FNV1A_REG */
+    uint32_t fc_fnv;             /* GF_POST_FC_FNV1A_REG */
+    uint32_t gap_progress;       /* GF_POST_PROGRESS_REG */
+
+    /* Bit-exact content checks: each stored tensor is memcmp'd against the
+     * corresponding golden array exported alongside the weights.  This is the
+     * strong form of verification -- the baremetal driver only checked byte
+     * counts for these stages.  See gf_npu_check_name[] for the labels. */
+    int      content_checked;    /* number of golden comparisons performed */
+    int      content_failed;     /* number that mismatched (0 = all good) */
+    /* Per-comparison result, indexed by the GF_CHK_* enum when >= 0. */
+    int8_t   content_rc[12];
+
+    uint32_t sw_fnv_conv0;       /* FNV1A of the tensor as actually computed */
     uint32_t sw_fnv_pool1;
     uint32_t sw_fnv_conv2;
     uint32_t sw_fnv_pool2;
@@ -161,16 +178,28 @@ typedef struct {
     uint32_t sw_fnv_pool3;
     uint32_t sw_fnv_head1x1;
 
-    uint32_t hw_fnv_conv0;       /* GF_OUTPUT_FNV1A after conv0 */
-    uint32_t hw_fnv_pool1;       /* GF_OUTPUT_FNV1A after conv1(pool1) */
-
-    uint32_t gap_fnv;            /* GF_POST_GAP_FNV1A_REG */
-    uint32_t fc_fnv;             /* GF_POST_FC_FNV1A_REG */
-    uint32_t gap_progress;       /* GF_POST_PROGRESS_REG */
-
     double   cpu_total_ms;       /* wall time of the whole gf_npu_run_frame */
     double   weight_load_ms;     /* wall time spent inside the weight DMA waits */
+    /* Time spent inside the content checks above.  These are only performed when
+     * `stats` is non-NULL (so never in the live camera loop), but they must be
+     * subtracted when comparing CPU overhead against the baremetal numbers:
+     * memcmp+FNV1A over ~0.6 MB of *uncached* memory is not free. */
+    double   cpu_checks_ms;
 } gf_npu_stats;
+
+/* Indices into gf_npu_stats.content_rc / gf_npu_check_name. */
+enum {
+    GF_CHK_CONV0 = 0,
+    GF_CHK_POOL1,
+    GF_CHK_CONV2,
+    GF_CHK_POOL2,
+    GF_CHK_CONV4,
+    GF_CHK_POOL3,
+    GF_CHK_COUNT
+};
+
+/* Human-readable names for the content checks (index with the GF_CHK_* enum). */
+extern const char *const gf_npu_check_name[GF_CHK_COUNT];
 
 /* Open /dev/mem, map the register block and the scratch region, and check
  * GF_MAGIC / GF_VERSION.  Returns 0 on success, negative errno-ish on failure
@@ -214,5 +243,7 @@ const uint8_t *gf_npu_reference_input(void);   /* 27648 bytes, raw uint8 HWC */
 uint32_t       gf_npu_expected_fnv_conv0(void);
 uint32_t       gf_npu_expected_fnv_pool1(void);
 uint32_t       gf_npu_expected_class(void);
+uint32_t       gf_npu_expected_fnv_gap(void);
+uint32_t       gf_npu_expected_fnv_fc(void);
 
 #endif /* GF_NPU_H */
