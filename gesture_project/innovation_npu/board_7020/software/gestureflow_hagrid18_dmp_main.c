@@ -41,8 +41,16 @@
 #ifndef GF_FAST_RELEASE
 #define GF_FAST_RELEASE 0
 #endif
+/* These two bases are the only platform-dependent constants in this driver.
+ * They default to the verified Zynq-7020 values so the 7020 build is bit-for-bit
+ * unchanged, and can be overridden at compile time for a different PS (for
+ * example the ZCU104 MPSoC, whose PL region starts at 0xA0000000). */
+#ifndef PROBE_BASE
 #define PROBE_BASE 0xFFFF0000U
+#endif
+#ifndef GF_BASE
 #define GF_BASE 0x43C00000U
+#endif
 
 #define GF_MAGIC 0x000U
 #define GF_VERSION 0x004U
@@ -559,8 +567,18 @@ int main(void)
     Xil_SetTlbAttributes((UINTPTR)gf_pool3, DEVICE_MEMORY);
     Xil_SetTlbAttributes((UINTPTR)gf_head1x1, DEVICE_MEMORY);
     Xil_ExceptionInit();
+#if defined(__aarch64__)
+    /* Zynq UltraScale+ (Cortex-A53 / AArch64): data and prefetch aborts are
+     * synchronous exceptions, so both map onto XIL_EXCEPTION_ID_SYNC_INT.
+     * XIL_EXCEPTION_ID_DATA_ABORT_INT / _PREFETCH_ABORT_INT are declared only in
+     * the AArch32 branch of the standalone xil_exception.h and do not exist for
+     * AArch64 (verified in the generated BSP header). */
+    Xil_ExceptionRegisterHandler(XIL_EXCEPTION_ID_SYNC_INT, data_abort, 0);
+    Xil_ExceptionRegisterHandler(XIL_EXCEPTION_ID_SERROR_ABORT_INT, prefetch_abort, 0);
+#else
     Xil_ExceptionRegisterHandler(XIL_EXCEPTION_ID_DATA_ABORT_INT, data_abort, 0);
     Xil_ExceptionRegisterHandler(XIL_EXCEPTION_ID_PREFETCH_ABORT_INT, prefetch_abort, 0);
+#endif
     Xil_ExceptionEnable();
     for (index = 0U; index < 136U; ++index) store_probe(index, 0U);
     store_probe(0U, 0x47464E50U);
