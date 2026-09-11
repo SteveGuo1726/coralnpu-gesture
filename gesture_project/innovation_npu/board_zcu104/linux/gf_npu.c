@@ -1,0 +1,745 @@
+/*
+ * PROJECT_LOCAL_SELF_RESEARCH_NOT_GOOGLE_OFFICIAL
+ *
+ * GestureFlow HaGRID-18 DMP NPU -- Linux userspace driver (ZCU104).
+ *
+ * Port of board_7020/software/gestureflow_hagrid18_dmp_main.c to Linux
+ * userspace.  The register protocol, weight staging and tile schedule are
+ * carried over unchanged -- only the memory acquisition (mmap instead of static
+ * arrays in DDR) and the timing source differ.
+ *
+ * Deliberately NOT carried over: the baremetal driver's dead helpers
+ * (load_first_layer, load_head1x1_tile, config_first_params, config_head_params,
+ * run_layer, wait_input_loaded, verify_full_tensor).  Verified unused by call
+ * counting: each had exactly one occurrence in the file, its own definition.
+ *
+ * Memory:
+ *   registers  0xA0000000..0xA00FFFFF  via /dev/mem  (non-cached)
+ *   scratch    0x70000000..0x70FFFFFF  via /dev/mem  (non-cached, reserved-memory
+ *                                      with no-map, so outside System RAM)
+ * Because both sides of the HP0 link see plain non-cached memory, there is no
+ * cache flush or invalidate anywhere in this file.  If a future change makes the
+ * scratch buffer cacheable, that invariant breaks and cache maintenance must be
+ * reintroduced.
+ */
+#include "gf_npu.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
+#include <time.h>
+#include <stdint.h>
+#include <sys/mman.h>
+
+/* ------------------------------------------------------------------------- *
+ * Weight / parameter data.
+ *
+ * The include list and order must match the baremetal driver exactly: some
+ * macros (notably GF_FULL_OUTPUT_FNV1A) are defined in more than one generated
+ * header, and the last include wins.  Reordering would silently change the
+ * expected checksums.
+ * ------------------------------------------------------------------------- */
+#include "gestureflow_real_conv4x4_full_layer.h"
+#include "gestureflow_dmp_full_layer.h"
+#include "gestureflow_chain_body_data.h"
+#include "gestureflow_dmp_body2_layer.h"
+#include "gestureflow_real_maxpool2d.h"
+#include "gestureflow_real_conv4x4_conv2a_layer.h"
+#include "gestureflow_dmp_conv2a_layer.h"
+#include "gestureflow_real_conv4x4_conv2b_layer.h"
+#include "gestureflow_dmp_conv2b_layer.h"
+#include "gestureflow_real_maxpool2d_pool2.h"
+#include "gestureflow_real_conv4x4_conv3a_layer.h"
+#include "gestureflow_dmp_conv3a_layer.h"
+#include "gestureflow_real_conv4x4_conv3b_layer.h"
+#include "gestureflow_dmp_conv3b_layer.h"
+#include "gestureflow_real_maxpool2d_pool3.h"
+#include "gestureflow_real_conv4x4_head1x1_layer.h"
+#include "gestureflow_dmp_head1x1_layer.h"
+#include "gestureflow_real_gap_fc.h"
+
+/* ----------------------------------------------------------------- sizes -- */
+#define GF_ACTIVATION_BYTES   (96U * 96U * 16U)     /* 147456 */
+#define GF_POOL1_BYTES        GF_POOL_OUTPUT_BYTES  /*  36864 */
+#define GF_CONV2_BYTES        (48U * 48U * 32U)     /*  73728 */
+#define GF_CONV2_TILE_BYTES   (48U * 48U * 16U)     /*  36864 */
+#define GF_CONV3_BYTES        (48U * 48U * 32U)     /*  73728 */
+#define GF_POOL2_TILE_BYTES   (24U * 24U * 16U)     /*   9216 */
+#define GF_POOL2_BYTES        GF_POOL2_OUTPUT_BYTES /*  18432 */
+#define GF_CONV4_BYTES        (24U * 24U * 48U)     /*  27648 */
+#define GF_CONV4_TILE_BYTES   (24U * 24U * 16U)     /*   9216 */
+#define GF_CONV5_BYTES        (24U * 24U * 48U)     /*  27648 */
+#define GF_POOL3_TILE_BYTES   (12U * 12U * 16U)     /*   2304 */
+#define GF_POOL3_BYTES        GF_POOL3_OUTPUT_BYTES /*   6912 */
+#define GF_HEAD1X1_BYTES      (12U * 12U * 64U)     /*   9216 */
+#define GF_HEAD1X1_TILE_BYTES (12U * 12U * 16U)     /*   2304 */
+
+#define GF_POLL_LIMIT         12000000U
+
+/* --------------------------------------------------------------- state ---- */
+static volatile uint32_t *g_regs = NULL;
+static uint8_t           *g_bufs = NULL;
+static int                g_devmem_fd = -1;
+
+static uint8_t *g_arena_cur = NULL;
+static uint8_t *g_arena_end = NULL;
+
+/* Scratch buffers (all inside g_bufs, so their physical addresses are derivable
+ * from the pointer). */
+static uint8_t  *g_in_rgb   = NULL;
+static int8_t   *g_act1     = NULL;
+static int8_t   *g_pool1    = NULL;
+static int8_t   *g_conv2    = NULL;
+static int8_t   *g_conv3    = NULL;
+static int8_t   *g_pool2    = NULL;
+static int8_t   *g_conv4    = NULL;
+static int8_t   *g_conv5    = NULL;
+static int8_t   *g_pool3    = NULL;
+static int8_t   *g_head1x1  = NULL;
+
+/* Weight images, copied into the scratch region at load time because the NPU
+ * DMAs them by physical address. */
+static uint32_t *g_w_full      = NULL;
+static uint32_t *g_w_body2     = NULL;
+static uint32_t *g_w_conv2a    = NULL;
+static uint32_t *g_w_conv2b    = NULL;
+static uint32_t *g_w_conv3a    = NULL;
+static uint32_t *g_w_conv3b    = NULL;
+static uint32_t *g_w_head1x1   = NULL;
+
+/* Failure reporting: helpers record the first failure and later steps bail out,
+ * which mirrors the baremetal terminal_failure() control flow without longjmp. */
+static int    g_fail = 0;
+static char   g_fail_msg[256];
+
+static void gf_fail(uint32_t code, uint32_t observed)
+{
+    if (g_fail) return;
+    g_fail = 1;
+    snprintf(g_fail_msg, sizeof g_fail_msg,
+             "stage 0x%04X observed 0x%08X (see GF_STATUS/DMA_STATUS/STORE_STATUS above)",
+             (unsigned)code, (unsigned)observed);
+    fprintf(stderr, "gf_npu: FAIL %s\n", g_fail_msg);
+}
+
+/* --------------------------------------------------------------- helpers -- */
+#define REG(off)  (g_regs[(uint32_t)(off) >> 2])
+
+static void *buf_alloc(size_t bytes, size_t align)
+{
+    uintptr_t p = ((uintptr_t)g_arena_cur + (align - 1U)) & ~(uintptr_t)(align - 1U);
+    if (p + bytes > (uintptr_t)g_arena_end) return NULL;
+    g_arena_cur = (uint8_t *)(p + bytes);
+    return (void *)p;
+}
+
+static uint32_t buf_phys(const void *p)
+{
+    return (uint32_t)(GF_BUF_PHYS_BASE + (uintptr_t)((const uint8_t *)p - g_bufs));
+}
+
+static double now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1.0e6;
+}
+
+static uint32_t fnv1a(const void *data, size_t count)
+{
+    const uint8_t *p = (const uint8_t *)data;
+    uint32_t value = 0x811C9DC5U;
+    size_t i;
+    for (i = 0U; i < count; ++i) {
+        value = (value ^ (uint32_t)p[i]) * 0x01000193U;
+    }
+    return value;
+}
+
+/* ------------------------------------------------------------- tile core -- */
+static void wait_layer_done(void)
+{
+    uint32_t poll, status = 0U, first_bad = 0U;
+    if (g_fail) return;
+    for (poll = 0U; poll < GF_POLL_LIMIT; ++poll) {
+        status = REG(GF_STATUS);
+        if (status & (GF_FAULT_BIT | GF_LAYER_FAULT_BIT)) {
+            if (first_bad == 0U) first_bad = status;
+            gf_fail(0x4001U, first_bad);
+            return;
+        }
+        if ((status & GF_DONE_BIT) && !(status & GF_RUNNING_BIT)) return;
+    }
+    gf_fail(0x4002U, status);
+}
+
+static void weight_dma_load(const uint32_t *src, uint32_t words, uint32_t taps,
+                            uint32_t groups, uint32_t output_lanes, double *acc_ms)
+{
+    uint32_t status;
+    uint32_t bytes = words * 4U;
+    double t0, t1;
+
+    if (g_fail) return;
+
+    /* src already lives in the non-cached scratch region, so no flush. */
+    REG(GF_WEIGHT_DMA_SOURCE)  = buf_phys(src);
+    REG(GF_WEIGHT_DMA_BYTES)   = bytes;
+    REG(GF_WEIGHT_DMA_CFG)     = taps | (groups << 8U) | (output_lanes << 16U);
+    REG(GF_WEIGHT_DMA_CONTROL) = 2U;
+
+    t0 = now_ms();
+    do {
+        status = REG(GF_WEIGHT_DMA_STATUS);
+    } while (status & GF_WEIGHT_DMA_BUSY_BIT);
+    t1 = now_ms();
+    if (acc_ms) *acc_ms += (t1 - t0);
+
+    if (!(status & GF_WEIGHT_DMA_DONE_BIT) || (status & GF_WEIGHT_DMA_FAULT_BIT)) {
+        gf_fail(0x4D01U, status);
+    }
+}
+
+static void set_weight_write_bank(uint32_t bank) { REG(GF_WEIGHT_BANK_SELECT) = bank & 1U; }
+static void set_weight_read_bank(uint32_t bank)  { REG(GF_WEIGHT_READ_BANK_SELECT) = bank & 1U; }
+static void set_param_bank(uint32_t bank)        { REG(GF_PARAM_BANK_SELECT) = bank & 1U; }
+
+static void config_tile_control(uint32_t mode, uint32_t lane_mask)
+{
+    REG(GF_LAYER_MODE)        = mode;
+    REG(GF_QCFG)              = GF_QCFG_VALUE;
+    REG(GF_OUTPUT_LANE_MASK)  = lane_mask;
+}
+
+static void config_tile_params(uint32_t first_oc, const int32_t *folded_bias,
+                               const int32_t *multiplier, const uint8_t *right_shift,
+                               uint32_t output_lanes, uint32_t tile_lanes)
+{
+    uint32_t physical_oc, model_oc;
+    for (physical_oc = 0U; physical_oc < 32U; ++physical_oc) {
+        model_oc = first_oc + physical_oc;
+        if (physical_oc >= tile_lanes || model_oc >= output_lanes) {
+            REG(GF_BIDX) = physical_oc;   REG(GF_BDATA) = 0U;
+            REG(GF_RQIDX) = physical_oc;  REG(GF_RQMULT) = 0U;  REG(GF_RQSHIFT) = 0U;
+            continue;
+        }
+        REG(GF_BIDX) = physical_oc;   REG(GF_BDATA) = (uint32_t)folded_bias[model_oc];
+        REG(GF_RQIDX) = physical_oc;  REG(GF_RQMULT) = (uint32_t)multiplier[model_oc];
+        REG(GF_RQSHIFT) = (uint32_t)right_shift[model_oc];
+    }
+}
+
+/* DMP weight images are pair-major: (pair, tap, group, 6 words). */
+static void preload_conv_tile(const uint32_t *dma_weights, uint32_t first_oc,
+                              uint32_t groups, uint32_t tile_lanes, double *acc_ms)
+{
+    uint32_t first_pair = first_oc >> 1U;
+    uint32_t pairs = tile_lanes >> 1U;
+    weight_dma_load(dma_weights + first_pair * 16U * groups * 6U,
+                    pairs * 16U * groups * 6U, 16U, groups, tile_lanes, acc_ms);
+}
+
+static void preload_head1x1_tile(uint32_t first_oc, double *acc_ms)
+{
+    uint32_t first_pair = first_oc >> 1U;
+    weight_dma_load(g_w_head1x1 + first_pair * 6U * 6U,
+                    8U * 6U * 6U, 1U, 6U, 16U, acc_ms);
+}
+
+static void launch_layer(uint32_t mode, uint32_t source, uint32_t bytes,
+                         uint32_t destination, uint32_t store_bytes,
+                         uint32_t store_control, uint32_t width, uint32_t height,
+                         uint32_t stride_bytes, uint32_t valid_bytes)
+{
+    REG(GF_LAYER_MODE)        = mode;
+    REG(GF_DMA_SOURCE)        = source;
+    REG(GF_DMA_BYTES)         = bytes;
+    REG(GF_DMA_PIXELS)        = width * height;
+    REG(GF_JOB_WIDTH)         = width;
+    REG(GF_JOB_HEIGHT)        = height;
+    REG(GF_STORE_DESTINATION) = destination;
+    REG(GF_STORE_BYTES)       = store_bytes;
+    REG(GF_STORE_STRIDE)      = stride_bytes;
+    REG(GF_STORE_VALID_BYTES) = valid_bytes;
+    REG(GF_STORE_CONTROL)     = store_control;
+    REG(GF_CONTROL)           = 2U;
+}
+
+static void check_store_bytes(uint32_t expected, uint32_t code)
+{
+    uint32_t store_status = REG(GF_STORE_STATUS);
+    if ((store_status & GF_STORE_FAULT_BIT) || !(store_status & GF_STORE_DONE_BIT) ||
+        GF_STORE_BYTES_WRITTEN(store_status) != expected) {
+        gf_fail(code, store_status);
+    }
+}
+
+static void check_input_bytes(uint32_t expected, uint32_t code)
+{
+    uint32_t dma_status = REG(GF_DMA_STATUS);
+    if ((dma_status & GF_DMA_FAULT_BIT) || !(dma_status & GF_DMA_DONE_BIT) ||
+        GF_DMA_BYTES_READ(dma_status) != expected) {
+        gf_fail(code, dma_status);
+    }
+}
+
+/* Load and run one 16-output DMP tile; returns the tile's PL cycle count. */
+static uint32_t exec_conv_tile(uint32_t mode, uint32_t source, uint32_t source_bytes,
+                               uint32_t destination, uint32_t store_bytes,
+                               uint32_t store_control, uint32_t width, uint32_t height,
+                               uint32_t stride_bytes, uint32_t first_oc,
+                               const uint32_t *dma_weights, const int32_t *folded_bias,
+                               const int32_t *multiplier, const uint8_t *right_shift,
+                               uint32_t output_lanes, uint32_t groups, uint32_t tile_lanes,
+                               double *acc_ms)
+{
+    uint32_t bank = first_oc & 1U;
+
+    if (g_fail) return 0U;
+
+    REG(GF_CONTROL) = 1U;
+    set_param_bank(bank);
+    config_tile_control(mode, 0xffffU);
+    set_weight_write_bank(bank);
+    set_weight_read_bank(bank);
+    if (mode == 5U) preload_head1x1_tile(first_oc, acc_ms);
+    else            preload_conv_tile(dma_weights, first_oc, groups, tile_lanes, acc_ms);
+    config_tile_params(first_oc, folded_bias, multiplier, right_shift, output_lanes, tile_lanes);
+    launch_layer(mode, source, source_bytes, destination + first_oc, store_bytes,
+                 store_control, width, height, stride_bytes, 16U);
+    wait_layer_done();
+    return REG(GF_CYCLES);
+}
+
+static void load_gap_fc_descriptor(void)
+{
+    uint32_t class_index, group, lane, packed;
+    REG(GF_LAYER_MODE)   = 4U;
+    REG(GF_POST_GAP_MULT) = (uint32_t)GF_POST_GAP_MULTIPLIER;
+    REG(GF_POST_GAP_SHIFT) = GF_POST_GAP_RIGHT_SHIFT;
+    REG(GF_POST_QCFG) = ((uint32_t)(uint8_t)GF_POST_GAP_INPUT_ZERO_POINT) |
+                        ((uint32_t)(uint8_t)GF_POST_GAP_OUTPUT_ZERO_POINT << 8U) |
+                        ((uint32_t)(uint8_t)GF_POST_FC_OUTPUT_ZERO_POINT << 16U);
+    for (class_index = 0U; class_index < GF_POST_FC_OUTPUTS; ++class_index) {
+        REG(GF_BIDX) = class_index;
+        REG(GF_BDATA) = (uint32_t)gf_post_fc_folded_bias[class_index];
+        REG(GF_RQIDX) = class_index;
+        REG(GF_RQMULT) = (uint32_t)gf_post_fc_requant_multiplier[class_index];
+        REG(GF_RQSHIFT) = (uint32_t)gf_post_fc_requant_right_shift[class_index];
+        for (group = 0U; group < GF_POST_GAP_CHANNELS / 4U; ++group) {
+            packed = 0U;
+            for (lane = 0U; lane < 4U; ++lane) {
+                packed |= (uint32_t)(uint8_t)gf_post_fc_weights[
+                              class_index * GF_POST_GAP_CHANNELS + group * 4U + lane] << (lane * 8U);
+            }
+            REG(GF_WCTRL) = class_index | (group << 9U);
+            REG(GF_WDATA) = packed;
+        }
+    }
+}
+
+static uint32_t run_gap_fc(uint32_t source)
+{
+    REG(GF_LAYER_MODE)    = 4U;
+    REG(GF_DMA_SOURCE)    = source;
+    REG(GF_DMA_BYTES)     = GF_HEAD1X1_BYTES;
+    REG(GF_DMA_PIXELS)    = GF_POST_GAP_ELEMENTS;
+    REG(GF_STORE_CONTROL) = 0U;
+    REG(GF_CONTROL)       = 2U;
+    wait_layer_done();
+    return REG(GF_POST_CYCLES_REG);
+}
+
+/* ------------------------------------------------------------- open/close -- */
+static void *map_phys(uint32_t phys, size_t size, const char *what)
+{
+    void *p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, g_devmem_fd, (off_t)phys);
+    if (p == MAP_FAILED) {
+        fprintf(stderr, "gf_npu: mmap %s at 0x%08X (%zu bytes) failed: %s\n",
+                what, (unsigned)phys, size, strerror(errno));
+        return NULL;
+    }
+    return p;
+}
+
+int gf_npu_open(void)
+{
+    if (g_regs) return 0;
+    g_fail = 0;
+    g_fail_msg[0] = '\0';
+
+    g_devmem_fd = open("/dev/mem", O_RDWR | O_SYNC);
+    if (g_devmem_fd < 0) {
+        fprintf(stderr, "gf_npu: open /dev/mem failed: %s\n", strerror(errno));
+        fprintf(stderr, "        (needs root; CONFIG_DEVMEM=y)\n");
+        return -1;
+    }
+
+    g_regs = (volatile uint32_t *)map_phys(GF_REG_PHYS_BASE, GF_REG_SIZE, "registers");
+    if (!g_regs) return -1;
+    g_bufs = (uint8_t *)map_phys(GF_BUF_PHYS_BASE, GF_BUF_SIZE, "scratch buffers");
+    if (!g_bufs) return -1;
+
+    if (REG(GF_MAGIC) != GF_MAGIC_VALUE) {
+        fprintf(stderr, "gf_npu: GF_MAGIC = 0x%08X, expected 0x%08X.\n"
+                        "        The PL is not configured, or its clock is gated.\n",
+                (unsigned)REG(GF_MAGIC), (unsigned)GF_MAGIC_VALUE);
+        return -1;
+    }
+    if (REG(GF_VERSION) != GF_VERSION_VALUE) {
+        fprintf(stderr, "gf_npu: GF_VERSION = 0x%08X, expected 0x%08X (bitstream/driver mismatch).\n",
+                (unsigned)REG(GF_VERSION), (unsigned)GF_VERSION_VALUE);
+        return -1;
+    }
+
+    /* Sanity: the scratch region must be readable and writable as plain memory.
+     * A stuck pattern here would mean the mapping is not what we expect. */
+    {
+        volatile uint32_t *probe = (volatile uint32_t *)g_bufs;
+        uint32_t saved = probe[0];
+        probe[0] = 0xA5A5A5A5U;
+        if (probe[0] != 0xA5A5A5A5U) {
+            fprintf(stderr, "gf_npu: scratch region at 0x%08X is not writable.\n",
+                    (unsigned)GF_BUF_PHYS_BASE);
+            return -1;
+        }
+        probe[0] = saved;
+    }
+
+    memset(g_bufs, 0, GF_BUF_SIZE);
+    printf("gf_npu: PL id ok (MAGIC 0x%08X, VERSION 0x%08X); scratch 0x%08X + %u MiB\n",
+           (unsigned)GF_MAGIC_VALUE, (unsigned)GF_VERSION_VALUE,
+           (unsigned)GF_BUF_PHYS_BASE, (unsigned)(GF_BUF_SIZE >> 20));
+    return 0;
+}
+
+void gf_npu_close(void)
+{
+    if (g_bufs)  { munmap((void *)g_bufs, GF_BUF_SIZE); g_bufs = NULL; }
+    if (g_regs)  { munmap((void *)g_regs, GF_REG_SIZE); g_regs = NULL; }
+    if (g_devmem_fd >= 0) { close(g_devmem_fd); g_devmem_fd = -1; }
+    g_arena_cur = g_arena_end = NULL;
+}
+
+/* --------------------------------------------------------- weight staging -- */
+static int copy_weights(void)
+{
+    struct { void **dst; const void *src; size_t bytes; const char *name; } tbl[] = {
+        { (void **)&g_w_full,    gf_dmp_full_weights_dma,    sizeof gf_dmp_full_weights_dma,    "conv0"   },
+        { (void **)&g_w_body2,   gf_dmp_body2_weights_dma,   sizeof gf_dmp_body2_weights_dma,   "conv1"   },
+        { (void **)&g_w_conv2a,  gf_dmp_conv2a_weights_dma,  sizeof gf_dmp_conv2a_weights_dma,  "conv2a"  },
+        { (void **)&g_w_conv2b,  gf_dmp_conv2b_weights_dma,  sizeof gf_dmp_conv2b_weights_dma,  "conv2b"  },
+        { (void **)&g_w_conv3a,  gf_dmp_conv3a_weights_dma,  sizeof gf_dmp_conv3a_weights_dma,  "conv3a"  },
+        { (void **)&g_w_conv3b,  gf_dmp_conv3b_weights_dma,  sizeof gf_dmp_conv3b_weights_dma,  "conv3b"  },
+        { (void **)&g_w_head1x1, gf_dmp_head1x1_weights_dma, sizeof gf_dmp_head1x1_weights_dma, "head1x1" },
+    };
+    size_t i;
+
+    for (i = 0U; i < sizeof tbl / sizeof tbl[0]; ++i) {
+        void *p = buf_alloc(tbl[i].bytes, 64U);
+        if (!p) {
+            fprintf(stderr, "gf_npu: scratch region too small for weight image '%s'\n", tbl[i].name);
+            return -1;
+        }
+        memcpy(p, tbl[i].src, tbl[i].bytes);
+        *tbl[i].dst = p;
+    }
+    return 0;
+}
+
+int gf_npu_load_weights(void)
+{
+    size_t bytes_needed = sizeof gf_dmp_full_weights_dma + sizeof gf_dmp_body2_weights_dma +
+                          sizeof gf_dmp_conv2a_weights_dma + sizeof gf_dmp_conv2b_weights_dma +
+                          sizeof gf_dmp_conv3a_weights_dma + sizeof gf_dmp_conv3b_weights_dma +
+                          sizeof gf_dmp_head1x1_weights_dma +
+                          GF_RGB_BYTES + GF_ACTIVATION_BYTES + GF_POOL1_BYTES +
+                          GF_CONV2_BYTES + GF_CONV3_BYTES + GF_POOL2_BYTES +
+                          GF_CONV4_BYTES + GF_CONV5_BYTES + GF_POOL3_BYTES +
+                          GF_HEAD1X1_BYTES + (32U * 4096U);   /* alignment slack */
+
+    if (!g_bufs) return -1;
+
+    g_arena_cur = g_bufs;
+    g_arena_end = g_bufs + GF_BUF_SIZE;
+
+    /* Weights first, then the activation pool. */
+    if (copy_weights() != 0) return -1;
+
+    g_in_rgb  = buf_alloc(GF_RGB_BYTES,        4096U);
+    g_act1    = buf_alloc(GF_ACTIVATION_BYTES, 4096U);
+    g_pool1   = buf_alloc(GF_POOL1_BYTES,      4096U);
+    g_conv2   = buf_alloc(GF_CONV2_BYTES,      4096U);
+    g_conv3   = buf_alloc(GF_CONV3_BYTES,      4096U);
+    g_pool2   = buf_alloc(GF_POOL2_BYTES,      4096U);
+    g_conv4   = buf_alloc(GF_CONV4_BYTES,      4096U);
+    g_conv5   = buf_alloc(GF_CONV5_BYTES,      4096U);
+    g_pool3   = buf_alloc(GF_POOL3_BYTES,      4096U);
+    g_head1x1 = buf_alloc(GF_HEAD1X1_BYTES,    4096U);
+
+    if (!g_in_rgb || !g_act1 || !g_pool1 || !g_conv2 || !g_conv3 ||
+        !g_pool2 || !g_conv4 || !g_conv5 || !g_pool3 || !g_head1x1) {
+        fprintf(stderr, "gf_npu: scratch region too small for the activation pool\n");
+        return -1;
+    }
+
+    printf("gf_npu: staged weights + activations, %u bytes used of %u MiB\n",
+           (unsigned)(g_arena_cur - g_bufs), (unsigned)(GF_BUF_SIZE >> 20));
+    printf("gf_npu: buffer phys: rgb=0x%08X act1=0x%08X pool1=0x%08X conv2=0x%08X "
+           "conv3=0x%08X pool2=0x%08X conv4=0x%08X conv5=0x%08X pool3=0x%08X head=0x%08X\n",
+           (unsigned)buf_phys(g_in_rgb), (unsigned)buf_phys(g_act1), (unsigned)buf_phys(g_pool1),
+           (unsigned)buf_phys(g_conv2), (unsigned)buf_phys(g_conv3), (unsigned)buf_phys(g_pool2),
+           (unsigned)buf_phys(g_conv4), (unsigned)buf_phys(g_conv5), (unsigned)buf_phys(g_pool3),
+           (unsigned)buf_phys(g_head1x1));
+    (void)bytes_needed;
+    return 0;
+}
+
+/* ------------------------------------------------------------------- run -- */
+int gf_npu_run_frame(const uint8_t *rgb96, uint32_t *out_class, gf_npu_stats *stats)
+{
+    uint32_t index, status, dma_status, hash;
+    uint32_t cycles0, pool_cycles, gap_fc_cycles;
+    uint32_t conv2_cycles[2] = {0U}, pool2_cycles[2] = {0U};
+    uint32_t conv4_cycles[3] = {0U}, pool3_cycles[3] = {0U};
+    uint32_t head1x1_cycles[4] = {0U};
+    uint32_t gap_fnv, fc_fnv, post_class, post_progress;
+    double t_start, t_end, weight_ms = 0.0;
+
+    if (!g_regs || !g_head1x1) return -1;
+    if (!rgb96) { fprintf(stderr, "gf_npu: null input\n"); return -1; }
+
+    g_fail = 0;
+    g_fail_msg[0] = '\0';
+    t_start = now_ms();
+
+    /* Raw uint8 pixels.  The PL recenters to q = u - 128 itself. */
+    memcpy(g_in_rgb, rgb96, GF_RGB_BYTES);
+    memset(g_act1, 0, GF_ACTIVATION_BYTES);
+    memset(g_pool1, 0, GF_POOL1_BYTES);
+    memset(g_conv2, 0, GF_CONV2_BYTES);
+    memset(g_conv3, 0, GF_CONV3_BYTES);
+    memset(g_pool2, 0, GF_POOL2_BYTES);
+    memset(g_conv4, 0, GF_CONV4_BYTES);
+    memset(g_conv5, 0, GF_CONV5_BYTES);
+    memset(g_pool3, 0, GF_POOL3_BYTES);
+    memset(g_head1x1, 0, GF_HEAD1X1_BYTES);
+
+    /* conv0: 3 -> 16 */
+    cycles0 = exec_conv_tile(0U, buf_phys(g_in_rgb), GF_RGB_BYTES, buf_phys(g_act1),
+                             GF_ACTIVATION_BYTES, 1U, 96U, 96U, 16U, 0U,
+                             g_w_full, gf_dmp_full_folded_bias,
+                             gf_full_requant_multiplier, gf_full_requant_right_shift,
+                             16U, 1U, 16U, &weight_ms);
+    check_input_bytes(GF_RGB_BYTES, 0x4103U);
+    check_store_bytes(GF_ACTIVATION_BYTES, 0x4103U);
+    hash = REG(GF_OUTPUT_FNV1A);
+    if (!g_fail && hash != GF_FULL_OUTPUT_FNV1A) gf_fail(0x4103U, hash);
+    if (stats) { stats->hw_fnv_conv0 = hash; }
+    if (stats) { stats->sw_fnv_conv0 = fnv1a(g_act1, GF_ACTIVATION_BYTES); }
+    if (stats) { stats->conv0 = cycles0; }
+
+    /* conv1 (body2): 16 -> 16, fused pool1 */
+    pool_cycles = exec_conv_tile(1U, buf_phys(g_act1), GF_ACTIVATION_BYTES, buf_phys(g_pool1),
+                                 GF_POOL1_BYTES, 3U, 96U, 96U, 16U, 0U,
+                                 g_w_body2, gf_dmp_body2_folded_bias,
+                                 gf_body2_requant_multiplier, gf_body2_requant_right_shift,
+                                 16U, 2U, 16U, &weight_ms);
+    check_input_bytes(GF_ACTIVATION_BYTES, 0x4105U);
+    check_store_bytes(GF_POOL1_BYTES, 0x4105U);
+    hash = REG(GF_OUTPUT_FNV1A);
+    if (!g_fail && hash != GF_BODY2_OUTPUT_FNV1A) gf_fail(0x4105U, hash);
+    if (stats) { stats->hw_fnv_pool1 = hash; }
+    if (stats) { stats->sw_fnv_pool1 = fnv1a(g_pool1, GF_POOL1_BYTES); }
+    if (stats) { stats->conv1_pool1 = pool_cycles; }
+
+    /* conv2a: 16 -> 32, two 16-output tiles */
+    for (index = 0U; index < 2U; ++index) {
+        conv2_cycles[index] = exec_conv_tile(1U, buf_phys(g_pool1), GF_POOL1_BYTES,
+                                             buf_phys(g_conv2), GF_CONV2_TILE_BYTES, 1U,
+                                             48U, 48U, 32U, index * 16U,
+                                             g_w_conv2a, gf_dmp_conv2a_folded_bias,
+                                             gf_conv2a_requant_multiplier,
+                                             gf_conv2a_requant_right_shift,
+                                             GF_CONV2A_OUTPUT_LANES, 2U, 16U, &weight_ms);
+        check_input_bytes(GF_POOL1_BYTES, 0x4107U);
+        check_store_bytes(GF_CONV2_TILE_BYTES, 0x4107U);
+    }
+    if (stats) {
+        stats->conv2a[0] = conv2_cycles[0];
+        stats->conv2a[1] = conv2_cycles[1];
+        stats->sw_fnv_conv2 = fnv1a(g_conv2, GF_CONV2_BYTES);
+    }
+
+    /* conv2b: 32 -> 32, fused pool2, two 16-output tiles */
+    for (index = 0U; index < 2U; ++index) {
+        pool2_cycles[index] = exec_conv_tile(2U, buf_phys(g_conv2), GF_CONV2_BYTES,
+                                             buf_phys(g_pool2), GF_POOL2_TILE_BYTES, 3U,
+                                             48U, 48U, 32U, index * 16U,
+                                             g_w_conv2b, gf_dmp_conv2b_folded_bias,
+                                             gf_conv2b_requant_multiplier,
+                                             gf_conv2b_requant_right_shift,
+                                             GF_CONV2B_OUTPUT_LANES, 4U, 16U, &weight_ms);
+        check_input_bytes(GF_CONV2_BYTES, 0x4111U);
+        check_store_bytes(GF_POOL2_TILE_BYTES, 0x4111U);
+    }
+    if (stats) {
+        stats->conv2b_pool2[0] = pool2_cycles[0];
+        stats->conv2b_pool2[1] = pool2_cycles[1];
+        stats->sw_fnv_pool2 = fnv1a(g_pool2, GF_POOL2_BYTES);
+    }
+
+    /* conv3a: 32 -> 48, three 16-output tiles */
+    for (index = 0U; index < 3U; ++index) {
+        conv4_cycles[index] = exec_conv_tile(2U, buf_phys(g_pool2), GF_POOL2_BYTES,
+                                             buf_phys(g_conv4), GF_CONV4_TILE_BYTES, 1U,
+                                             24U, 24U, 48U, index * 16U,
+                                             g_w_conv3a, gf_dmp_conv3a_folded_bias,
+                                             gf_conv3a_requant_multiplier,
+                                             gf_conv3a_requant_right_shift,
+                                             GF_CONV3A_OUTPUT_LANES, 4U, 16U, &weight_ms);
+        check_input_bytes(GF_POOL2_BYTES, 0x4116U);
+        check_store_bytes(GF_CONV4_TILE_BYTES, 0x4116U);
+    }
+    if (stats) {
+        stats->conv3a[0] = conv4_cycles[0];
+        stats->conv3a[1] = conv4_cycles[1];
+        stats->conv3a[2] = conv4_cycles[2];
+        stats->sw_fnv_conv4 = fnv1a(g_conv4, GF_CONV4_BYTES);
+    }
+
+    /* conv3b: 48 -> 48, fused pool3, three 16-output tiles */
+    for (index = 0U; index < 3U; ++index) {
+        pool3_cycles[index] = exec_conv_tile(3U, buf_phys(g_conv4), GF_CONV4_BYTES,
+                                             buf_phys(g_pool3), GF_POOL3_TILE_BYTES, 3U,
+                                             24U, 24U, 48U, index * 16U,
+                                             g_w_conv3b, gf_dmp_conv3b_folded_bias,
+                                             gf_conv3b_requant_multiplier,
+                                             gf_conv3b_requant_right_shift,
+                                             GF_CONV3B_OUTPUT_LANES, 6U, 16U, &weight_ms);
+        check_input_bytes(GF_CONV4_BYTES, 0x411DU);
+        check_store_bytes(GF_POOL3_TILE_BYTES, 0x411DU);
+    }
+    if (stats) {
+        stats->conv3b_pool3[0] = pool3_cycles[0];
+        stats->conv3b_pool3[1] = pool3_cycles[1];
+        stats->conv3b_pool3[2] = pool3_cycles[2];
+        stats->sw_fnv_pool3 = fnv1a(g_pool3, GF_POOL3_BYTES);
+    }
+
+    /* head 1x1: 48 -> 64, four 16-output tiles */
+    for (index = 0U; index < 4U; ++index) {
+        head1x1_cycles[index] = exec_conv_tile(5U, buf_phys(g_pool3), GF_POOL3_BYTES,
+                                               buf_phys(g_head1x1), GF_HEAD1X1_TILE_BYTES, 1U,
+                                               12U, 12U, 64U, index * 16U,
+                                               g_w_head1x1, gf_dmp_head1x1_folded_bias,
+                                               gf_head1x1_requant_multiplier,
+                                               gf_head1x1_requant_right_shift,
+                                               64U, 6U, 16U, &weight_ms);
+        check_input_bytes(GF_POOL3_BYTES, 0x412BU);
+        check_store_bytes(GF_HEAD1X1_TILE_BYTES, 0x412BU);
+    }
+    if (stats) {
+        stats->head1x1[0] = head1x1_cycles[0];
+        stats->head1x1[1] = head1x1_cycles[1];
+        stats->head1x1[2] = head1x1_cycles[2];
+        stats->head1x1[3] = head1x1_cycles[3];
+        stats->sw_fnv_head1x1 = fnv1a(g_head1x1, GF_HEAD1X1_BYTES);
+    }
+
+    /* GAP(64) + FC(18) */
+    REG(GF_CONTROL) = 1U;
+    load_gap_fc_descriptor();
+    gap_fc_cycles = run_gap_fc(buf_phys(g_head1x1));
+
+    status       = REG(GF_STATUS);
+    dma_status   = REG(GF_DMA_STATUS);
+    gap_fnv      = REG(GF_POST_GAP_FNV1A_REG);
+    fc_fnv       = REG(GF_POST_FC_FNV1A_REG);
+    post_class   = REG(GF_POST_CLASS_REG);
+    post_progress = REG(GF_POST_PROGRESS_REG);
+
+    if ((status & (GF_FAULT_BIT | GF_LAYER_FAULT_BIT)) ||
+        (dma_status & GF_DMA_FAULT_BIT) || !(dma_status & GF_DMA_DONE_BIT) ||
+        GF_DMA_BYTES_READ(dma_status) != GF_HEAD1X1_BYTES ||
+        gap_fnv != GF_POST_GAP_EXPECTED_FNV1A ||
+        fc_fnv  != GF_POST_FC_EXPECTED_FNV1A ||
+        (post_class & 31U) != GF_POST_EXPECTED_CLASS) {
+        gf_fail(0x4133U, fc_fnv);
+    }
+
+    t_end = now_ms();
+
+    if (stats) {
+        stats->gap_fc            = gap_fc_cycles;
+        stats->gap_fnv           = gap_fnv;
+        stats->fc_fnv            = fc_fnv;
+        stats->gap_progress      = post_progress;
+        stats->pl_cycles_total   = cycles0 + pool_cycles + gap_fc_cycles;
+        for (index = 0U; index < 2U; ++index) stats->pl_cycles_total += conv2_cycles[index] + pool2_cycles[index];
+        for (index = 0U; index < 3U; ++index) stats->pl_cycles_total += conv4_cycles[index] + pool3_cycles[index];
+        for (index = 0U; index < 4U; ++index) stats->pl_cycles_total += head1x1_cycles[index];
+        stats->cpu_total_ms   = t_end - t_start;
+        stats->weight_load_ms = weight_ms;
+    }
+
+    if (out_class) *out_class = post_class & 31U;
+
+    if (g_fail) {
+        fprintf(stderr, "gf_npu: run failed: %s\n", g_fail_msg);
+        return -1;
+    }
+    return 0;
+}
+
+/* -------------------------------------------------------------- selftest -- */
+int gf_npu_selftest(gf_npu_stats *stats)
+{
+    uint32_t cls = 0U;
+    int rc;
+
+    printf("gf_npu: selftest with the built-in reference image\n");
+    rc = gf_npu_run_frame(gf_full_camera_rgb, &cls, stats);
+    if (rc != 0) return rc;
+
+    printf("gf_npu: SELFTEST PASS  class=%u (%s)  expected=%u\n",
+           (unsigned)cls, gf_npu_class_name(cls), (unsigned)GF_POST_EXPECTED_CLASS);
+    return (cls == GF_POST_EXPECTED_CLASS) ? 0 : -1;
+}
+
+/* ----------------------------------------------------------- class names -- */
+static const char *const GF_CLASS_NAMES[18] = {
+    "call", "dislike", "fist", "four", "like", "mute", "ok", "one", "palm",
+    "peace", "peace_inverted", "rock", "stop", "stop_inverted", "three",
+    "three2", "two_up", "two_up_inverted"
+};
+
+const char *gf_npu_class_name(uint32_t class_index)
+{
+    if (class_index < 18U) return GF_CLASS_NAMES[class_index];
+    return "?";
+}
+
+/* ------------------------------------------------------------- accessors -- */
+const uint8_t *gf_npu_reference_input(void)
+{
+    return gf_full_camera_rgb;
+}
+
+uint32_t gf_npu_expected_fnv_conv0(void)
+{
+    return GF_FULL_OUTPUT_FNV1A;
+}
+
+uint32_t gf_npu_expected_fnv_pool1(void)
+{
+    return GF_BODY2_OUTPUT_FNV1A;
+}
+
+uint32_t gf_npu_expected_class(void)
+{
+    return GF_POST_EXPECTED_CLASS;
+}

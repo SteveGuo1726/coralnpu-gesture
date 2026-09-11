@@ -1,0 +1,60 @@
+/*
+ * PROJECT_LOCAL_SELF_RESEARCH_NOT_GOOGLE_OFFICIAL
+ *
+ * ZCU104 GestureFlow NPU: device-tree additions for the Linux-side userspace
+ * driver.
+ *
+ * Installed to:
+ *   project-spec/meta-user/recipes-bsp/device-tree/files/system-user.dtsi
+ *
+ * ---------------------------------------------------------------------------
+ * WHY a reserved-memory carve-out
+ *
+ * The NPU's M_AXI master is wired to PS S_AXI_HP0_FPD -- a NON-COHERENT port.
+ * The userspace driver therefore wants its scratch buffers mapped non-cached so
+ * that neither side needs any cache maintenance.  The clean way to get that is
+ * /dev/mem, which on arm64 returns a non-cached mapping for non-RAM physical
+ * addresses.
+ *
+ * `no-map` is essential, not cosmetic:
+ *   - without it the region stays System RAM, and CONFIG_STRICT_DEVMEM's
+ *     devmem_is_allowed() refuses the mapping;
+ *   - with it memblock_remove() drops the range from the kernel's memory map,
+ *     so it is no longer RAM (mmap allowed) and the kernel will never put its
+ *     own data there.
+ *
+ * Address choice: the Linux memory node ends at 0x7FF00000 (2 GB minus the
+ * 1 MB TZ tail), so 0x70000000 + 16 MB sits well inside DDR and leaves ~240 MB
+ * of headroom above it.  The NPU master's assigned address space is
+ * 0x0 - 0x80000000, so this is reachable by HP0.
+ *
+ * Size: the current network needs ~148 KB of weights and ~425 KB of
+ * activations.  16 MB is deliberate over-allocation so that the follow-up
+ * double-buffered pipeline (capture and compute overlapping) fits, with room to
+ * grow.
+ *
+ * The matching userspace layout is defined in linux/gf_npu.h (GF_BUF_*).
+ * ---------------------------------------------------------------------------
+ */
+
+/include/ "system-conf.dtsi"
+
+/ {
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		/*
+		 * GestureFlow NPU scratch: weights blob, input RGB, every
+		 * intermediate tensor, and the result area.
+		 *
+		 * The userspace driver maps this via /dev/mem and treats it as
+		 * plain non-cached memory -- no flush/invalidate anywhere.
+		 */
+		npu_buffers: npu-buffers@70000000 {
+			reg = <0x0 0x70000000 0x0 0x1000000>;	/* 16 MB */
+			no-map;
+		};
+	};
+};

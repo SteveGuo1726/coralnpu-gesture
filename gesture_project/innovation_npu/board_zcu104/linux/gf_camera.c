@@ -1,0 +1,544 @@
+/*
+ * PROJECT_LOCAL_SELF_RESEARCH_NOT_GOOGLE_OFFICIAL
+ *
+ * ZCU104 USB3 UVC camera -> GestureFlow NPU -> static gesture, live.
+ *
+ * Capture path:  V4L2 (uvcvideo) -> RGB -> area-average downscale to 96x96 ->
+ *                raw uint8 into the NPU scratch buffer -> 21 tile launches ->
+ *                class register.
+ *
+ * Two details that matter and are easy to get wrong:
+ *
+ *  1. The NPU's RGB loader recenters the input itself:
+ *         rtl/gestureflow_hp0_rgb_loader.sv:  pixel_rgb = {~byte[7], byte[6:0]}
+ *     which is XOR 0x80, i.e. q = u - 128 read as int8.  So this program must
+ *     hand over RAW uint8 pixels and must NOT subtract 128.
+ *
+ *  2. The training pipeline used PIL's resize:
+ *         Image.open(p).convert("RGB").resize((96,96), Image.BILINEAR)
+ *     PIL's BILINEAR downscale is antialiased (the filter support is scaled by
+ *     the decimation factor), not a naive 2-tap bilinear.  An area average (box
+ *     filter) tracks it much more closely than point sampling, so that is what
+ *     resize_rgb96() implements.  Nearest neighbour would alias badly on a
+ *     640x480 -> 96x96 decimation.
+ *
+ * Build: see Makefile.  MJPEG support is optional (needs libjpeg); YUYV and
+ * RGB24 work with no extra dependency.
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <time.h>
+#include <signal.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <linux/videodev2.h>
+
+#include "gf_npu.h"
+
+#ifdef GF_HAVE_JPEG
+#include <jpeglib.h>
+#endif
+
+#define MAX_BUFFERS     4
+#define OUT_W           96
+#define OUT_H           96
+#define OUT_RGB_BYTES   (OUT_W * OUT_H * 3)
+
+/* ------------------------------------------------------------------ util -- */
+static double now_s(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1.0e9;
+}
+
+static const char *fourcc_str(uint32_t f, char *buf)
+{
+    buf[0] = (char)( f        & 0xFF);
+    buf[1] = (char)((f >> 8)  & 0xFF);
+    buf[2] = (char)((f >> 16) & 0xFF);
+    buf[3] = (char)((f >> 24) & 0xFF);
+    buf[4] = '\0';
+    return buf;
+}
+
+static void die(const char *what)
+{
+    fprintf(stderr, "gf_camera: %s: %s\n", what, strerror(errno));
+    exit(1);
+}
+
+/* ------------------------------------------------------- resize (box) ----- */
+/* Area-average downscale to 96x96.  Bounds are computed in 64-bit to avoid
+ * overflow on large inputs (e.g. 1920x1080). */
+static void resize_rgb96(const uint8_t *src, int sw, int sh, uint8_t *dst)
+{
+    int oy, ox, c;
+    if (sw < OUT_W || sh < OUT_H) {
+        /* Upscaling is not needed for any sane camera; fall back to nearest so
+         * the program still produces something instead of failing. */
+        for (oy = 0; oy < OUT_H; ++oy) {
+            int sy = (int)((int64_t)oy * sh / OUT_H);
+            for (ox = 0; ox < OUT_W; ++ox) {
+                int sx = (int)((int64_t)ox * sw / OUT_W);
+                for (c = 0; c < 3; ++c)
+                    dst[(oy * OUT_W + ox) * 3 + c] = src[((size_t)sy * sw + sx) * 3 + c];
+            }
+        }
+        return;
+    }
+    for (oy = 0; oy < OUT_H; ++oy) {
+        int y0 = (int)((int64_t)oy       * sh / OUT_H);
+        int y1 = (int)((int64_t)(oy + 1) * sh / OUT_H);
+        if (y1 <= y0) y1 = y0 + 1;
+        for (ox = 0; ox < OUT_W; ++ox) {
+            int x0 = (int)((int64_t)ox       * sw / OUT_W);
+            int x1 = (int)((int64_t)(ox + 1) * sw / OUT_W);
+            uint32_t acc[3] = {0U, 0U, 0U};
+            uint32_t n = 0U;
+            int y, x;
+            if (x1 <= x0) x1 = x0 + 1;
+            for (y = y0; y < y1; ++y) {
+                const uint8_t *row = src + (size_t)y * sw * 3;
+                for (x = x0; x < x1; ++x) {
+                    acc[0] += row[x * 3 + 0];
+                    acc[1] += row[x * 3 + 1];
+                    acc[2] += row[x * 3 + 2];
+                    ++n;
+                }
+            }
+            dst[(oy * OUT_W + ox) * 3 + 0] = (uint8_t)((acc[0] + n / 2U) / n);
+            dst[(oy * OUT_W + ox) * 3 + 1] = (uint8_t)((acc[1] + n / 2U) / n);
+            dst[(oy * OUT_W + ox) * 3 + 2] = (uint8_t)((acc[2] + n / 2U) / n);
+        }
+    }
+}
+
+/* ------------------------------------------------------------ conversions -- */
+/* YUYV (V4L2_PIX_FMT_YUYV) 4:2:2 -> RGB24, BT.601 limited range.
+ *   R = 1.164(Y-16) + 1.596(V-128)
+ *   G = 1.164(Y-16) - 0.813(V-128) - 0.391(U-128)
+ *   B = 1.164(Y-16) + 2.018(U-128)
+ * The UVC camera is asked for YUYV only when MJPEG/RGB24 are unavailable; the
+ * exact colour matrix matters far less than the geometry for a gesture model
+ * that was trained on sRGB-ish data, but using BT.601 keeps it sane. */
+static void yuyv_to_rgb(const uint8_t *src, int w, int h, uint8_t *dst)
+{
+    int y;
+    for (y = 0; y < h; ++y) {
+        const uint8_t *srow = src + (size_t)y * w * 2;
+        uint8_t *drow = dst + (size_t)y * w * 3;
+        int x;
+        for (x = 0; x < w; x += 2) {
+            int u = (int)srow[x * 2 + 1] - 128;
+            int v = (int)srow[x * 2 + 3] - 128;
+            int yy0 = (int)srow[x * 2 + 0];
+            int yy1 = (int)srow[x * 2 + 2];
+            int c0, c1, c2;
+            int cl;
+            for (cl = 0; cl < 2; ++cl) {
+                int Y = (cl == 0 ? yy0 : yy1) - 16;
+                if (Y < 0) Y = 0;
+                c0 = (298 * Y + 409 * v + 128) >> 8;
+                c1 = (298 * Y - 100 * v - 208 * u + 128) >> 8;
+                c2 = (298 * Y + 516 * u + 128) >> 8;
+                drow[(x + cl) * 3 + 0] = (uint8_t)(c0 < 0 ? 0 : (c0 > 255 ? 255 : c0));
+                drow[(x + cl) * 3 + 1] = (uint8_t)(c1 < 0 ? 0 : (c1 > 255 ? 255 : c1));
+                drow[(x + cl) * 3 + 2] = (uint8_t)(c2 < 0 ? 0 : (c2 > 255 ? 255 : c2));
+            }
+        }
+    }
+}
+
+#ifdef GF_HAVE_JPEG
+static int jpeg_to_rgb(const uint8_t *src, size_t len, int *out_w, int *out_h, uint8_t *dst)
+{
+    struct jpeg_decompress_struct cinfo;
+    struct jpeg_error_mgr jerr;
+    cinfo.err = jpeg_std_error(&jerr);
+    jpeg_create_decompress(&cinfo);
+    jpeg_mem_src(&cinfo, (unsigned char *)src, (unsigned long)len);
+    if (jpeg_read_header(&cinfo, TRUE) != JPEG_HEADER_OK) {
+        jpeg_destroy_decompress(&cinfo);
+        return -1;
+    }
+    cinfo.out_color_space = JCS_RGB;
+    jpeg_start_decompress(&cinfo);
+    if ((int)cinfo.output_width != *out_w || (int)cinfo.output_height != *out_h) {
+        *out_w = (int)cinfo.output_width;
+        *out_h = (int)cinfo.output_height;
+    }
+    while (cinfo.output_scanline < cinfo.output_height) {
+        JSAMPROW row = dst + (size_t)cinfo.output_scanline * (*out_w) * 3;
+        jpeg_read_scanlines(&cinfo, &row, 1);
+    }
+    jpeg_finish_decompress(&cinfo);
+    jpeg_destroy_decompress(&cinfo);
+    return 0;
+}
+#endif
+
+/* -------------------------------------------------------------- V4L2 side -- */
+struct v4l2_state {
+    int      fd;
+    uint32_t pixfmt;
+    int      width, height;
+    void    *buf[MAX_BUFFERS];
+    size_t   buflen[MAX_BUFFERS];
+    uint32_t nbuf;
+    int      streaming;
+};
+
+static void v4l2_cleanup(struct v4l2_state *st)
+{
+    uint32_t i;
+    if (st->streaming) {
+        enum v4l2_buf_type t = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        ioctl(st->fd, VIDIOC_STREAMOFF, &t);
+        st->streaming = 0;
+    }
+    for (i = 0; i < st->nbuf; ++i)
+        if (st->buf[i]) munmap(st->buf[i], st->buflen[i]);
+    if (st->fd >= 0) close(st->fd);
+    st->fd = -1;
+}
+
+static int v4l2_list_formats(int fd)
+{
+    struct v4l2_fmtdesc f;
+    memset(&f, 0, sizeof f);
+    f.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    printf("gf_camera: capture formats:\n");
+    for (f.index = 0; ioctl(fd, VIDIOC_ENUM_FMT, &f) == 0; ++f.index) {
+        struct v4l2_frmsizeenum s;
+        char b[5];
+        printf("  [%u] %s (%s)\n", f.index, fourcc_str(f.pixelformat, b),
+               f.description);
+        memset(&s, 0, sizeof s);
+        s.pixel_format = f.pixelformat;
+        for (s.index = 0; ioctl(fd, VIDIOC_ENUM_FRAMESIZES, &s) == 0; ++s.index) {
+            if (s.type == V4L2_FRMSIZE_TYPE_DISCRETE)
+                printf("        %ux%u\n", s.discrete.width, s.discrete.height);
+            else
+                printf("        %ux%u .. %ux%u (step %ux%u)\n",
+                       s.stepwise.min_width, s.stepwise.min_height,
+                       s.stepwise.max_width, s.stepwise.max_height,
+                       s.stepwise.step_width, s.stepwise.step_height);
+        }
+    }
+    return 0;
+}
+
+static int v4l2_try_format(int fd, uint32_t want, int w, int h,
+                           struct v4l2_format *out)
+{
+    struct v4l2_format fmt;
+    memset(&fmt, 0, sizeof fmt);
+    fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    fmt.fmt.pix.width       = (uint32_t)w;
+    fmt.fmt.pix.height      = (uint32_t)h;
+    fmt.fmt.pix.pixelformat = want;
+    fmt.fmt.pix.field       = V4L2_FIELD_NONE;
+    if (ioctl(fd, VIDIOC_S_FMT, &fmt) != 0) return -1;
+    if (fmt.fmt.pix.pixelformat != want) return -1;   /* driver picked something else */
+    *out = fmt;
+    return 0;
+}
+
+static int v4l2_setup(struct v4l2_state *st, const char *dev, int want_w, int want_h)
+{
+    struct v4l2_format fmt;
+    struct v4l2_requestbuffers req;
+    struct v4l2_capability cap;
+    enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    uint32_t i;
+
+    memset(&fmt, 0, sizeof fmt);   /* reported on the failure path below */
+    memset(st, 0, sizeof *st);
+    st->fd = -1;
+
+    st->fd = open(dev, O_RDWR);
+    if (st->fd < 0) die(dev);
+
+    if (ioctl(st->fd, VIDIOC_QUERYCAP, &cap) != 0) die("VIDIOC_QUERYCAP");
+    printf("gf_camera: %s driver=%s card=%s bus=%s\n", dev,
+           cap.driver, cap.card, cap.bus_info);
+    if (!(cap.capabilities & V4L2_CAP_VIDEO_CAPTURE)) {
+        fprintf(stderr, "gf_camera: %s is not a capture device\n", dev);
+        return -1;
+    }
+
+    /* Preference order: MJPEG (small frames, best frame rate) > YUYV > RGB24.
+     * Trying YUYV first would work but wastes USB bandwidth; RGB24 is rarely
+     * offered by UVC cameras. */
+    {
+        struct { uint32_t f; const char *n; int optional; } prefs[] = {
+#ifdef GF_HAVE_JPEG
+            { V4L2_PIX_FMT_MJPEG, "MJPEG", 0 },
+            { V4L2_PIX_FMT_JPEG,  "JPEG",  0 },
+#else
+            { V4L2_PIX_FMT_MJPEG, "MJPEG", 1 },   /* will be skipped */
+#endif
+            { V4L2_PIX_FMT_YUYV,  "YUYV",  0 },
+            { V4L2_PIX_FMT_RGB24, "RGB24", 0 },
+        };
+        size_t k;
+        int ok = 0;
+        for (k = 0; k < sizeof prefs / sizeof prefs[0]; ++k) {
+#ifdef GF_HAVE_JPEG
+            (void)prefs[k].optional;
+#else
+            if (prefs[k].optional) continue;
+#endif
+            if (v4l2_try_format(st->fd, prefs[k].f, want_w, want_h, &fmt) == 0) {
+                st->pixfmt = fmt.fmt.pix.pixelformat;
+                st->width  = (int)fmt.fmt.pix.width;
+                st->height = (int)fmt.fmt.pix.height;
+                printf("gf_camera: using %s %dx%d (bytesperline %u, sizeimage %u)\n",
+                       prefs[k].n, st->width, st->height,
+                       fmt.fmt.pix.bytesperline, fmt.fmt.pix.sizeimage);
+                ok = 1;
+                break;
+            }
+        }
+        if (!ok) {
+            char b[5];
+            fprintf(stderr, "gf_camera: no usable format at %dx%d. Got:\n", want_w, want_h);
+            fourcc_str(fmt.fmt.pix.pixelformat, b);
+            fprintf(stderr, "  driver reports %s %ux%u\n", b,
+                    fmt.fmt.pix.width, fmt.fmt.pix.height);
+            v4l2_list_formats(st->fd);
+            return -1;
+        }
+    }
+
+    memset(&req, 0, sizeof req);
+    req.count  = MAX_BUFFERS;
+    req.type   = type;
+    req.memory = V4L2_MEMORY_MMAP;
+    if (ioctl(st->fd, VIDIOC_REQBUFS, &req) != 0) die("VIDIOC_REQBUFS");
+    if (req.count < 2) {
+        fprintf(stderr, "gf_camera: only %u buffers available\n", req.count);
+        return -1;
+    }
+    st->nbuf = req.count;
+
+    for (i = 0; i < st->nbuf; ++i) {
+        struct v4l2_buffer buf;
+        memset(&buf, 0, sizeof buf);
+        buf.type = type;
+        buf.memory = V4L2_MEMORY_MMAP;
+        buf.index = i;
+        if (ioctl(st->fd, VIDIOC_QUERYBUF, &buf) != 0) die("VIDIOC_QUERYBUF");
+        st->buflen[i] = buf.length;
+        st->buf[i] = mmap(NULL, buf.length, PROT_READ | PROT_WRITE, MAP_SHARED,
+                          st->fd, buf.m.offset);
+        if (st->buf[i] == MAP_FAILED) die("mmap capture buffer");
+    }
+    for (i = 0; i < st->nbuf; ++i) {
+        struct v4l2_buffer buf;
+        memset(&buf, 0, sizeof buf);
+        buf.type = type;
+        buf.memory = V4L2_MEMORY_MMAP;
+        buf.index = i;
+        if (ioctl(st->fd, VIDIOC_QBUF, &buf) != 0) die("VIDIOC_QBUF");
+    }
+    if (ioctl(st->fd, VIDIOC_STREAMON, &type) != 0) die("VIDIOC_STREAMON");
+    st->streaming = 1;
+    printf("gf_camera: streaming, %u buffers\n", st->nbuf);
+    return 0;
+}
+
+static int v4l2_grab(struct v4l2_state *st, const uint8_t **data, size_t *len)
+{
+    struct v4l2_buffer buf;
+    enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+
+    memset(&buf, 0, sizeof buf);
+    buf.type = type;
+    buf.memory = V4L2_MEMORY_MMAP;
+    if (ioctl(st->fd, VIDIOC_DQBUF, &buf) != 0) {
+        if (errno == EAGAIN) return -1;
+        die("VIDIOC_DQBUF");
+    }
+    *data = (const uint8_t *)st->buf[buf.index];
+    *len  = buf.bytesused;
+    /* Release immediately; we copy/convert before the next dequeue. */
+    if (ioctl(st->fd, VIDIOC_QBUF, &buf) != 0) die("VIDIOC_QBUF(recycle)");
+    return 0;
+}
+
+/* ------------------------------------------------------------------ main -- */
+static void write_ppm(const char *path, const uint8_t *rgb, int w, int h)
+{
+    FILE *f = fopen(path, "wb");
+    if (!f) return;
+    fprintf(f, "P6\n%d %d\n255\n", w, h);
+    fwrite(rgb, 1, (size_t)w * h * 3, f);
+    fclose(f);
+    printf("gf_camera: wrote %s (%dx%d)\n", path, w, h);
+}
+
+static void usage(const char *argv0)
+{
+    printf("usage: %s [options]\n"
+           "  -d DEV        video device (default /dev/video0)\n"
+           "  -s WxH        capture size to request (default 640x480)\n"
+           "  -n N          stop after N frames (0 = forever, default 0)\n"
+           "  -m N          majority-vote smoothing window in frames (default 5)\n"
+           "  --list        list capture formats and exit\n"
+           "  --selftest    run the NPU reference selftest and exit\n"
+           "  --save-ppm P  save the resized 96x96 RGB that is fed to the NPU\n",
+           argv0);
+}
+
+static volatile sig_atomic_t g_stop = 0;
+static void on_sigint(int s) { (void)s; g_stop = 1; }
+
+int main(int argc, char **argv)
+{
+    const char *dev = "/dev/video0";
+    const char *save_ppm = NULL;
+    int want_w = 640, want_h = 480;
+    int max_frames = 0;
+    int smooth = 5;
+    int do_list = 0, do_selftest = 0;
+    int i;
+
+    for (i = 1; i < argc; ++i) {
+        if (!strcmp(argv[i], "--list"))      { do_list = 1; }
+        else if (!strcmp(argv[i], "--selftest")) { do_selftest = 1; }
+        else if (!strcmp(argv[i], "-d") && i + 1 < argc) dev = argv[++i];
+        else if (!strcmp(argv[i], "-s") && i + 1 < argc) {
+            if (sscanf(argv[++i], "%dx%d", &want_w, &want_h) != 2) { usage(argv[0]); return 2; }
+        }
+        else if (!strcmp(argv[i], "-n") && i + 1 < argc) max_frames = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "-m") && i + 1 < argc) smooth = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--save-ppm") && i + 1 < argc) save_ppm = argv[++i];
+        else { usage(argv[0]); return 2; }
+    }
+    if (smooth < 1) smooth = 1;
+
+    /* The NPU must be up before anything else: if the PL is not configured or
+     * its clock is gated, GF_MAGIC will not read back and we want to know that
+     * before touching the camera. */
+    if (gf_npu_open() != 0) return 1;
+    if (gf_npu_load_weights() != 0) return 1;
+
+    if (do_selftest) {
+        int rc = gf_npu_selftest(NULL);
+        gf_npu_close();
+        return rc == 0 ? 0 : 1;
+    }
+
+    if (do_list) {
+        int fd = open(dev, O_RDWR);
+        if (fd < 0) die(dev);
+        v4l2_list_formats(fd);
+        close(fd);
+        gf_npu_close();
+        return 0;
+    }
+
+    {
+        struct v4l2_state st;
+        uint8_t *rgb_frame = NULL;
+        uint8_t  rgb96[OUT_RGB_BYTES];
+        uint32_t cls = 0U;
+        int history[32];
+        int hist_n = 0;
+        long frame_no = 0;
+        double t_prev = 0.0;
+
+        if (v4l2_setup(&st, dev, want_w, want_h) != 0) {
+            gf_npu_close();
+            return 1;
+        }
+        rgb_frame = malloc((size_t)st.width * st.height * 3);
+        if (!rgb_frame) die("malloc");
+
+        signal(SIGINT, on_sigint);
+
+        printf("gf_camera: running ('Ctrl-C' to stop)\n");
+        while (!g_stop) {
+            const uint8_t *payload = NULL;
+            size_t plen = 0;
+            int cw = st.width, ch = st.height;
+            double t0, t1, fps = 0.0;
+
+            if (v4l2_grab(&st, &payload, &plen) != 0) continue;
+
+            t0 = now_s();
+
+            switch (st.pixfmt) {
+            case V4L2_PIX_FMT_YUYV:
+                yuyv_to_rgb(payload, st.width, st.height, rgb_frame);
+                break;
+            case V4L2_PIX_FMT_RGB24:
+                memcpy(rgb_frame, payload,
+                       (size_t)st.width * st.height * 3 < plen
+                           ? (size_t)st.width * st.height * 3 : plen);
+                break;
+#ifdef GF_HAVE_JPEG
+            case V4L2_PIX_FMT_MJPEG:
+            case V4L2_PIX_FMT_JPEG:
+                if (jpeg_to_rgb(payload, plen, &cw, &ch, rgb_frame) != 0) {
+                    fprintf(stderr, "gf_camera: JPEG decode failed, skipping frame\n");
+                    continue;
+                }
+                break;
+#endif
+            default:
+                fprintf(stderr, "gf_camera: unhandled pixel format, skipping\n");
+                continue;
+            }
+
+            resize_rgb96(rgb_frame, cw, ch, rgb96);
+
+            if (gf_npu_run_frame(rgb96, &cls, NULL) != 0) {
+                fprintf(stderr, "gf_camera: NPU run failed on frame %ld\n", frame_no);
+                break;
+            }
+
+            /* Majority vote over a short window: a single-frame flip is noise
+             * the user should not see. */
+            if (hist_n < smooth) {
+                history[hist_n++] = (int)cls;
+            } else {
+                memmove(history, history + 1, sizeof(int) * (size_t)(smooth - 1));
+                history[smooth - 1] = (int)cls;
+            }
+            {
+                int best = (int)cls, best_count = 0, k, j;
+                for (k = 0; k < hist_n; ++k) {
+                    int cnt = 0;
+                    for (j = 0; j < hist_n; ++j) if (history[j] == history[k]) ++cnt;
+                    if (cnt > best_count) { best_count = cnt; best = history[k]; }
+                }
+                t1 = now_s();
+                if (t_prev > 0.0) fps = 1.0 / (t1 - t_prev);
+                if (save_ppm && frame_no == 3) write_ppm(save_ppm, rgb96, OUT_W, OUT_H);
+                printf("frame %6ld  %-16s (raw %-16s)  %d/%d votes  %6.2f fps  %5.1f ms\n",
+                       frame_no, gf_npu_class_name((uint32_t)best),
+                       gf_npu_class_name(cls), best_count, hist_n, fps,
+                       (t1 - t0) * 1000.0);
+                fflush(stdout);
+            }
+            t_prev = t1;
+
+            ++frame_no;
+            if (max_frames > 0 && frame_no >= max_frames) break;
+        }
+
+        v4l2_cleanup(&st);
+        free(rgb_frame);
+        gf_npu_close();
+        printf("gf_camera: %ld frames processed\n", frame_no);
+    }
+    return 0;
+}
