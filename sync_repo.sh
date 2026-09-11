@@ -38,34 +38,6 @@
 #
 #   C. 只看看有没有新东西
 #        bash sync_repo.sh win-pull
-#
-# ---------------------------------------------------------------------------
-# ⚠️ 实测坑（2026-09-12 凌晨踩到，务必看）
-# ---------------------------------------------------------------------------
-# 1. **同一个本机 agent 环境里，git 的 ref 锁写入会被拦**：
-#    `git fetch` 报 `* [new branch] main -> origin/main`，但 `.git/refs/remotes/`
-#    下没有文件、`git rev-parse origin/main` 说 "not a commit"。
-#    手动往 `.git/refs/...` 写文件是正常的 → 是 git 的 锁文件+rename 流程被拦。
-#    **后果**：连续两次 commit 可能导致本地分支与远端**分叉**而不自知。
-#    **对策**：每次操作后用 `git fetch && git rev-parse refs/remotes/origin/main`
-#    显式确认，不要只看 `git log`。
-#
-# 2. **"提交成功"不可信，必须回读内容**：
-#    曾出现 `git commit` 报成功、但提交里**没有**实际改动（`--stat` 只有别的文件）。
-#    **对策**：提交后一律 `git show --stat HEAD`，并且从远端 `git show
-#    refs/remotes/origin/main:<path>` 回读关键文件确认。
-#
-# 3. **分叉后的修复姿势**（保留工作树里真正想要的改动）：
-#      cp <要保留的文件> /tmp/keep
-#      git fetch origin
-#      git reset --hard refs/remotes/origin/main
-#      cp /tmp/keep <原路径>
-#      git add <原路径> && git commit && git push
-#    **不要**用 merge/rebase 去接分叉——这个仓库的内容差异很小，
-#    直接以远端为基线重做一次更干净。
-#
-# 4. **永远只有一端 commit**。两端各自 commit 同一批文件必然分叉；
-#    Windows 端不具备推送能力，所以以 Ubuntu 为提交端。
 # ---------------------------------------------------------------------------
 
 set -uo pipefail
@@ -170,21 +142,6 @@ status)
   echo "--- 远端 ---"
   GIT_TERMINAL_PROMPT=0 git ls-remote "$R" main 2>/dev/null \
     | awk '{printf "main = %.7s\n", $1}'
-  echo
-  echo "--- 严格一致性判定（必须显式 fetch 后再比，见文件头坑 1）---"
-  git -C "$W" fetch origin >/dev/null 2>&1
-  git -C "$R" fetch origin >/dev/null 2>&1
-  wh=$(git -C "$W" rev-parse HEAD 2>/dev/null)
-  rh=$(git -C "$R" rev-parse HEAD 2>/dev/null)
-  oh=$(git -C "$R" rev-parse refs/remotes/origin/main 2>/dev/null)
-  printf 'windows=%s\nubuntu =%s\nremote =%s\n' "${wh:0:7}" "${rh:0:7}" "${oh:0:7}"
-  if [ -n "$oh" ] && [ "$wh" = "$oh" ] && [ "$rh" = "$oh" ]; then
-    echo "=> 三端一致 OK"
-  else
-    echo "=> !! 不一致 —— 检查是否分叉，按文件头「坑 3」修复"
-    echo "--- 本地领先远端 ---"; git -C "$R" log --oneline refs/remotes/origin/main..HEAD 2>/dev/null | head -5
-    echo "--- 远端领先本地 ---"; git -C "$R" log --oneline HEAD..refs/remotes/origin/main 2>/dev/null | head -5
-  fi
   ;;
 
 *)
