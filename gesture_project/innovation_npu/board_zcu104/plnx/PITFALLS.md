@@ -982,3 +982,44 @@ once.** It started upside down and needed `--rotate 180`; the user then remounte
 it upright, at which point copying the previous command line inverted a
 correct image.  Judge from a captured frame (`--save-ppm` and look at it), not
 from history.  See `docs/ZCU104_实时监视器_2026-09-12.md` section 5.
+
+## 22. `petalinux-build` can return 255 *after* producing the artifacts
+
+Observed:
+
+```
+Checking sstate mirror object availability...
+ERROR: SState: cannot test file://26/b3/sstate:sed:..._package.tar.zst: TimeoutError('timed out')
+ERROR: SState: cannot test file://bb/e1/sstate:python3-iniparse:...: TimeoutError('timed out')
+Summary: There were 2 ERROR messages, returning a non-zero exit code.
+ERROR: Failed to build project.
+```
+
+`06_install_app.sh` correctly refuses to claim success (`BUILD_RC=255`), and the
+first instinct is to go looking for a mistake in the code.  **Look at the
+timestamps first**: in that run `rootfs.ext4`, `rootfs.manifest`, `rootfs.cpio`
+and `rootfs.tar.gz` had all been rewritten a minute earlier, i.e. the recipe
+built, installed, packaged and the image was assembled.  What failed was
+bitbake's *mirror probe* on the way out.
+
+The trigger was the network, and specifically this: **WSL 2.7 automatically
+exports the Windows proxy into the WSL environment** (`env` shows
+`https_proxy=http://127.0.0.1:7897`, `NO_PROXY=...`).  That proxy was saturated
+at the time by an unrelated 400-request HTTP loop over the same host network
+stack, so the probe timed out.  Nothing to do with the driver.
+
+So: `BUILD_RC != 0` means "read the log", not "the code is broken".  The judge of
+whether the image is usable is still `05_verify_image.sh` -- which reported
+`RESULT: PASS` on that very build, because `rootfs.ext4` (18:20) was newer than
+the newest source (18:19) and the binaries inside matched the sources byte for
+byte by md5.
+
+If it recurs, the cheapest fix is to re-run with the proxy out of the way:
+
+```
+env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
+    bash 06_install_app.sh
+```
+
+and to avoid running anything else across the same network path while a build is
+finishing.
