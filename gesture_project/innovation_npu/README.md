@@ -1,5 +1,24 @@
 # GestureFlow-NPU: 项目自研手势推理加速器
 
+> ## ⚠️ 本文停在 v0（约 2026-08-16），已不代表最终形态（2026-09-12 标注）
+>
+> 本文描述的 MAC 是 **`16 输出 × 4 输入`（gf64）**、实板基线是
+> `gestureflow_activation_bank` / `gestureflow_axil_microkernel` 的 25 MHz 微基准
+> （263 cycles / 1.557 GMAC/s）。
+>
+> 最终形态与它**不是同一个设计**：
+> - MAC 已经是 **DMP `16 输出 × 8 输入`**（一个 DSP48E1 每拍两个 INT8 乘积）
+> - 走 **8-lane 数据通路**，含 DMP 专用权重 DMA loader
+> - 实板：7020 `41.9 FPS @80MHz`、ZCU104 `36.96 FPS @100MHz`，`0x600D600D`
+>
+> **当前主线请读**：
+> - `../docs/项目完整上下文_Windows工作区版_2026-09-12.md`
+> - `../docs/GestureFlow_DMP双乘打包_质的飞跃_2026-09-01.md`
+> - `../docs/文档可信度地图_2026-09-12.md`
+>
+> 本文的"与 CoralNPU 的关系"一节（只借鉴思想、不改官方目录）**仍然有效**。
+
+
 `GestureFlow-NPU` 是本项目新增的自研硬件创新分支。它只借鉴
 Google CoralNPU 的可验证架构思想，**不是** Google 官方模块，也不修改
 仓库根目录的只读 `coralnpu/`。

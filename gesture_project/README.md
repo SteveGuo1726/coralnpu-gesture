@@ -23,20 +23,28 @@ PS 端 baremetal C 程序负责任务配置、权重 DMA 调度和逐层验证�
 
 ## 当前部署模型
 
+> 2026-09-12 更正：本节此前**漏掉了 `16→16` 那一层**（`body2`），并把 `pool1` 的位置写错。
+> 依据是 `innovation_npu/board_7020/software/` 下实际存在的 7 个逐层权重头文件
+> （`dmp_full_layer` / `dmp_body2_layer` / `dmp_conv2a` / `dmp_conv2b` / `dmp_conv3a` /
+> `dmp_conv3b` / `dmp_head1x1`）以及 `gestureflow_dmp_body2_layer.h` 对应
+> `GF_BODY2_OUTPUT_FNV1A` 在实板探针里被真实命中。
+
 ```text
 96×96×3 RGB
-  → conv0: 4×4 SAME, 3→16
-  → pool1: 2×2 maxpool
+  → conv0:  4×4 SAME, 3→16
+  → body2:  4×4 SAME, 16→16   + pool1: 2×2 maxpool   → 48×48×16
   → conv2a: 4×4 SAME, 16→32
-  → conv2b: 4×4 SAME, 32→32
-  → pool2: 2×2 maxpool
+  → conv2b: 4×4 SAME, 32→32   + pool2: 2×2 maxpool   → 24×24×32
   → conv3a: 4×4 SAME, 32→48
-  → conv3b: 4×4 SAME, 48→48
-  → pool3: 2×2 maxpool
-  → head: 1×1, 48→64
-  → GAP
+  → conv3b: 4×4 SAME, 48→48   + pool3: 2×2 maxpool   → 12×12×48
+  → head:   1×1, 48→64                               → 12×12×64
+  → GAP → 64
   → FC: 64→18
 ```
+
+合计 **6 个 4×4 + 1 个 1×1 + 3 个融合 MaxPool + GAP/FC**，
+即硬件调度里的 21 个 tile（`body2` 与 `conv2b`/`conv3b` 是"卷积 + 融合池化"的一体化 tile）。
+
 
 ## 关键目录
 
