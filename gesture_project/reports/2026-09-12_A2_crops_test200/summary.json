@@ -1,0 +1,25 @@
+{
+ "tag": "training distribution (hand crops, test split), 200/class",
+ "samples": 3600,
+ "top1": 0.99,
+ "per_class": {
+  "call": 0.99,
+  "dislike": 1.0,
+  "fist": 0.985,
+  "four": 0.995,
+  "like": 0.995,
+  "mute": 0.995,
+  "ok": 0.995,
+  "one": 0.975,
+  "palm": 1.0,
+  "peace": 0.985,
+  "peace_inverted": 1.0,
+  "rock": 0.985,
+  "stop": 0.97,
+  "stop_inverted": 0.99,
+  "three": 0.98,
+  "three2": 0.995,
+  "two_up": 0.99,
+  "two_up_inverted": 0.995
+ }
+}

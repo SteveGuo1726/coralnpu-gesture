@@ -1,0 +1,25 @@
+{
+ "tag": "deployment geometry: hand = 50% of the model input",
+ "samples": 900,
+ "top1": 0.4666666666666667,
+ "per_class": {
+  "call": 1.0,
+  "dislike": 0.9,
+  "fist": 0.8,
+  "four": 0.34,
+  "like": 0.48,
+  "mute": 0.62,
+  "ok": 0.76,
+  "one": 0.64,
+  "palm": 0.94,
+  "peace": 0.08,
+  "peace_inverted": 0.1,
+  "rock": 0.6,
+  "stop": 0.08,
+  "stop_inverted": 0.02,
+  "three": 0.14,
+  "three2": 0.86,
+  "two_up": 0.0,
+  "two_up_inverted": 0.04
+ }
+}
