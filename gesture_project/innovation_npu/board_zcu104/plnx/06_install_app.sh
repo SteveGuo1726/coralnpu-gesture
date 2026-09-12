@@ -50,6 +50,23 @@
 #   bash 06_install_app.sh --check    # 只投放 + 校验（不编译，用来看当前镜像）
 #
 set -uo pipefail
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+# ---------------------------------------------------------------------------
+# 解析"调用者"的家目录（改动前先读完这段）。
+#
+# 这些脚本需要 root（parted / mkfs / dd / mount），但 PetaLinux 工程树和 git 仓库
+# 在**调用者**的家目录下。sudo 会把 $HOME 重置为 /root，于是裸用 $HOME 会静默指向
+# 错误的树 —— 症状是镜像明明在，脚本却报 missing /root/gf_linux_ws/... 。
+#
+# 解析顺序：$GF_HOME（显式覆盖） -> 调用 sudo 的那个用户的家目录 -> $HOME。
+# ---------------------------------------------------------------------------
+if [ -z "${GF_HOME:-}" ] && [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+    GF_HOME="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6 || true)"
+fi
+if [ -n "${GF_HOME:-}" ] && [ -d "$GF_HOME" ]; then
+    HOME="$GF_HOME"; export HOME
+fi
+
 
 REPO="${REPO:-$HOME/coralnpu-gesture}"
 PLNX="${PLNX:-$HOME/gf_linux_ws/gf_linux}"

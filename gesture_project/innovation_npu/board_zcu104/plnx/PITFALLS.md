@@ -311,3 +311,104 @@ dtc -I dtb -O dts images/linux/system.dtb | grep -E 'dr_mode|usb3-phy'
 - The whole `petalinux-config` menu tree can be driven non-interactively: write
   `project-spec/configs/config` and run `petalinux-config --silentconfig`. No
   menuconfig interaction is ever required.
+
+---
+
+## 11. `sudo` resets `$HOME` to `/root`, so the scripts looked in the wrong tree
+
+**Symptom (real, 2026-09-12):**
+
+```
+$ sudo bash 04_make_sd.sh /dev/sde
+ERROR: missing /root/gf_linux_ws/gf_linux/images/linux/BOOT.BIN
+       (run plnx_driver.sh package first)
+$ ls ~/gf_linux_ws/gf_linux/images/linux/BOOT.BIN      # it is right there
+```
+
+The image existed the whole time. The script was looking under `/root`.
+
+**Cause.** These scripts need root (`parted` / `mkfs` / `dd` / `mount`), but the
+PetaLinux tree and the git repo live under the **invoking** user's home. `sudo`
+resets `$HOME`, so any bare `$HOME` in the script silently points at the wrong
+tree. Line 30 was `PROJ="${PROJ:-$HOME/gf_linux_ws/gf_linux}"`.
+
+**Same root cause had four instances**, and only the first one is obvious:
+
+| script | it looked for | would have failed as |
+|---|---|---|
+| `04_make_sd.sh` | `$HOME/gf_linux_ws/gf_linux` | `missing /root/.../BOOT.BIN` |
+| `05_verify_image.sh` | `$HOME/coralnpu-gesture`, `$HOME/gf_linux_ws/...` | `RESULT: FAIL`, phantom "stale image" |
+| `06_install_app.sh` | `$HOME/coralnpu-gesture`, `$HOME/petalinux/2023.2` | `找不到源码目录` |
+| `07_make_sd_image.sh` | `$HOME/gf_linux_ws/gf_linux` | `缺少 /root/.../BOOT.BIN` |
+
+`05` is the dangerous one: `04`'s **GATE 0 calls it**, so under `sudo` the gate
+itself would break — and it would have reported a *content* failure, which reads
+like "your image is stale" rather than "I looked in the wrong directory".
+
+**Secondary hazard (subtler, same root cause).** `05`'s scratch dir used to be
+`$HOME/gf_linux_ws/_imgverify`. When `04` runs it as root, root owns that
+directory and the dumped ELFs. The next **non-sudo** run then cannot overwrite
+them, the `debugfs` dump fails, and `05` reports `FAIL` for every probe — a
+completely spurious failure caused by file ownership.
+
+**Fix (both, in the same commit):**
+
+1. Every script resolves the caller's home before using it, and exports it:
+
+   ```bash
+   if [ -z "${GF_HOME:-}" ] && [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+       GF_HOME="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6 || true)"
+   fi
+   if [ -n "${GF_HOME:-}" ] && [ -d "$GF_HOME" ]; then
+       HOME="$GF_HOME"; export HOME
+   fi
+   ```
+
+   `GF_HOME=/path` overrides explicitly when the guess is wrong.
+2. `05` now uses `TMP="$(mktemp -d ...)"` + `trap 'rm -rf "$TMP"' EXIT`, so it
+   leaves nothing behind regardless of who runs it.
+
+**Also fixed in the same pass:** `04` located `05`/`06` with
+`dirname "$0"`. That is only correct while `$0` carries a directory component;
+`07` already used the robust form. `04` now does
+`HERE="$(cd "$(dirname "$0")" && pwd)"` too.
+
+**Why it went unnoticed.** The failure only exists under `sudo`. Every earlier
+run of these scripts in this project was as the normal user (`05`, `06`) or was
+never executed end-to-end (`04`, `07` — they had only been syntax-checked).
+"Syntax OK" cannot catch this class of bug; **only running the thing can.**
+
+**How to reproduce a `sudo` environment without being root** — this is the test
+worth keeping:
+
+```bash
+env HOME=/root SUDO_USER=<your-user> bash 04_make_sd.sh <device>
+```
+
+Fake `HOME` and `SUDO_USER` are enough to exercise the whole resolution path,
+with no `sudo`, no password, and no risk. Use it on any script that has to run
+as root. (Verify the negative case too: strip the resolve block and confirm the
+`/root/...` error comes back — otherwise you have not proven the fix does
+anything.)
+
+---
+
+## 12. A false alarm to recognise: counting `b'\r'` does not count CR bytes
+
+While validating the fix above, a probe printed `CR bytes = 1` for
+`06_install_app.sh` and `0` for the others. That reads like a stray carriage
+return. It was not.
+
+In a Python f-string, `f"...{d.count(b'\\r')}"` contains the bytes literal
+`b'\\r'`, which is **backslash followed by `r`** — two printable characters, not
+a CR byte. What it actually counted was the intentional text `$'\r'` inside
+`06`'s CR-detection gate. The real check is:
+
+```bash
+python3 -c "d=open('f','rb').read(); print(d.count(b'\r\n'), d.count(b'\r')-d.count(b'\r\n'))"
+```
+
+Always confirm a suspected stray CR by locating its byte offset and printing the
+surrounding bytes — not by trusting a count whose literal you have not read.
+Related: `grep -c $'\r'` also matches the *text* `\r` in a script that mentions
+it, and `grep sde /proc/mounts` matches `nsdelegate`.

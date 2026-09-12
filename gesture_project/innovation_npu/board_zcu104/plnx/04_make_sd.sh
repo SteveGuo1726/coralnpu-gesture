@@ -26,6 +26,22 @@
 set -euo pipefail
 
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+# ---------------------------------------------------------------------------
+# 解析"调用者"的家目录（改动前先读完这段）。
+#
+# 这些脚本需要 root（parted / mkfs / dd / mount），但 PetaLinux 工程树和 git 仓库
+# 在**调用者**的家目录下。sudo 会把 $HOME 重置为 /root，于是裸用 $HOME 会静默指向
+# 错误的树 —— 症状是镜像明明在，脚本却报 missing /root/gf_linux_ws/... 。
+#
+# 解析顺序：$GF_HOME（显式覆盖） -> 调用 sudo 的那个用户的家目录 -> $HOME。
+# ---------------------------------------------------------------------------
+if [ -z "${GF_HOME:-}" ] && [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+    GF_HOME="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6 || true)"
+fi
+if [ -n "${GF_HOME:-}" ] && [ -d "$GF_HOME" ]; then
+    HOME="$GF_HOME"; export HOME
+fi
+
 
 PROJ="${PROJ:-$HOME/gf_linux_ws/gf_linux}"
 IMG="$PROJ/images/linux"
@@ -41,7 +57,11 @@ info() { echo "--- $*"; }
 [ -b "$DEV" ] || die "$DEV is not a block device"
 
 for f in BOOT.BIN image.ub; do
-  [ -f "$IMG/$f" ] || die "missing $IMG/$f  (run plnx_driver.sh package first)"
+  [ -f "$IMG/$f" ] || die "missing $IMG/$f
+  resolved image dir: $IMG
+  If that path is wrong, point the script at the right tree explicitly:
+      sudo GF_HOME=/home/<you> bash $0 ${DEV}
+      sudo PROJ=/home/<you>/gf_linux_ws/gf_linux bash $0 ${DEV}"
 done
 [ -f "$IMG/rootfs.ext4" ] || die "missing $IMG/rootfs.ext4 (rootfs type must be ext4)"
 
@@ -55,7 +75,10 @@ done
 # （历史注记：曾把这里的问题误判成 "file:// 的 SRC_URI 让 sstate 短路了 do_compile"。
 #   实际原因是编译期常量导致 GCC 删掉了那条诊断字符串。详见 PITFALLS.md #8。）
 # ---------------------------------------------------------------------------
-VERIFY="$(dirname "$0")/05_verify_image.sh"
+# 用绝对路径定位同目录的姊妹脚本：dirname "$0" 在 $0 没有目录成分时只是 "."，
+# 一旦脚本被从别处按路径调用就会失效（曾因此出现 "找不到 05" 的假故障）。
+HERE="$(cd "$(dirname "$0")" && pwd)"
+VERIFY="$HERE/05_verify_image.sh"
 if [ -x "$VERIFY" ]; then
   echo "=== pre-flight: verifying rootfs content against the repo sources ==="
   # 05_verify_image.sh uses debugfs and needs no root, but it is happy either way.
@@ -64,7 +87,7 @@ if [ -x "$VERIFY" ]; then
   else
     die "pre-flight verification FAILED - this image does NOT contain the current
   sources, so the board would run stale binaries.
-  Rebuild with:  bash $(dirname "$0")/06_install_app.sh
+  Rebuild with:  bash $HERE/06_install_app.sh
   (then run this script again)"
   fi
 else

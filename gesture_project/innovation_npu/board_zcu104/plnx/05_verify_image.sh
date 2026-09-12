@@ -20,13 +20,34 @@
 #
 #
 set -u
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+# ---------------------------------------------------------------------------
+# 解析"调用者"的家目录（改动前先读完这段）。
+#
+# 这些脚本需要 root（parted / mkfs / dd / mount），但 PetaLinux 工程树和 git 仓库
+# 在**调用者**的家目录下。sudo 会把 $HOME 重置为 /root，于是裸用 $HOME 会静默指向
+# 错误的树 —— 症状是镜像明明在，脚本却报 missing /root/gf_linux_ws/... 。
+#
+# 解析顺序：$GF_HOME（显式覆盖） -> 调用 sudo 的那个用户的家目录 -> $HOME。
+# ---------------------------------------------------------------------------
+if [ -z "${GF_HOME:-}" ] && [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+    GF_HOME="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6 || true)"
+fi
+if [ -n "${GF_HOME:-}" ] && [ -d "$GF_HOME" ]; then
+    HOME="$GF_HOME"; export HOME
+fi
+
 
 REPO="${REPO:-$HOME/coralnpu-gesture}"
 PLNX="${PLNX:-$HOME/gf_linux_ws/gf_linux}"
 LF_SRC="$REPO/gesture_project/innovation_npu/board_zcu104/linux"
 IMG="$PLNX/images/linux/rootfs.ext4"
 MANIFEST="$PLNX/images/linux/rootfs.manifest"
-TMP="$HOME/gf_linux_ws/_imgverify"
+# 临时目录放在 /tmp 并在退出时清理。
+# **不要**放在 $HOME 下：04_make_sd.sh 的 GATE 0 会以 root 调用本脚本，root 会在
+# 用户家目录里留下 root 属主的文件，之后非 sudo 运行就写不进去，从而误报 FAIL。
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/gf_imgverify.XXXXXX")"
+trap 'rm -rf "$TMP"' EXIT
 
 fail=0
 note() { printf '  %s\n' "$*"; }

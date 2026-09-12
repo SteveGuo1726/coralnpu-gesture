@@ -22,6 +22,22 @@
 set -euo pipefail
 
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+# ---------------------------------------------------------------------------
+# 解析"调用者"的家目录（改动前先读完这段）。
+#
+# 这些脚本需要 root（parted / mkfs / dd / mount），但 PetaLinux 工程树和 git 仓库
+# 在**调用者**的家目录下。sudo 会把 $HOME 重置为 /root，于是裸用 $HOME 会静默指向
+# 错误的树 —— 症状是镜像明明在，脚本却报 missing /root/gf_linux_ws/... 。
+#
+# 解析顺序：$GF_HOME（显式覆盖） -> 调用 sudo 的那个用户的家目录 -> $HOME。
+# ---------------------------------------------------------------------------
+if [ -z "${GF_HOME:-}" ] && [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER}" != "root" ]; then
+    GF_HOME="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6 || true)"
+fi
+if [ -n "${GF_HOME:-}" ] && [ -d "$GF_HOME" ]; then
+    HOME="$GF_HOME"; export HOME
+fi
+
 
 PROJ="${PROJ:-$HOME/gf_linux_ws/gf_linux}"
 IMG_DIR="$PROJ/images/linux"
@@ -37,7 +53,9 @@ info() { echo "--- $*"; }
 
 # ------------------------------------------------------------ 输入检查
 for f in BOOT.BIN image.ub rootfs.ext4; do
-    [ -f "$IMG_DIR/$f" ] || die "缺少 $IMG_DIR/$f"
+    [ -f "$IMG_DIR/$f" ] || die "缺少 $IMG_DIR/$f
+  若路径不对（例如 sudo 把 \$HOME 变成了 /root），显式指定：
+      sudo GF_HOME=/home/<you> bash $0 $OUT $SIZE_MIB"
 done
 [ -f "$HERE/04_make_sd.sh" ]      || die "找不到 $HERE/04_make_sd.sh"
 [ -f "$HERE/05_verify_image.sh" ] || die "找不到 $HERE/05_verify_image.sh（04 的 GATE 0 需要它）"
