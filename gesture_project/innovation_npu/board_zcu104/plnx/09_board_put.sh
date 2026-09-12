@@ -67,6 +67,17 @@ if [ -z "$DEV" ]; then
 fi
 [ -n "$DEV" ] || die "没找到能响应命令的控制台串口；用 TTY=/dev/ttyUSBx 指定"
 
+# --------------------------------------------------------------- 串口互斥
+# 串口只能有**一个写入者**。两个写入者交错会把长命令和 heredoc 撕成两半，
+# 而症状离原因很远：曾因此把板上的解码器写成语法错误的文件，直到解码那一步
+# 才报出"md5 不一致"，看起来像串口丢字节。
+# 等待而不是立刻失败 —— 正常的调用链（10 调 09）本来就是串行的。
+if command -v flock >/dev/null 2>&1; then
+    _lock="${TMPDIR:-/tmp}/gf-console-$(basename "$DEV").lock"
+    exec 9>"$_lock"
+    flock -w 900 9 || die "等了 900 秒还拿不到 $DEV 的使用权（另一个进程占着）"
+fi
+
 LOCAL_ABS="$(cd "$(dirname "$LOCAL")" && pwd)/$(basename "$LOCAL")"
 SIZE=$(stat -c '%s' "$LOCAL_ABS")
 LSUM=$(md5sum "$LOCAL_ABS" | cut -d' ' -f1)
@@ -90,34 +101,55 @@ echo "  预计   : 约 $(( (B64SIZE + 11519) / 11520 )) 秒纯线时 + 开销"
 
 send() { TTY="$DEV" bash "$CONSOLE" send "$1" "${2:-4}" 2>&1; }
 
-# 把解码器装到板上。用 heredoc 逐行发，避免任何嵌套引号：
-# 板上的 shell 在执行 cat > file <<'EOF'，后续行就都进 heredoc。
+# 把解码器装到板上。
 #
-# 这里刻意**不**用 `send ... | grep -q`：脚本开了 pipefail，而 grep -q 找到匹配
-# 就立刻退出、可能让写管道的一端拿到 SIGPIPE，于是管道整体返回非零 —— 明明成功
-# 也判成失败。而且失败时回显被 /dev/null 吃掉，完全没法排查。
+# 两件事都踩过坑，所以这里刻意这么做：
+#
+#  1) **用单行安装**（python3 从 base64 还原脚本），不用 heredoc。heredoc 是
+#     一个多行协议：任何第二个写入者插进来都会把它撕开，留下一个语法错误的
+#     文件。单行没有被撕开的余地。
+#     注意板上的 python3 是精简版，**没有 `base64` 命令行工具**，所以只能靠
+#     python 自己解。
+#
+#  2) **自检解码器本身**，而不是只检查 `python3 -c print(1)` 能跑。曾经因为
+#     heredoc 被写坏，解码器成了一条语法错误的文件，而安装检查照样通过 ——
+#     失败一直到"解码后 md5 不一致"那一步才冒出来，看起来完全像串口丢了字节。
+#     这里用一个已知输入证明它真的能解码。
+_dec_b64() {
+    printf '%s\n' \
+        "import base64,hashlib,sys" \
+        "d=base64.b64decode(open(sys.argv[1],'rb').read())" \
+        "open(sys.argv[2],'wb').write(d)" \
+        "print('GF_DEC',hashlib.md5(d).hexdigest(),len(d))" \
+    | base64 -w0
+}
+
 install_decoder() {
-    local out
-    send "cat > /tmp/gfdec.py <<'PYPUT'" 2 >/dev/null
-    send "import base64,hashlib,sys" 2 >/dev/null
-    send "d=base64.b64decode(open(sys.argv[1],'rb').read())" 2 >/dev/null
-    send "open(sys.argv[2],'wb').write(d)" 2 >/dev/null
-    send "print('GF_DEC',hashlib.md5(d).hexdigest(),len(d))" 2 >/dev/null
-    send "PYPUT" 2 >/dev/null
-    out="$(send "python3 -c \"print('GF_DECODER_OK')\"" 3)"
+    local out want want_b64 want_md5 blob
+    blob="$(_dec_b64)"
+    send "python3 -c \"import base64;open('/tmp/gfdec.py','wb').write(base64.b64decode('$blob'))\"" 4 >/dev/null
+
+    # 自检：拿一个已知内容做一次真的往返。
+    # ⚠️ 写进 gfd.t 的必须是 **base64 文本**（解码器的输入端本来就是 base64），
+    # 不是原始字节。第一版自检在这里写错了，于是它验证的其实是"解码器会报错"。
+    want='GF_DEC_SELFTEST_OK'
+    want_b64="$(printf '%s' "$want" | base64 -w0)"
+    want_md5="$(printf '%s' "$want" | md5sum | cut -d' ' -f1)"
+    send "printf %s $want_b64 > /tmp/gfd.t" 3 >/dev/null
+    out="$(send "python3 /tmp/gfdec.py /tmp/gfd.t /tmp/gfd.out; rm -f /tmp/gfd.t /tmp/gfd.out" 5)"
     case "$out" in
-        *GF_DECODER_OK*) return 0 ;;
+        *"$want_md5"*) return 0 ;;
     esac
-    echo "  解码器安装失败，板上回显：" >&2
+    echo "  解码器自检失败（期望 md5 $want_md5），板上回显：" >&2
     printf '%s\n' "$out" | sed 's/^/    /' >&2
     return 1
 }
 
 echo
 if ! install_decoder; then
-    die "板上 python3 不可用，或 heredoc 安装失败 —— 先手动确认：python3 -c 'print(1)'"
+    die "板上 python3 不可用，或解码器写坏了 —— 先手动确认：python3 -c 'print(1)'"
 fi
-echo "  解码器 /tmp/gfdec.py 已就位"
+echo "  解码器 /tmp/gfdec.py 已就位（自检通过）"
 
 attempt=0
 while [ "$attempt" -lt "$ATTEMPTS" ]; do

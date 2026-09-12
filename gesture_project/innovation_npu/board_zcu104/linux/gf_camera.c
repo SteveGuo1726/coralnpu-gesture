@@ -24,6 +24,19 @@
  *
  * Build: see Makefile.  MJPEG support is optional (needs libjpeg); YUYV and
  * RGB24 work with no extra dependency.
+ *
+ * --rotate D turns the image D degrees clockwise before it is handed to the
+ * NPU.  **The camera on this rig is currently mounted upright, so this stays
+ * unset (D=0).**  It exists because the mount orientation has already changed
+ * once -- it started upside down and needed 180 -- and it is a runtime switch
+ * precisely so that changing it costs nothing but a command-line edit.
+ *
+ * When it *is* needed it has to apply to the input the model sees, not just to
+ * a preview: the model was trained on upright gestures, and a flipped hand is a
+ * different gesture as far as it is concerned.
+ *
+ * --view PORT starts a small HTTP server (gf_view.c) so the laptop browser can
+ * watch the pipeline.  It is off by default and costs nothing when off.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,6 +53,10 @@
 #include <linux/videodev2.h>
 
 #include "gf_npu.h"
+#include "gf_view.h"
+
+/* Where 06_install_app.sh / the Yocto recipe put the viewer page. */
+#define GF_VIEW_DEFAULT_PAGE "/usr/share/gf/view.html"
 
 #ifdef GF_HAVE_JPEG
 #include <jpeglib.h>
@@ -79,18 +96,43 @@ static void die(const char *what)
 }
 
 /* ------------------------------------------------------- resize (box) ----- */
+/* Map an output cell to the source cell it must sample, for --rotate.
+ *
+ * `rot` is how far the camera is mounted off upright measured clockwise, so
+ * the image needs turning by the same amount to come back upright.  Rotating
+ * an image D degrees clockwise sends input (x,y) to output (h-1-y, x); invert
+ * that to get the input cell that output (ox,oy) reads.  OUT_W == OUT_H == 96,
+ * so the two bounds are interchangeable in these expressions. */
+static void rot_cell(int ox, int oy, int rot, int *cx, int *cy)
+{
+    switch (rot) {
+    case 90:  *cx = oy;               *cy = OUT_H - 1 - ox; break;
+    case 180: *cx = OUT_W - 1 - ox;   *cy = OUT_H - 1 - oy; break;
+    case 270: *cx = OUT_W - 1 - oy;   *cy = ox;             break;
+    default:  *cx = ox;               *cy = oy;             break;
+    }
+}
+
 /* Area-average downscale to 96x96.  Bounds are computed in 64-bit to avoid
- * overflow on large inputs (e.g. 1920x1080). */
-static void resize_rgb96(const uint8_t *src, int sw, int sh, uint8_t *dst)
+ * overflow on large inputs (e.g. 1920x1080).
+ *
+ * Rotating inside the sampling loop is exact and free: the rotation is a
+ * permutation of the 96x96 output grid, so each output cell still averages the
+ * same source box it would have averaged, just assigned to a different place.
+ * Rotating the *result* afterwards would be equivalent for 180 degrees and a
+ * half-pixel approximation for 90/270. */
+static void resize_rgb96(const uint8_t *src, int sw, int sh, uint8_t *dst, int rot)
 {
     int oy, ox, c;
     if (sw < OUT_W || sh < OUT_H) {
         /* Upscaling is not needed for any sane camera; fall back to nearest so
          * the program still produces something instead of failing. */
         for (oy = 0; oy < OUT_H; ++oy) {
-            int sy = (int)((int64_t)oy * sh / OUT_H);
             for (ox = 0; ox < OUT_W; ++ox) {
-                int sx = (int)((int64_t)ox * sw / OUT_W);
+                int cx, cy, sy, sx;
+                rot_cell(ox, oy, rot, &cx, &cy);
+                sy = (int)((int64_t)cy * sh / OUT_H);
+                sx = (int)((int64_t)cx * sw / OUT_W);
                 for (c = 0; c < 3; ++c)
                     dst[(oy * OUT_W + ox) * 3 + c] = src[((size_t)sy * sw + sx) * 3 + c];
             }
@@ -98,15 +140,16 @@ static void resize_rgb96(const uint8_t *src, int sw, int sh, uint8_t *dst)
         return;
     }
     for (oy = 0; oy < OUT_H; ++oy) {
-        int y0 = (int)((int64_t)oy       * sh / OUT_H);
-        int y1 = (int)((int64_t)(oy + 1) * sh / OUT_H);
-        if (y1 <= y0) y1 = y0 + 1;
         for (ox = 0; ox < OUT_W; ++ox) {
-            int x0 = (int)((int64_t)ox       * sw / OUT_W);
-            int x1 = (int)((int64_t)(ox + 1) * sw / OUT_W);
+            int cx, cy, x0, x1, y0, y1, y, x;
             uint32_t acc[3] = {0U, 0U, 0U};
             uint32_t n = 0U;
-            int y, x;
+            rot_cell(ox, oy, rot, &cx, &cy);
+            y0 = (int)((int64_t)cy       * sh / OUT_H);
+            y1 = (int)((int64_t)(cy + 1) * sh / OUT_H);
+            if (y1 <= y0) y1 = y0 + 1;
+            x0 = (int)((int64_t)cx       * sw / OUT_W);
+            x1 = (int)((int64_t)(cx + 1) * sw / OUT_W);
             if (x1 <= x0) x1 = x0 + 1;
             for (y = y0; y < y1; ++y) {
                 const uint8_t *row = src + (size_t)y * sw * 3;
@@ -485,12 +528,18 @@ static void usage(const char *argv0)
            "  -s WxH        capture size to request (default 640x480)\n"
            "  -n N          stop after N frames (0 = forever, default 0)\n"
            "  -m N          majority-vote smoothing window in frames (default 5)\n"
+           "  --rotate D    rotate the image D degrees clockwise before the NPU\n"
+           "                (0/90/180/270; the ZCU104 rig needs 180)\n"
+           "  --view PORT   serve a live HTTP viewer on PORT (default: off).\n"
+           "                Nothing is copied unless a browser is actually\n"
+           "                asking, so this does not affect the timings.\n"
+           "  --view-page P HTML page the viewer serves (default %s)\n"
            "  --list        list capture formats and exit\n"
            "  --selftest    run the NPU reference selftest and exit\n"
            "  --save-ppm P  save the resized 96x96 RGB that is fed to the NPU\n"
            "                (with -n N this is the last frame, i.e. after the\n"
            "                 camera's auto-exposure has settled; otherwise frame 3)\n",
-           argv0);
+           argv0, GF_VIEW_DEFAULT_PAGE);
 }
 
 static volatile sig_atomic_t g_stop = 0;
@@ -500,9 +549,12 @@ int main(int argc, char **argv)
 {
     const char *dev = "/dev/video0";
     const char *save_ppm = NULL;
+    const char *view_page = GF_VIEW_DEFAULT_PAGE;
     int want_w = 640, want_h = 480;
     int max_frames = 0;
     int smooth = 5;
+    int rotate = 0;
+    int view_port = 0;
     int do_list = 0, do_selftest = 0;
     int i;
 
@@ -516,10 +568,20 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-n") && i + 1 < argc) max_frames = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-m") && i + 1 < argc) smooth = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--save-ppm") && i + 1 < argc) save_ppm = argv[++i];
+        else if (!strcmp(argv[i], "--view-page") && i + 1 < argc) view_page = argv[++i];
+        else if (!strcmp(argv[i], "--view") && i + 1 < argc) view_port = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--rotate") && i + 1 < argc) {
+            rotate = gf_view_parse_rotate(argv[++i]);
+            if (rotate < 0) {
+                fprintf(stderr, "gf_camera: --rotate takes 0, 90, 180 or 270\n");
+                return 2;
+            }
+        }
         else { usage(argv[0]); return 2; }
     }
     if (smooth < 1) smooth = 1;
     if (smooth > MAX_VOTE_WINDOW) smooth = MAX_VOTE_WINDOW;
+    if (view_port < 0 || view_port > 65535) { usage(argv[0]); return 2; }
 
     /* The NPU must be up before anything else: if the PL is not configured or
      * its clock is gated, GF_MAGIC will not read back and we want to know that
@@ -552,6 +614,7 @@ int main(int argc, char **argv)
         int hist_n = 0;
         long frame_no = 0;
         double t_prev = 0.0;
+        double t_boot = now_s();
 
         if (v4l2_setup(&st, dev, want_w, want_h) != 0) {
             gf_npu_close();
@@ -564,6 +627,21 @@ int main(int argc, char **argv)
         rgb_frame = malloc(rgb_cap);
         if (!rgb_frame) die("malloc");
 
+        if (rotate)
+            printf("gf_camera: rotating the NPU input %d degrees clockwise\n", rotate);
+
+        /* The viewer is a convenience, never a requirement: if the port is
+         * taken or the box has no free socket, say so and carry on. */
+        if (view_port > 0) {
+            char fb[5];
+            gf_view_set_camera(fourcc_str(st.pixfmt, fb), st.width, st.height, rotate);
+            printf("gf_camera: --view %d requested (page %s)\n", view_port, view_page);
+            if (gf_view_start(view_port, view_page) != 0) {
+                fprintf(stderr, "gf_camera: viewer disabled; the pipeline is unaffected\n");
+                view_port = 0;
+            }
+        }
+
         signal(SIGINT, on_sigint);
 
         printf("gf_camera: running ('Ctrl-C' to stop)\n");
@@ -572,7 +650,7 @@ int main(int argc, char **argv)
             size_t plen = 0;
             int cw = st.width, ch = st.height;
             int bidx, ok = 1;
-            double t0, t1, fps = 0.0;
+            double t0, t1, t_dec = 0.0, t_res = 0.0, t_npu = 0.0, fps = 0.0;
 
             bidx = v4l2_grab(&st, &payload, &plen);
             if (bidx < 0) continue;
@@ -593,6 +671,7 @@ int main(int argc, char **argv)
             case V4L2_PIX_FMT_JPEG:
                 if (jpeg_to_rgb(payload, plen, &cw, &ch, &rgb_frame, &rgb_cap) != 0) {
                     fprintf(stderr, "gf_camera: JPEG decode failed, skipping frame\n");
+                    gf_view_count_error(GF_VIEW_ERR_JPEG);
                     ok = 0;
                 }
                 break;
@@ -606,14 +685,18 @@ int main(int argc, char **argv)
             /* Everything above read only `payload`; the frame is copied, so the
              * driver may have its buffer back now. */
             v4l2_release(&st, bidx);
+            t_dec = now_s();
             if (!ok) continue;
 
-            resize_rgb96(rgb_frame, cw, ch, rgb96);
+            resize_rgb96(rgb_frame, cw, ch, rgb96, rotate);
+            t_res = now_s();
 
             if (gf_npu_run_frame(rgb96, &cls, NULL) != 0) {
                 fprintf(stderr, "gf_camera: NPU run failed on frame %ld\n", frame_no);
+                gf_view_count_error(GF_VIEW_ERR_NPU);
                 break;
             }
+            t_npu = now_s();
 
             /* Majority vote over a short window: a single-frame flip is noise
              * the user should not see. */
@@ -646,6 +729,28 @@ int main(int argc, char **argv)
                        gf_npu_class_name(cls), best_count, hist_n, fps,
                        (t1 - t0) * 1000.0);
                 fflush(stdout);
+
+                /* Hand the frame to the viewer.  This is a no-op costing two
+                 * comparisons unless a browser asked for something recently,
+                 * and the actual socket writes happen on the viewer's own
+                 * thread -- so nothing here can slow the loop down. */
+                if (view_port > 0) {
+                    gf_view_frame nf;
+                    nf.frame        = frame_no;
+                    nf.uptime_s     = t1 - t_boot;
+                    nf.fps          = fps;
+                    nf.raw_class    = (int)cls;
+                    nf.smooth_class = best;
+                    nf.votes        = best_count;
+                    nf.window       = hist_n;
+                    nf.ms_total     = (t1 - t0) * 1000.0;
+                    nf.ms_decode    = (t_dec - t0) * 1000.0;
+                    nf.ms_resize    = (t_res - t_dec) * 1000.0;
+                    nf.ms_npu       = (t_npu - t_res) * 1000.0;
+                    /* rgb_frame/cw/ch are exactly what the model was shown, so
+                     * the page can show the *input*, not a re-decoded guess. */
+                    gf_view_publish(&nf, rgb96, rgb_frame, cw, ch);
+                }
             }
             t_prev = t1;
 
@@ -653,6 +758,7 @@ int main(int argc, char **argv)
             if (max_frames > 0 && frame_no >= max_frames) break;
         }
 
+        if (view_port > 0) gf_view_stop();
         v4l2_cleanup(&st);
         free(rgb_frame);
         gf_npu_close();

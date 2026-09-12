@@ -20,6 +20,9 @@ SRC_URI = " \
     file://gf_npu.h \
     file://gf_npu_probe.c \
     file://gf_camera.c \
+    file://gf_view.c \
+    file://gf_view.h \
+    file://view.html \
     file://gestureflow_real_conv4x4_full_layer.h \
     file://gestureflow_dmp_full_layer.h \
     file://gestureflow_chain_body_data.h \
@@ -51,18 +54,25 @@ DEPENDS = "libjpeg-turbo"
 
 # The generated headers hold a lot of golden reference data this driver does
 # not need; silence the unused-static noise so real warnings stay visible.
-GF_CFLAGS = "-O2 -std=gnu99 -Wall -Wextra -Wno-unused-const-variable -Wno-unused-but-set-variable -DGF_HAVE_JPEG -I${S}"
+# -pthread: gf_camera's --view option runs the HTTP viewer on its own thread.
+GF_CFLAGS = "-O2 -std=gnu99 -Wall -Wextra -Wno-unused-const-variable -Wno-unused-but-set-variable -DGF_HAVE_JPEG -pthread -I${S}"
 GF_LDLIBS = "-ljpeg"
 
 do_compile() {
     ${CC} ${GF_CFLAGS} ${CFLAGS} -o gf_npu_probe gf_npu_probe.c gf_npu.c ${GF_LDLIBS} ${LDFLAGS}
-    ${CC} ${GF_CFLAGS} ${CFLAGS} -o gf_camera    gf_camera.c    gf_npu.c ${GF_LDLIBS} ${LDFLAGS}
+    ${CC} ${GF_CFLAGS} ${CFLAGS} -o gf_camera    gf_camera.c    gf_view.c gf_npu.c ${GF_LDLIBS} ${LDFLAGS}
 }
 
 do_install() {
     install -d ${D}${bindir}
     install -m 0755 gf_npu_probe ${D}${bindir}/gf_npu_probe
     install -m 0755 gf_camera    ${D}${bindir}/gf_camera
+
+    # The viewer page lives on the filesystem rather than inside the binary so
+    # it can be re-pushed over the serial console in about two seconds while
+    # iterating on it.
+    install -d ${D}${datadir}/gf
+    install -m 0644 view.html ${D}${datadir}/gf/view.html
 }
 
-FILES:${PN} = "${bindir}/gf_npu_probe ${bindir}/gf_camera"
+FILES:${PN} = "${bindir}/gf_npu_probe ${bindir}/gf_camera ${datadir}/gf"

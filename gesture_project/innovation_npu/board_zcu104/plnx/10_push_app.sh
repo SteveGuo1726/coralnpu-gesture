@@ -1,27 +1,28 @@
 #!/usr/bin/env bash
 #
-# 10_push_app.sh -- 把刚编好的两个二进制直接送进**正在运行**的板子，不碰 SD 卡
+# 10_push_app.sh -- 把刚编好的程序/页面直接送进**正在运行**的板子，不碰 SD 卡
 #
 # 场景
 # ----
 # 改完驱动想立刻在板上验一版。正规做法是重写 431 MB 的 rootfs 再重插卡，一轮
 # 十几分钟。但板子已经在跑 Linux、有 root shell、根文件系统是可写的 ext4，所以
-# 只要把那**一个**二进制送过去覆盖即可：
+# 只要把那**一个**文件送过去覆盖即可：
 #
-#     从 rootfs.ext4 里 debugfs 取出二进制（无需 sudo）
+#     从 rootfs.ext4 里 debugfs 取出文件（无需 sudo）
 #        -> 09_board_put.sh 走串口送进板子的 /tmp
-#        -> 板上 install 到 /usr/bin
+#        -> 板上 install 到目标路径
 #        -> 双向核对 md5
 #
-# 526 KB ≈ 1 分钟。SD 卡只在"固化一版完整镜像给别人/答辩"时才需要动。
+# 526 KB 的二进制 ≈ 1 分钟；14 KB 的网页 ≈ 2 秒 —— 所以改 view.html 几乎不要钱。
 #
 # 什么情况下**必须**回到写卡：改动落在 rootfs 之外的东西上 —— 设备树、内核、
 # boot.scr、U-Boot。那些在启动分区/BOOT.BIN 里，串口覆盖不了（见 07 与文档）。
 #
 # usage:
-#   bash 10_push_app.sh                # 推两个二进制（gf_npu_probe + gf_camera）
+#   bash 10_push_app.sh                # 二进制 + 查看器页面
 #   bash 10_push_app.sh probe          # 只推 gf_npu_probe
 #   bash 10_push_app.sh camera         # 只推 gf_camera
+#   bash 10_push_app.sh page           # 只推 view.html（秒级）
 #   DRY=1 bash 10_push_app.sh          # 只取出并核对，不发送
 #
 set -uo pipefail
@@ -50,33 +51,47 @@ BAUD="${BAUD:-115200}"
 die() { echo "10_push_app: $*" >&2; exit 2; }
 [ -f "$IMG" ] || die "找不到 $IMG —— 先跑 06_install_app.sh 编一版"
 
+# 每个条目:  名称 : 镜像里的路径 : 板上目标路径 : 权限
+# 顺序有意义：二进制先、页面后（页面小，失败也无所谓）。
+ALL_ITEMS=(
+    "gf_npu_probe:/usr/bin/gf_npu_probe:/usr/bin/gf_npu_probe:755"
+    "gf_camera:/usr/bin/gf_camera:/usr/bin/gf_camera:755"
+    "view.html:/usr/share/gf/view.html:/usr/share/gf/view.html:644"
+)
+
+ITEMS=()
 case "$WHAT" in
-    all)    BINS="gf_npu_probe gf_camera" ;;
-    probe)  BINS="gf_npu_probe" ;;
-    camera) BINS="gf_camera" ;;
-    *)      die "参数只能是 all|probe|camera（给的是 '$WHAT'）" ;;
+    all)    ITEMS=("${ALL_ITEMS[@]}") ;;
+    probe)  ITEMS=("${ALL_ITEMS[0]}") ;;
+    camera) ITEMS=("${ALL_ITEMS[1]}") ;;
+    page)   ITEMS=("${ALL_ITEMS[2]}") ;;
+    *)      die "参数只能是 all|probe|camera|page（给的是 '$WHAT'）" ;;
 esac
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/gfpush.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
+
+NAMES=""
+for it in "${ITEMS[@]}"; do NAMES="$NAMES ${it%%:*}"; done
 
 echo "=============================================================="
 echo " 10_push_app.sh  -- 免拔卡部署（串口）"
 echo "=============================================================="
 echo "  rootfs: $IMG"
 echo "  改动于: $(stat -c '%y' "$LF_SRC/gf_npu.c" | cut -d. -f1)  (gf_npu.c)"
-echo "  推哪些: $BINS"
+echo "  推哪些:$NAMES"
 
-# ------------------------------------------------- 1. 从镜像里取出二进制
+# ------------------------------------------------- 1. 从镜像里取出文件
 # 用 debugfs 直接读 ext4，不需要 mount、不需要 root。
 echo
-echo "--- 1/4 从 rootfs.ext4 取出二进制（debugfs，无需 sudo）---"
-for b in $BINS; do
-    rm -f "$WORK/$b"
-    if debugfs -R "dump /usr/bin/$b $WORK/$b" "$IMG" >/dev/null 2>&1 && [ -s "$WORK/$b" ]; then
-        printf '  %-14s %8s bytes  md5=%s\n' "$b" "$(stat -c '%s' "$WORK/$b")" "$(md5sum "$WORK/$b" | cut -c1-16)"
+echo "--- 1/4 从 rootfs.ext4 取出文件（debugfs，无需 sudo）---"
+for it in "${ITEMS[@]}"; do
+    IFS=: read -r name srcimg dest mode <<<"$it"
+    rm -f "$WORK/$name"
+    if debugfs -R "dump $srcimg $WORK/$name" "$IMG" >/dev/null 2>&1 && [ -s "$WORK/$name" ]; then
+        printf '  %-14s %8s bytes  md5=%s\n' "$name" "$(stat -c '%s' "$WORK/$name")" "$(md5sum "$WORK/$name" | cut -c1-16)"
     else
-        die "从镜像里取不出 /usr/bin/$b（debugfs 失败）"
+        die "从镜像里取不出 $srcimg（debugfs 失败）"
     fi
 done
 
@@ -101,25 +116,27 @@ fi
 # ----------------------------------------------------------- 2. 送进板子
 echo
 echo "--- 2/4 串口送进板子的 /tmp ---"
-for b in $BINS; do
+for it in "${ITEMS[@]}"; do
+    IFS=: read -r name srcimg dest mode <<<"$it"
     echo
-    echo ">>> $b"
-    if ! TTY="$DEV" BAUD="$BAUD" bash "$HERE/09_board_put.sh" "$WORK/$b" "/tmp/$b.new"; then
-        die "投放 $b 失败（三次都没校验通过）—— 没有继续覆盖 /usr/bin"
+    echo ">>> $name  ->  $dest"
+    if ! TTY="$DEV" BAUD="$BAUD" bash "$HERE/09_board_put.sh" "$WORK/$name" "/tmp/$name.new"; then
+        die "投放 $name 失败（三次都没校验通过）—— 没有继续覆盖目标文件"
     fi
 done
 
 # --------------------------------------------------- 3/4 落位并双向核对
 echo
-echo "--- 3/4 落位到 /usr/bin 并核对 ---"
-CMDS=""
-for b in $BINS; do
-    want="$(md5sum "$WORK/$b" | cut -c1-32)"
-    CMDS="$CMDS cp /tmp/$b.new /usr/bin/$b && chmod 755 /usr/bin/$b && rm -f /tmp/$b.new;"
-    CMDS="$CMDS printf 'GF_INSTALLED %s ' $b; md5sum /usr/bin/$b | cut -d' ' -f1;"
-    CMDS="$CMDS printf 'GF_WANT      %s %s\\n' $b $want;"
-    CMDS="$CMDS sync;"
+echo "--- 3/4 落位并核对 ---"
+CMDS="mkdir -p /usr/share/gf;"
+for it in "${ITEMS[@]}"; do
+    IFS=: read -r name srcimg dest mode <<<"$it"
+    want="$(md5sum "$WORK/$name" | cut -c1-32)"
+    CMDS="$CMDS cp /tmp/$name.new $dest && chmod $mode $dest && rm -f /tmp/$name.new;"
+    CMDS="$CMDS printf 'GF_INSTALLED %-14s ' $name; md5sum $dest | cut -d' ' -f1;"
+    CMDS="$CMDS printf 'GF_WANT      %-14s %s\\n' $name $want;"
 done
+CMDS="$CMDS sync;"
 
 TTY="$DEV" bash "$HERE/08_console.sh" send "$CMDS" 8 2>&1 | sed 's/^/  /'
 
@@ -128,12 +145,22 @@ echo
 echo "--- 4/4 结论 ---"
 echo "  板上自报的 GF_INSTALLED 与 GF_WANT 必须逐字节相同；不同就说明落位没成功。"
 cat <<'NOTE'
-  下一步（板上，root）：
-      gf_npu_probe                 # 期望 RESULT: PASS
-      gf_npu_probe --bench 200
-      gf_camera -s 640x480
 
-  注意：这一版的二进制只存在于板上的 rootfs 里。要让**镜像**也带上它，
+  下一步（板上，root）：
+      # 先让网口起来（板子 GbE 接路由器/交换机，与笔记本同一网段）
+      ip link set eth0 up
+      udhcpc -i eth0                      # 有 DHCP 就会打印租到的 IP
+
+      # --view 起网页。相机当前是**正装**的，所以不要加 --rotate；
+      # 若画面方向不对，再按当前安装角度补 --rotate 0|90|180|270（运行期参数）。
+      gf_camera -s 640x480 --view 8080
+
+      然后在笔记本浏览器打开板子启动时打印的 http://<板子IP>:8080/
+
+  关于 --view 的开销：没人看的时候它不做任何拷贝，所以基准测试请用不带
+  --view 的命令行（或者量完再翻页）。细节见 gf_view.h 的注释。
+
+  注意：这一版只存在于板上的 rootfs 里。要让**镜像**也带上它，
   仍然要跑 06_install_app.sh 并用 04_make_sd.sh 写卡 —— 别把"板上跑通了"
   和"镜像里有这一版"当成同一件事。
 NOTE

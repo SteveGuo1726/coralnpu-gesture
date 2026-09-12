@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GestureFlow-NPU · ZCU104 实时监视</title>
+<style>
+  :root{
+    --bg:#0e1319; --panel:#161d26; --panel2:#1d2632; --line:#28323f;
+    --fg:#dfe7ef; --dim:#8d9bab; --accent:#4ea1ff; --ok:#3ddc97; --bad:#ff6b6b;
+    --warn:#ffb454;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:13px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+  header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:14px;
+         padding:10px 18px;background:#0b1015;border-bottom:1px solid var(--line)}
+  .brand{font-size:15px;font-weight:650;letter-spacing:.2px}
+  .brand .sub{font-weight:400;font-size:11.5px;color:var(--dim);margin-left:8px}
+  .hud{margin-left:auto;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .hud .k{color:var(--dim);font-size:11.5px}
+  .hud .v{font-variant-numeric:tabular-nums;font-weight:600}
+  .pill{padding:3px 10px;border-radius:999px;font-size:11.5px;font-weight:600;border:1px solid}
+  .pill.on {color:var(--ok);  border-color:#1e5c46;background:#0f2b22}
+  .pill.off{color:var(--bad); border-color:#5c2020;background:#2b1212}
+
+  main{display:grid;grid-template-columns:minmax(340px,1fr) minmax(420px,1.25fr);
+       gap:14px;padding:14px 18px 28px;align-items:start}
+  @media (max-width:1050px){ main{grid-template-columns:1fr} }
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 13px}
+  .panel h3{margin:0 0 9px;font-size:12px;font-weight:650;color:var(--dim);
+            text-transform:uppercase;letter-spacing:.7px}
+  .panel h3 .hint{text-transform:none;letter-spacing:0;font-weight:400;color:#6f7d8d;margin-left:6px}
+
+  figure{margin:0 0 12px}
+  figcaption{display:flex;align-items:center;gap:8px;margin-bottom:6px;
+             font-size:12px;font-weight:600;color:var(--dim)}
+  figcaption .hint{font-weight:400;color:#6f7d8d}
+  figcaption .chk{margin-left:auto;font-weight:400;color:var(--fg);font-size:12px;
+                  display:flex;align-items:center;gap:5px;cursor:pointer}
+  .viewbox{background:#05080b;border:1px solid var(--line);border-radius:8px;
+           padding:8px;display:flex;align-items:center;justify-content:center;min-height:64px}
+  #prev{width:384px;height:384px;max-width:100%;image-rendering:pixelated;
+        image-rendering:crisp-edges;display:block}
+  #scene{max-width:100%;max-height:340px;display:block;transform-origin:center center}
+  .meta{margin-top:5px;font-size:11.5px;color:var(--dim);font-variant-numeric:tabular-nums}
+
+  .headline{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+  .cls{font-size:38px;font-weight:700;line-height:1.1;letter-spacing:-.5px}
+  .cls.idle{font-size:20px;color:var(--dim);font-weight:500}
+  .raw{color:var(--dim);font-size:12.5px}
+  .raw b{color:var(--fg)}
+  .votebar{height:6px;border-radius:3px;background:#243040;margin-top:9px;overflow:hidden}
+  .votebar i{display:block;height:100%;background:var(--accent);width:0;transition:width .12s}
+
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;font-variant-numeric:tabular-nums}
+  .kv .k{color:var(--dim)}
+  .kv .v{text-align:right;font-weight:600}
+
+  .tbar{display:grid;grid-template-columns:74px 1fr 58px;gap:8px;align-items:center;
+        margin:4px 0;font-variant-numeric:tabular-nums}
+  .tbar .lbl{color:var(--dim);font-size:11.5px}
+  .tbar .track{height:14px;background:#1b2431;border-radius:3px;overflow:hidden}
+  .tbar .track i{display:block;height:100%}
+  .tbar .val{text-align:right;font-weight:600;font-size:12px}
+
+  .histrow{display:grid;grid-template-columns:112px 1fr 84px;gap:8px;align-items:center;
+           font-variant-numeric:tabular-nums;padding:1px 0}
+  .histrow .nm{font-size:11.5px;color:var(--dim);white-space:nowrap;overflow:hidden;
+               text-overflow:ellipsis}
+  .histrow.cur .nm{color:var(--fg);font-weight:700}
+  .histrow .track{height:11px;background:#1b2431;border-radius:3px;overflow:hidden}
+  .histrow .track i{display:block;height:100%;background:#3a6ea5}
+  .histrow .track i.s{background:#4ea1ff}
+  .histrow .n{text-align:right;font-size:11.5px}
+  .histrow .n b{color:var(--fg)}
+
+  .chips{display:flex;flex-wrap:wrap;gap:5px;margin:2px 0 9px}
+  .chip{padding:3px 9px;border-radius:999px;border:1px solid var(--line);background:#1a222d;
+        color:var(--dim);font-size:11.5px;cursor:pointer;user-select:none}
+  .chip:hover{border-color:#3d4c5e;color:var(--fg)}
+  .chip.sel{background:#12385c;border-color:var(--accent);color:#cfe6ff;font-weight:700}
+  .acc{display:flex;gap:18px;align-items:baseline;flex-wrap:wrap}
+  .acc .big{font-size:26px;font-weight:700;font-variant-numeric:tabular-nums}
+  .acc .cap{font-size:11.5px;color:var(--dim)}
+  .btn{padding:4px 11px;border-radius:6px;border:1px solid var(--line);background:#1e2835;
+       color:var(--fg);font-size:12px;cursor:pointer}
+  .btn:hover{border-color:#43556a}
+  .btn:disabled{opacity:.4;cursor:default}
+
+  table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;font-size:12px}
+  th{position:sticky;top:0;background:var(--panel2);color:var(--dim);font-weight:600;
+     text-align:right;padding:4px 7px;font-size:11px}
+  th:first-child,td:first-child{text-align:left}
+  td{padding:3px 7px;border-top:1px solid #1e2733;text-align:right;color:var(--dim)}
+  td.n{color:var(--fg);font-weight:600}
+  tr.bad td.n{color:var(--bad)}
+  .logwrap{max-height:300px;overflow:auto;border:1px solid var(--line);border-radius:8px}
+  .errs{font-size:11.5px;color:var(--dim);margin-top:8px}
+  .errs b{color:var(--fg)}
+  .warn{color:var(--warn)}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">GestureFlow-NPU<span class="sub">ZCU104 · HaGRID-18 · INT8 · PL 自研加速器</span></div>
+  <div class="hud">
+    <span id="conn" class="pill off">连接中…</span>
+    <span><span class="k">帧</span> <span id="frame" class="v">—</span></span>
+    <span><span class="k">速率</span> <span id="fps" class="v">—</span></span>
+    <span><span class="k">已运行</span> <span id="uptime" class="v">—</span></span>
+    <span><span class="k">相机</span> <span id="caminfo" class="v">—</span></span>
+  </div>
+</header>
+
+<main>
+  <!-- ------------------------------------------------ 画面 -->
+  <section>
+    <div class="panel">
+      <h3>画面 <span class="hint">板子上的 USB3 摄像头</span></h3>
+
+      <figure>
+        <figcaption>
+          模型输入 <b>96×96</b>
+          <span class="hint">这就是送进 NPU 的那张图</span>
+          <label class="chk"><input type="checkbox" id="pause"> 暂停画面</label>
+        </figcaption>
+        <div class="viewbox"><img id="prev" alt="等待首帧"></div>
+        <div class="meta" id="prevmeta">—</div>
+      </figure>
+
+      <figure style="margin-bottom:0">
+        <figcaption>
+          摄像头全景
+          <span class="hint" id="rotnote"></span>
+          <label class="chk"><input type="checkbox" id="sceneOn"> 开启</label>
+        </figcaption>
+        <div class="viewbox" id="scenebox">
+          <img id="scene" alt="未开启">
+        </div>
+        <div class="meta" id="scenemeta">未开启（全分辨率每帧约 900 KB，默认关闭以免占用带宽）</div>
+      </figure>
+    </div>
+
+    <div class="panel" style="margin-top:14px">
+      <h3>真值标注 → 实测准确率 <span class="hint">点击下方手势，从下一帧开始计分</span></h3>
+      <div class="chips" id="chips"></div>
+      <div class="acc">
+        <div>
+          <div class="cap">稳定帧准确率</div>
+          <div class="big" id="accStable">—</div>
+        </div>
+        <div>
+          <div class="cap">全部帧准确率</div>
+          <div class="big" id="accAll" style="font-size:19px">—</div>
+        </div>
+        <div style="margin-left:auto;display:flex;gap:7px">
+          <button class="btn" id="btnClear">清除标注</button>
+          <button class="btn" id="btnCsv">导出 CSV</button>
+        </div>
+      </div>
+      <div class="meta" id="markNote">未开始标注。“稳定帧”＝ 表决窗口中同一类占比 ≥ 60%，能滤掉手势切换时的过渡帧。</div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------ 结果与指标 -->
+  <section>
+    <div class="panel">
+      <h3>识别结果</h3>
+      <div class="headline">
+        <div class="cls idle" id="smooth">等待首帧…</div>
+      </div>
+      <div class="raw" style="margin-top:2px">
+        单帧原始：<b id="raw">—</b> ·
+        表决 <b id="votes">—</b> / <span id="win">—</span> 帧
+      </div>
+      <div class="votebar"><i id="votefill"></i></div>
+      <div class="meta" id="latency">—</div>
+    </div>
+
+    <div class="panel" style="margin-top:14px">
+      <h3>每帧耗时分解 <span class="hint">目标 ≤ 5 ms/帧（大创验收指标）</span></h3>
+      <div id="bars"><div class="meta">等待首帧…</div></div>
+      <div class="meta" id="tnote">—</div>
+    </div>
+
+    <div class="panel" style="margin-top:14px">
+      <h3>类别分布 <span class="hint">深 = 平滑后累计 · 亮 = 单帧累计</span></h3>
+      <div id="hist"><div class="meta">等待首帧…</div></div>
+      <div class="errs" id="errs">—</div>
+    </div>
+
+    <div class="panel" style="margin-top:14px">
+      <h3>滚动日志 <span class="hint">每 200 ms 采样一次</span></h3>
+      <div class="logwrap">
+        <table>
+          <thead><tr>
+            <th>帧</th><th>单帧</th><th>平滑</th><th>表决</th><th>总 ms</th><th>NPU ms</th>
+          </tr></thead>
+          <tbody id="logrows"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const NAMES_DEFAULT = ["call","dislike","fist","four","like","mute","ok","one","palm",
+                       "peace","peace_inverted","rock","stop","stop_inverted","three",
+                       "three2","two_up","two_up_inverted"];
+
+let NAMES = NAMES_DEFAULT.slice();
+let S = null;                 // 最近一次 /stats
+let lastFrame = -1;
+let connected = false;
+let truth = null;             // 用 clicks 设定的真值类别
+let scored = { n:0, ok:0, ns:0, oks:0 };
+let rows = [];                // 客户端记录（用于导出）
+let chipsBuilt = false;
+
+/* ------------------------------------------------------------- 连接状态 -- */
+function setConn(ok){
+  if (ok === connected) return;
+  connected = ok;
+  const el = $('conn');
+  el.className = 'pill ' + (ok ? 'on' : 'off');
+  el.textContent = ok ? '● 在线' : '○ 断线';
+}
+
+/* --------------------------------------------------------- 图像：节流拉取 --
+ * 用 onload 串起来（慢的时候自动降速，不会堆积请求），并且**显式节流**。
+ *
+ * 不节流是错的：onload 一触发就立刻再请求，浏览器在局域网上能跑到上百 Hz，
+ * 每个请求都要板子做一次 memcpy 加一次 TCP 发送 —— 那才是真会占 CPU 的东西，
+ * 而多出来的帧没有任何新信息（流水线本身只有 ~15-30 fps）。
+ * 所以刷新率由**页面**定死在这里，板子不做任何定时。
+ *
+ * 另外：板子只在收到请求后 2 秒内才发布新帧，所以关掉页面就等于零开销。 */
+const PREVIEW_MS = 66;    // ~15 Hz，与流水线帧率相当
+const SCENE_MS   = 220;   // ~4.5 Hz，全分辨率每帧约 900 KB
+let seq = 0, seqS = 0, pauseImg = false, sceneOn = false;
+let prevDone = 0, sceneDone = 0;
+const prevImg = $('prev');
+const sceneImg = $('scene');
+
+function schedulePreview(){
+  const wait = Math.max(0, PREVIEW_MS - (performance.now() - prevDone));
+  setTimeout(function(){ prevImg.src = '/preview.bmp?n=' + (++seq); }, wait);
+}
+function loadPreview(){
+  if (pauseImg){ setTimeout(loadPreview, 250); return; }
+  schedulePreview();
+}
+prevImg.onload  = function(){ prevDone = performance.now(); loadPreview(); };
+prevImg.onerror = function(){ prevDone = performance.now(); setTimeout(loadPreview, 400); };
+
+function scheduleScene(){
+  const wait = Math.max(0, SCENE_MS - (performance.now() - sceneDone));
+  setTimeout(function(){ sceneImg.src = '/scene.bmp?n=' + (++seqS); }, wait);
+}
+function loadScene(){
+  if (!sceneOn){ setTimeout(loadScene, 500); return; }
+  scheduleScene();
+}
+sceneImg.onload  = function(){ sceneDone = performance.now(); loadScene(); };
+sceneImg.onerror = function(){ sceneDone = performance.now(); setTimeout(loadScene, 500); };
+loadPreview(); loadScene();
+
+$('pause').onchange = e => { pauseImg = e.target.checked; };
+$('sceneOn').onchange = e => {
+  sceneOn = e.target.checked;
+  $('scenemeta').textContent = sceneOn
+    ? '已开启：全分辨率流，板子端限速 5 fps，本页约 4.5 Hz 拉取。'
+    : '未开启（全分辨率每帧约 900 KB，默认关闭以免占用带宽）';
+  if (!sceneOn) $('scene').removeAttribute('src');
+};
+
+/* --------------------------------------------------------------- 渲染 ---- */
+function fmtClass(v){ return (v === null || v === undefined || v < 0) ? '—' : (NAMES[v] || ('#'+v)); }
+
+function render(){
+  const live = S && S.uptime > 0;
+  $('frame').textContent  = live ? S.frame : '—';
+  $('fps').textContent    = live ? S.fps.toFixed(1) : '—';
+  $('uptime').textContent = live ? S.uptime.toFixed(0) + ' s' : '—';
+  $('caminfo').textContent = (S && S.cam) ? (S.cam.w + '×' + S.cam.h + ' ' + S.cam.fmt) : '—';
+
+  if (live && S.names && S.names.length && !chipsBuilt){
+    NAMES = S.names; buildChips(); chipsBuilt = true;
+  }
+
+  const head = $('smooth');
+  if (!live){ head.className = 'cls idle'; head.textContent = '等待首帧…'; }
+  else {
+    head.className = 'cls';
+    head.textContent = fmtClass(S.smooth);
+  }
+  $('raw').textContent   = live ? fmtClass(S.raw) : '—';
+  $('votes').textContent = live ? S.votes : '—';
+  $('win').textContent   = live ? S.window : '—';
+  const pct = (live && S.window > 0) ? (100 * S.votes / S.window) : 0;
+  $('votefill').style.width = pct.toFixed(0) + '%';
+
+  if (live){
+    $('latency').textContent =
+      '端到端 ' + S.ms.total.toFixed(1) + ' ms/帧  ⇒  处理上限 ' +
+      (S.ms.total > 0 ? (1000 / S.ms.total).toFixed(1) : '—') + ' fps' +
+      '（相机实际 ' + S.fps.toFixed(1) + ' fps）';
+    $('tnote').textContent = '合计 ' + S.ms.total.toFixed(1) + ' ms ＝ 解码 ' +
+      S.ms.decode.toFixed(1) + ' ＋ 缩放 ' + S.ms.resize.toFixed(1) +
+      ' ＋ NPU ' + S.ms.npu.toFixed(1) + ' ms';
+  }
+
+  /* 耗时条 */
+  if (live){
+    const parts = [
+      ['解码',  S.ms.decode, '#7a5cff'],
+      ['缩放',  S.ms.resize, '#3ddc97'],
+      ['NPU',   S.ms.npu,    '#4ea1ff']
+    ];
+    const max = Math.max(5, S.ms.total);
+    $('bars').innerHTML = parts.map(([n,v,c]) =>
+      '<div class="tbar"><span class="lbl">' + n + '</span>' +
+      '<span class="track"><i style="width:' + (100*v/max).toFixed(1) + '%;background:' + c + '"></i></span>' +
+      '<span class="val">' + v.toFixed(1) + '</span></div>').join('');
+  }
+
+  /* 类别分布 */
+  if (live){
+    const a = S.hist_smooth || [], b = S.hist_raw || [];
+    const mx = Math.max(1, ...a, ...b);
+    $('hist').innerHTML = NAMES.map((n,i) => {
+      const s = a[i]||0, r = b[i]||0;
+      const cur = (i === S.smooth) ? ' cur' : '';
+      return '<div class="histrow' + cur + '">' +
+        '<span class="nm">' + n + '</span>' +
+        '<span class="track"><i class="s" style="width:' + (100*s/mx).toFixed(1) + '%"></i></span>' +
+        '<span class="n"><b>' + s + '</b> / ' + r + '</span></div>';
+    }).join('');
+  }
+
+  /* 旋转提示 */
+  if (live && S.rotate){
+    $('rotnote').textContent = '（板子已补偿旋转 ' + S.rotate + '°；本页对全景做同样旋转）';
+    sceneImg.style.transform = 'rotate(' + S.rotate + 'deg)';
+    const box = $('scenebox');
+    if (S.rotate === 90 || S.rotate === 270){
+      box.style.aspectRatio = (S.cam.h / S.cam.w).toFixed(3);
+    } else {
+      box.style.aspectRatio = '';
+    }
+  } else {
+    $('rotnote').textContent = '';
+    sceneImg.style.transform = '';
+  }
+
+  /* 错误计数 */
+  if (live){
+    const e = S.err || {};
+    const problems = [];
+    if (e.jpeg) problems.push('JPEG 坏帧 <b>' + e.jpeg + '</b>（已跳过）');
+    if (e.npu)  problems.push('NPU 失败 <b>' + e.npu + '</b>');
+    $('errs').innerHTML = problems.length
+      ? '<span class="warn">注意：</span>' + problems.join(' · ')
+      : '坏帧 / NPU 失败：<b>0</b>';
+  }
+}
+
+/* ------------------------------------------------------------- 计分 ----- */
+function renderAcc(){
+  const den = scored.ns || 0, num = scored.oks || 0;
+  const den2 = scored.n || 0, num2 = scored.ok || 0;
+  $('accStable').textContent = den ? (100*num/den).toFixed(1) + '%' : '—';
+  $('accAll').textContent    = den2 ? (100*num2/den2).toFixed(1) + '%' : '—';
+  if (truth === null){
+    $('markNote').textContent = '未开始标注。“稳定帧”＝ 表决窗口中同一类占比 ≥ 60%，能滤掉手势切换时的过渡帧。';
+  } else {
+    $('markNote').innerHTML = '真值 = <b>' + fmtClass(truth) + '</b>　稳定帧 n=' + den +
+      '　全部帧 n=' + den2 + '　点“清除标注”结束本轮。';
+  }
+}
+
+function buildChips(){
+  $('chips').innerHTML = NAMES.map((n,i) =>
+    '<span class="chip" data-i="' + i + '">' + n + '</span>').join('');
+  [...$('chips').children].forEach(el => {
+    el.onclick = () => {
+      const i = +el.dataset.i;
+      if (truth === i){ truth = null; }        // 再点一次取消
+      else { truth = i; scored = {n:0,ok:0,ns:0,oks:0}; }
+      [...$('chips').children].forEach(x =>
+        x.classList.toggle('sel', +x.dataset.i === truth));
+      renderAcc();
+    };
+  });
+}
+
+$('btnClear').onclick = () => {
+  truth = null;
+  scored = {n:0,ok:0,ns:0,oks:0};
+  [...$('chips').children].forEach(x => x.classList.remove('sel'));
+  renderAcc();
+};
+
+$('btnCsv').onclick = () => {
+  const hdr = 'frame,uptime_s,raw,raw_name,smooth,smooth_name,votes,window,ms_total,ms_decode,ms_resize,ms_npu,truth\n';
+  const body = rows.map(r => [
+    r.frame, r.uptime_s.toFixed(2), r.raw, fmtClass(r.raw), r.smooth, fmtClass(r.smooth),
+    r.votes, r.window, r.ms_total.toFixed(3), r.ms_decode.toFixed(3),
+    r.ms_resize.toFixed(3), r.ms_npu.toFixed(3), r.truth === null ? '' : fmtClass(r.truth)
+  ].join(',')).join('\n');
+  const blob = new Blob([hdr + body], {type:'text/csv'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'gf_camera_' + new Date().toISOString().replace(/[:.]/g,'-') + '.csv';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+};
+
+/* ---------------------------------------------------------------- 轮询 --- */
+function logRow(s){
+  const tr = document.createElement('tr');
+  const bad = (truth !== null && s.smooth !== truth && s.votes >= Math.ceil(s.window*0.6));
+  if (bad) tr.className = 'bad';
+  tr.innerHTML = '<td class="n">' + s.frame + '</td>' +
+    '<td>' + fmtClass(s.raw) + '</td>' +
+    '<td class="n">' + fmtClass(s.smooth) + '</td>' +
+    '<td>' + s.votes + '/' + s.window + '</td>' +
+    '<td>' + s.ms.total.toFixed(1) + '</td>' +
+    '<td>' + s.ms.npu.toFixed(1) + '</td>';
+  const tb = $('logrows');
+  tb.insertBefore(tr, tb.firstChild);
+  while (tb.children.length > 60) tb.removeChild(tb.lastChild);
+}
+
+async function tick(){
+  try {
+    const r = await fetch('/stats', {cache:'no-store'});
+    if (!r.ok) throw new Error('http ' + r.status);
+    S = await r.json();
+    setConn(true);
+    render();
+    if (S.uptime > 0 && S.frame !== lastFrame){
+      lastFrame = S.frame;
+      if (truth !== null){
+        scored.n++;
+        if (S.smooth === truth) scored.ok++;
+        if (S.window > 0 && S.votes >= Math.ceil(S.window * 0.6)){
+          scored.ns++;
+          if (S.smooth === truth) scored.oks++;
+        }
+        renderAcc();
+      }
+      rows.push({frame:S.frame, uptime_s:S.uptime, raw:S.raw, smooth:S.smooth,
+                 votes:S.votes, window:S.window, ms_total:S.ms.total,
+                 ms_decode:S.ms.decode, ms_resize:S.ms.resize, ms_npu:S.ms.npu,
+                 truth:truth});
+      if (rows.length > 20000) rows = rows.slice(-10000);
+      logRow(S);
+    }
+  } catch(e) {
+    setConn(false);
+  }
+}
+setInterval(tick, 200);
+tick();
+</script>
+</body>
+</html>

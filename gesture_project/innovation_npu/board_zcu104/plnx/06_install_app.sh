@@ -99,7 +99,7 @@ step "1/4 投放源码: $SRC  ->  $APP/files/"
 # 这里选择**拦截**而不是事后自愈：自愈会把问题掩盖掉，而且自愈代码本身
 # 也需要被验证 —— 上一版的自愈守卫就是个反例（见 PITFALLS.md #8 附注）。
 cr_bad=0
-for f in "$SRC"/*.c "$SRC"/*.h \
+for f in "$SRC"/*.c "$SRC"/*.h "$SRC"/*.html \
          "$REPO/gesture_project/innovation_npu/board_zcu104/yocto/gf-npu/gf-npu_1.0.bb"; do
     [ -f "$f" ] || continue
     n=$(LC_ALL=C tr -dc '\r' < "$f" | wc -c)
@@ -109,7 +109,7 @@ done
 echo "  换行自检: 待投放文件均无 CR"
 
 changed=0
-for f in "$SRC"/*.c "$SRC"/*.h; do
+for f in "$SRC"/*.c "$SRC"/*.h "$SRC"/*.html; do
     [ -f "$f" ] || continue
     b=$(basename "$f")
     if [ -f "$APP/files/$b" ] && cmp -s "$f" "$APP/files/$b"; then

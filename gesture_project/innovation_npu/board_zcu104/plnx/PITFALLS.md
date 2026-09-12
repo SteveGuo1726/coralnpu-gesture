@@ -865,5 +865,120 @@ like "the camera sees nothing" and made the all-`dislike` classification look li
 a model bug.  It now saves the **last** frame when `-n N` is given.  When
 instrumenting an auto-exposure camera, sample a settled frame.
 
+## 20. Live HTTP viewer: the contract, and five small traps
+
+The contract first, because it is what makes `--view` safe to leave switched on:
+**the capture thread never touches a socket, and nothing is copied unless a client
+asked for that stream within the last two seconds.**  Everything below is a
+detail.  A benchmark run with no browser attached therefore measures exactly what
+it measured before the viewer existed, and a stalled client or a saturated link
+can only drop *viewer* frames — never add a millisecond to the pipeline.
+
+Measured on the x86 host with `linux/tests/run.sh`:
+
+```
+one memcpy of a 96x96 preview (yardstick) :   418 ns
+publish, nobody interested                :    37 ns   = 0.00014% of a 27.3 ms frame
+publish, preview stream watched           :   553 ns   = 0.0020%
+publish that also copies the scene        : 78485 ns   = 0.29%, but capped at 5/s
+```
+
+The "nobody interested" figure is *deterministically* verified, not estimated:
+publish a pattern, let the window expire, publish a different pattern, read the
+stream back — it must still show the first pattern.  Timing is only corroboration.
+
+1. **`Connection: close` must actually close.**  Writing it into the response
+   header and then looping for the next request leaves the peer waiting for an
+   EOF that never arrives, until the socket timeout.  The handler has to return
+   "close" as well as say it.  (The host test caught this before the board did.)
+
+2. **`strcasestr()` needs `_GNU_SOURCE`, even with `-std=gnu99`.**  gnu99 gives
+   you `_DEFAULT_SOURCE`; `strcasestr` is declared under `__USE_GNU`.  Either
+   define `_GNU_SOURCE` before the first include, or write the two case variants.
+
+3. **Put `-pthread` in the recipe.**  glibc 2.34+ folded pthreads into libc, so
+   omitting the flag often links anyway — which is worse, because it hides the
+   intent.  gf_camera runs the viewer on its own thread.  Say so in the flags.
+
+4. **Plain `char` is signed on x86.**  Decoding a little-endian 32-bit field as
+   `b[18] | (b[19]<<8) | ...` turns a width of 640 into −128, because `b[18]` is
+   0x80.  This bit the *test*, not the server: dumping the bytes showed the header
+   was perfect (`80 02 00 00`) and the reader was wrong.  Cast every byte to
+   `unsigned char`.  **When a check fails, dump the bytes before believing it.**
+
+5. **The first request on a stream returns 503 — by design.**  A stream is only
+   copied while somebody is interested, so the first request arrives *before* any
+   copy has happened; that request is what registers the interest, and the second
+   one gets a frame.  The page's `onerror` retry covers it.  Do not "fix" this by
+   copying unconditionally.
+
+Two smaller notes.  The page is served from a **file**
+(`/usr/share/gf/view.html`), not compiled in, so it can be replaced over the
+console in about two seconds (`10_push_app.sh page`) while iterating on it.  And
+the full-resolution scene is rotated by the browser with a CSS transform, because
+only the 96x96 image actually has to be upright — for the model.
 
 
+
+
+## 21. Getting files onto the board, and the viewer's own cost
+
+**The console has exactly one writer.** Two writers interleaving on the same tty
+tear long commands and heredocs in half, and the symptom lands a long way from
+the cause.  A probe sent while `09_board_put.sh` was mid-install corrupted the
+on-board decoder, which then surfaced as "the decoded md5 does not match" on all
+three attempts -- i.e. it looked exactly like the serial line dropping bytes.
+`09` and `11` now take a `flock` on the tty before doing anything.
+
+Related, same root: **install on-board helpers with a single line**, not a
+heredoc.  `python3 -c "import base64;open(p,'wb').write(base64.b64decode('...'))"`
+has no multi-line protocol for a second writer to split.  And **selftest the
+helper you just installed** -- checking that `python3` runs at all proves
+nothing.  Feed it a known input and compare the md5.  (The first version of that
+selftest was itself wrong: it wrote the *plaintext* into the decoder's input file
+when the decoder's input is base64.  Test the test.)
+
+**Ethernet beats the serial port by about 200x, and there is now a cable.**
+592 KB in 0.05 s (11.5 MB/s) via `11_net_put.sh`, against ~60 s for the same file
+over 115200 baud.  The board's busybox `nc` is stripped -- `Usage: nc [IPADDR
+PORT]`, **no `-l`** -- so the board cannot be the listener; the script instead
+starts a one-shot TCP receiver in the board's python3 and the host connects to
+it.
+
+Two traps in that script, both of which look like network faults:
+
+* **Create the target directory first.** The receiver's `open()` fails when the
+  parent does not exist, the process dies immediately -- but `accept()` has
+  already happened, so the sender's data lands in the socket buffer and the
+  client reports success.  It reads as "the file transferred but the md5 is
+  wrong".
+* **`mv` preserves the receiver's mode.** A binary pushed this way arrives as
+  644 and will not execute.  Pass the mode explicitly (`755` for binaries, `644`
+  for the page).
+
+**The direct link needs no Windows configuration.** A USB Ethernet adapter with
+no DHCP server gets an APIPA address (`169.254/16`), so giving the board an
+address in the same range is enough -- no adapter settings, no admin rights:
+
+```
+ip link set eth0 up
+ip addr replace 169.254.10.20/16 dev eth0
+```
+
+**The viewer's page has to throttle itself.** Chaining `<img>` off its own
+`onload` is fine for correctness (a slow link just slows the loop) but it is an
+unbounded rate: on a LAN a browser will happily request the preview at over
+100 Hz, and every request costs the board a memcpy and a socket write.  That
+would defeat the whole design.  The refresh rate is therefore fixed in the page
+(66 ms preview, 220 ms scene) and the board does no timing of its own.
+
+**The first request on a stream returns 503, on purpose.** A stream is copied
+only while somebody is interested, so the first request arrives before any copy
+has happened -- that request is what registers the interest.  The page's
+`onerror` retry covers the ~100 ms gap.  Do not "fix" it by copying always.
+
+**The camera orientation is a runtime parameter, and it has already been flipped
+once.** It started upside down and needed `--rotate 180`; the user then remounted
+it upright, at which point copying the previous command line inverted a
+correct image.  Judge from a captured frame (`--save-ppm` and look at it), not
+from history.  See `docs/ZCU104_实时监视器_2026-09-12.md` section 5.

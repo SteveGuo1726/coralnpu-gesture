@@ -123,6 +123,13 @@ if debugfs -R "stat /lib/modules" "$IMG" 2>/dev/null | grep -q '^Inode:'; then
 else
     bad "/lib/modules 不存在"
 fi
+# --view 用的网页。它不在二进制里，所以单独查一次；少了只会让页面变成
+# 占位页（gf_camera 仍然正常跑），但那种降级在伸手够不到的板子上很难看出来。
+if debugfs -R "stat /usr/share/gf/view.html" "$IMG" 2>/dev/null | grep -q '^Inode:'; then
+    ok "/usr/share/gf/view.html 存在（--view 的页面）"
+else
+    warn "/usr/share/gf/view.html 不在镜像里 —— --view 会退回内置占位页"
+fi
 
 # ------------------------------------------- 3. 架构 + 依赖（是不是我们的编译）
 echo
@@ -178,6 +185,9 @@ gf_camera|majority-vote smoothing window|gf_camera.c
 gf_camera|save the resized 96x96 RGB|gf_camera.c
 gf_camera|gf_camera: using %s %dx%d|gf_camera.c
 gf_camera|JPEG decode failed, skipping frame|gf_camera.c
+gf_camera|rotating the NPU input %d degrees clockwise|gf_camera.c
+gf_camera|gf_camera: viewer ready -- open this in the laptop browser:|gf_view.c
+gf_camera|no frame yet|gf_view.c
 "
 while IFS='|' read -r bin needle srcfile; do
     [ -n "${bin:-}" ] || continue
@@ -205,7 +215,7 @@ echo "--- [5] 反向一致性：源码里的诊断串有多少进了镜像 ---"
 # 为什么不要求 100%：一部分文案位于编译期恒假的死分支（见 [4] 的说明），
 # 还有一部分是 printf 的分段拼接（跨行），抽取时按段算。因此这里看的是
 # **命中率**，只要过半就说明这份源码确实被编了进去。
-for pair in "gf_npu_probe:gf_npu.c" "gf_camera:gf_camera.c"; do
+for pair in "gf_npu_probe:gf_npu.c" "gf_camera:gf_camera.c" "gf_camera:gf_view.c"; do
     bin=${pair%%:*}; srcfile=${pair##*:}
     [ -s "$TMP/$bin" ] || continue
     [ -f "$LF_SRC/$srcfile" ] || continue

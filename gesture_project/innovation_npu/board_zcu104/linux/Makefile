@@ -33,7 +33,9 @@ STRIP   := $(CROSS_COMPILE)strip
 STATIC  ?= 1
 JPEG    ?= auto     # auto | 0 | 1  -- MJPEG camera support (needs libjpeg)
 
-CFLAGS  := -O2 -Wall -Wextra -std=gnu99 -I. -I$(WEIGHT_INC)
+# -pthread: gf_camera's --view option runs the HTTP viewer on its own thread
+# (see gf_view.c).  The pipeline itself stays single-threaded.
+CFLAGS  := -O2 -Wall -Wextra -std=gnu99 -pthread -I. -I$(WEIGHT_INC)
 LDLIBS  :=
 
 ifeq ($(STATIC),1)
@@ -68,11 +70,16 @@ check-toolchain:
 gf_npu.o: gf_npu.c gf_npu.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+# The live HTTP viewer (gf_camera --view PORT).  Depends on gf_npu.h only for
+# gf_npu_class_name().
+gf_view.o: gf_view.c gf_view.h gf_npu.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
 # Small CLI around the driver: --selftest is the port-validation step.
 gf_npu_probe: gf_npu_probe.o gf_npu.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
-gf_camera: gf_camera.o gf_npu.o
+gf_camera: gf_camera.o gf_view.o gf_npu.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
 %.o: %.c gf_npu.h
