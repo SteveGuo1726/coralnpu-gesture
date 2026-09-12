@@ -23,6 +23,20 @@
 6. **融合池化的层，硬件 `GF_OUTPUT_FNV1A` 报的是池化前卷积输出的 FNV，不是存进 DDR 的池化张量。**
 7. **HP0 非相干**，但 `reserved-memory(no-map)` + `/dev/mem` 映射成非缓存后，
    两侧都不需要 cache flush/invalidate。`no-map` 是关键。
+8. **编译期常量条件会让诊断字符串从二进制里消失 —— 这不是构建坏了。**
+   例：`gf_npu.c` 里 `if (bytes_needed > (size_t)GF_BUF_SIZE)`（~578 KB > 16 MiB）恒假，
+   GCC 把分支**连字符串一起删掉**。曾据此**误判**为"sstate 短路了 do_compile、镜像是旧代码"。
+   **⇒ 挑回归探针字符串时，条件必须依赖运行期数据**（寄存器 / memcmp / V4L2 返回值）。
+9. **`log.do_compile` 恒为 ~85 字节、收尾后 WORKDIR 只剩 `temp/`、多次构建日志字节数相同
+   —— 三者都是正常的**，不能用来推断任务被缓存短路。详见 `plnx/PITFALLS.md #8`。
+
+## 镜像校验（`board_zcu104/plnx/`，三件套）
+- **`05_verify_image.sh`**：`debugfs` 从 `rootfs.ext4` 里 dump ELF（**无需 sudo**），
+  用内嵌字符串与源码交叉比对 → 17 探针 + 反向命中率 + md5 指纹。当前 **`RESULT: PASS`**。
+- **`06_install_app.sh`**：投放源码（`cmp` 保证不漏）→ `do_cleanall` → 全量重编 → 自动校验。
+- **`04_make_sd.sh`**：内置 **GATE 0**，`05` 不过就拒绝写卡；写卡后打印 md5 供对账。
+- 当前镜像内指纹：`gf_npu_probe md5=2ed2ef05ab52e145`、`gf_camera md5=bb04ced68ea693e9`、
+  `gf_npu.c md5=65976d8f94d320d3`。
 
 ## 架构硬门禁（不可违反）
 **只报 MAC/cycle 而不报数据搬运和 PS 开销，不能作为性能结论** ⇒ 性能数字必须分离 PL 计算与 CPU 开销。
@@ -36,9 +50,18 @@
 - 工具：仓库根 `sync_repo.sh`（`status` / `ubuntu-push` / `win-pull` / `win-to-ubuntu`）。
 - **本机 agent 环境 git 陷阱**：ref 锁写入可能被拦 → `fetch` 报成功但 ref 不存在 → 本地静默分叉；
   `commit` 可能报成功却不含预期改动。**推完必须从远端回读校验**。分叉时 reset 到远端再叠加，比 merge 稳。
+- **`push` 后紧跟 `fetch`，`refs/remotes/origin/main` 可能"退回"旧提交，看起来像推送失败。**
+  **真实远端一律用 `git ls-remote origin refs/heads/main` 确认**（它不写本地 ref，不受锁影响）；
+  回读内容用 `git show <sha>:<path>` 指定提交号，不要用会过期的 tracking ref。
 - Windows 快进前要先 `git checkout -- .`（丢弃已提交的本地改动）+ `git clean -fd gesture_project`
   （清未跟踪副本），否则 ff 被拒。
+  **另外**：远端提交里的文件若在 Windows 侧是**未跟踪**的（如 `.workbuddy/`、`zcu104_build_out/`、
+  `gf_probe_b_out.log`），ff 会报 `untracked working tree files would be overwritten`。
+  **对策**：先逐个 md5 确认与远端版本相同，再 `rm` 掉这些未跟踪副本，然后 ff。
 - **提交信息里不要用反引号**：会被 shell 当命令替换吃掉（已踩过一次）。
+- **`wsl.exe -- bash -lc '...for f in ...; do ... "$f" ...'` 里的 `$f` 会被外层 shell 吃掉**，
+  循环体拿到空值（症状：所有输出相同 / 读到空输入）。**对策**：把循环写进 `.sh` 文件再 `bash <file>`；
+  或改用 `wsl.exe -u steveguo -- <cmd> <literal-args>`。
 
 ## 环境
 WSL2 `Ubuntu-22.04`；PetaLinux 2023.2 在 `~/petalinux/2023.2`，工程 `~/gf_linux_ws/gf_linux`。
