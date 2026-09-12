@@ -173,10 +173,30 @@ ROOTMNT="$(mktemp -d)"
 if mount -o ro "$P2" "$ROOTMNT"; then
   ok=1
   for p in usr/bin/gf_npu_probe usr/bin/gf_camera usr/bin/v4l2-ctl usr/bin/lsusb; do
-    if [ -e "$ROOTMNT/$p" ]; then
-      echo "  OK   /$p"
+    # 必须同时接受普通文件和符号链接，而且要在**挂载树内部**解析链接目标。
+    #
+    # 原因：Yocto 的 update-alternatives 把 /usr/bin/lsusb 做成**绝对**符号链接
+    #（-> /usr/bin/lsusb.usbutils）。`[ -e ]` 会跟随它、并按**宿主机**的 / 去解析
+    # 目标，于是永远判成不存在 —— 纯粹误报（曾据此在写卡后报 "MISS /usr/bin/lsusb"）。
+    # 但裸用 `[ -L ]` 又会把悬空链接也当成 OK。所以这里自己解析：
+    #   绝对链接  -> 拼到 $ROOTMNT 前
+    #   相对链接  -> 相对其所在目录
+    ent="$ROOTMNT/$p"
+    shown="$p"
+    if [ -L "$ent" ]; then
+      tgt="$(readlink "$ent")"
+      shown="$p  -> $tgt"
+      case "$tgt" in
+        /*) target="$ROOTMNT$tgt" ;;
+        *)  target="$(dirname "$ent")/$tgt" ;;
+      esac
     else
-      echo "  MISS /$p"; ok=0
+      target="$ent"
+    fi
+    if [ -e "$target" ]; then
+      echo "  OK   /$shown"
+    else
+      echo "  MISS /$shown"; ok=0
     fi
   done
   if [ -d "$ROOTMNT/lib/modules" ]; then

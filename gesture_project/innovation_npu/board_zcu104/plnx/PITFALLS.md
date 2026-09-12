@@ -201,8 +201,16 @@ Verified by reading the generated artifacts; each of these would have cost a
 | `# CONFIG_STRICT_DEVMEM is not set` | **already off** | kernel `.config` |
 | `CONFIG_UIO_PDRV_GENIRQ=m` | available as fallback | kernel `.config` |
 | `v4l2-ctl` / `lsusb` | **already in the rootfs** | `rootfs.manifest` → `v4l-utils 1.23.0`, `usbutils 014` |
+| `lsusb` is a **symlink**, not a file | `/usr/bin/lsusb` → `/usr/bin/lsusb.usbutils` (**absolute** link, Yocto `update-alternatives`); the real binary is 301312 B | `debugfs -R "stat /usr/bin/lsusb"` → `Type: symlink`, `Fast link dest: "/usr/bin/lsusb.usbutils"` |
+| **PL is configured by the FSBL, from inside `BOOT.BIN`** | the bitstream is baked into `BOOT.BIN` by `petalinux-package --boot ... --fpga system.bit`. **`boot.scr` does not load `system.bit`** — it only `fatload`s `image.ub` and `bootm`s it | `BOOT.BIN` 21 073 168 B = `system.bit` 19 311 211 B + 1 761 957 B (FSBL/PMUFW/ATF/U-Boot); 3 of 6 sampled 64-byte windows of `system.bit` appear **verbatim** in `BOOT.BIN` |
 | PL clock not claimed by a driver | handled by `clk_ignore_unused` | above |
 | SD boot | already the default (`root=/dev/mmcblk0p2`) | `configs/config` |
+
+> The `BOOT.BIN` row matters: drop `--fpga` from the packaging step and the board
+> still boots Linux happily, but the PL is never programmed — the NPU register
+> reads come back dead and `gf_npu_probe` fails with no obvious cause. Copying
+> `system.bit` onto the FAT partition (as `04_make_sd.sh` does) is **not** what
+> programs the PL; `boot.scr` has no `fpga load` in it.
 
 A kernel config fragment is checksummed, so **adding only comments** to it also
 invalidates the kernel and forces a rebuild. Keep findings in this file, not in
@@ -412,3 +420,74 @@ Always confirm a suspected stray CR by locating its byte offset and printing the
 surrounding bytes — not by trusting a count whose literal you have not read.
 Related: `grep -c $'\r'` also matches the *text* `\r` in a script that mentions
 it, and `grep sde /proc/mounts` matches `nsdelegate`.
+
+---
+
+## 13. `[ -e ]` on a mounted foreign rootfs is wrong for absolute symlinks
+
+**Symptom (real, 2026-09-12, right after the first SD write):**
+
+```
+OK   /usr/bin/gf_npu_probe
+OK   /usr/bin/gf_camera
+OK   /usr/bin/v4l2-ctl
+MISS /usr/bin/lsusb                      <-- wrong
+WARNING: some expected files are missing - check the build
+```
+
+`lsusb` was there the whole time.
+
+**Cause.** `04_make_sd.sh` mounts the freshly written `p2` read-only at
+`$ROOTMNT` and checks `[ -e "$ROOTMNT/$p" ]`. But `test -e` **follows the
+symlink**, and the link is **absolute**:
+
+```
+/usr/bin/lsusb -> /usr/bin/lsusb.usbutils
+```
+
+The kernel resolves an absolute target against the **host's** root, not against
+`$ROOTMNT`. The host (WSL) has no `/usr/bin/lsusb.usbutils`, so the test fails.
+Reproduce in three lines:
+
+```bash
+T=$(mktemp -d); mkdir -p "$T/usr/bin"
+ln -s /usr/bin/lsusb.usbutils "$T/usr/bin/lsusb"
+[ -e "$T/usr/bin/lsusb" ] && echo present || echo MISSING   # -> MISSING
+[ -L "$T/usr/bin/lsusb" ] && echo symlink                   # -> symlink
+```
+
+**Fix.** Resolve the target **inside** the mounted tree — and do not simply
+accept any symlink, or a *dangling* one would pass:
+
+```bash
+ent="$ROOTMNT/$p"; shown="$p"
+if [ -L "$ent" ]; then
+    tgt="$(readlink "$ent")"; shown="$p  -> $tgt"
+    case "$tgt" in
+      /*) target="$ROOTMNT$tgt" ;;                 # absolute
+      *)  target="$(dirname "$ent")/$tgt" ;;        # relative
+    esac
+else
+    target="$ent"
+fi
+[ -e "$target" ] && echo "  OK   /$shown" || echo "  MISS /$shown"
+```
+
+Four cases must be exercised, not just the happy one: absolute link with the
+target present (OK), **dangling** absolute link (MISS — a bare `[ -L ]` test
+gets this wrong), relative link with the target present (OK), plain missing path
+(MISS).
+
+**Two general rules this yields:**
+
+1. **Checking paths inside someone else's root is not the same as checking paths
+   inside yours.** Anything that follows a link is suspect. The same trap
+   applies to `debugfs`, `chroot`, `find -L`, and `/proc` inspection.
+2. **Verify the write, then verify the verifier.** The write was perfect; the
+   alarm was mine. When a check fires, first ask whether the *check* is sound —
+   especially when every other line of evidence says the artifact is fine.
+
+`05_verify_image.sh` was never affected because it queries `debugfs` (inode
+lookups, no symlink following). It now also has a `[2b]` section that confirms
+every command the on-board runbook tells you to type actually exists in the
+rootfs — so this class of surprise is caught **before** the card is written.

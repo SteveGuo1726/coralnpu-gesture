@@ -103,6 +103,27 @@ for f in gf_npu_probe gf_camera; do
     fi
 done
 
+# ------------------------------------- 2b. 运行手册里的命令是否真的存在
+# 上板操作卡会让用户跑下面这几条。若其中某个在 rootfs 里不存在，
+# 应该在写卡**之前**就知道，而不是在串口前才发现。
+# 用 debugfs 查 inode：它对符号链接同样有效，而宿主机上的 [ -e ] 不行
+# （绝对符号链接会按宿主机的 / 去解析，必然判成不存在）。
+echo
+echo "--- [2b] 上板操作卡会用到的命令 ---"
+for p in /usr/bin/gf_npu_probe /usr/bin/gf_camera /usr/bin/v4l2-ctl \
+         /usr/bin/lsusb /usr/bin/usb-devices; do
+    if debugfs -R "stat $p" "$IMG" 2>/dev/null | grep -q '^Inode:'; then
+        ok "$p"
+    else
+        bad "$p 在 rootfs 里不存在"
+    fi
+done
+if debugfs -R "stat /lib/modules" "$IMG" 2>/dev/null | grep -q '^Inode:'; then
+    ok "/lib/modules 存在（摄像头/UVC 模块要用）"
+else
+    bad "/lib/modules 不存在"
+fi
+
 # ------------------------------------------- 3. 架构 + 依赖（是不是我们的编译）
 echo
 echo "--- [3] 二进制属性 ---"
