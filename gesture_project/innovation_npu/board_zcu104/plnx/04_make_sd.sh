@@ -48,10 +48,12 @@ done
 # ---------------------------------------------------------------------------
 # GATE 0: prove the image is not stale.
 #
-# A PetaLinux build can report success while the recipe's file:// sources were
-# never recompiled (see PITFALLS.md #8).  Flashing such an image silently gives
-# you old binaries on the board.  Run the verifier first and refuse to write if
-# it fails -- better to fail here than to debug a phantom on hardware.
+# "The build succeeded" and "the change actually reached the image" are two
+# different claims.  This runs the verifier and refuses to write if it fails --
+# better to fail here than to debug a phantom on hardware.
+#
+# （历史注记：曾把这里的问题误判成 "file:// 的 SRC_URI 让 sstate 短路了 do_compile"。
+#   实际原因是编译期常量导致 GCC 删掉了那条诊断字符串。详见 PITFALLS.md #8。）
 # ---------------------------------------------------------------------------
 VERIFY="$(dirname "$0")/05_verify_image.sh"
 if [ -x "$VERIFY" ]; then
