@@ -8,25 +8,34 @@
  *   project-spec/meta-user/recipes-bsp/device-tree/files/system-user.dtsi
  *
  * ---------------------------------------------------------------------------
- * WHY a reserved-memory carve-out
+ * WHY a memory-map hole (NOT a `no-map` reserved-memory node)
  *
  * The NPU's M_AXI master is wired to PS S_AXI_HP0_FPD -- a NON-COHERENT port.
- * The userspace driver therefore wants its scratch buffers mapped non-cached so
- * that neither side needs any cache maintenance.  The clean way to get that is
- * /dev/mem, which on arm64 returns a non-cached mapping for non-RAM physical
- * addresses.
+ * The userspace driver therefore wants its scratch buffers mapped NON-CACHED so
+ * that neither side needs any cache maintenance.  The way to get that from
+ * /dev/mem on arm64 is to make 0x70000000 NOT be System RAM: leave it out of
+ * the memory node entirely.  /dev/mem then maps it with pgprot_noncached and no
+ * flush/invalidate is needed on either side.
  *
- * `no-map` is essential, not cosmetic:
- *   - without it the region stays System RAM, and CONFIG_STRICT_DEVMEM's
- *     devmem_is_allowed() refuses the mapping;
- *   - with it memblock_remove() drops the range from the kernel's memory map,
- *     so it is no longer RAM (mmap allowed) and the kernel will never put its
- *     own data there.
+ * We originally reserved this with a `no-map` reserved-memory node.  That is
+ * WRONG on this kernel (6.1, first caught on real hardware 2026-09-12):
  *
- * Address choice: the Linux memory node ends at 0x7FF00000 (2 GB minus the
- * 1 MB TZ tail), so 0x70000000 + 16 MB sits well inside DDR and leaves ~240 MB
- * of headroom above it.  The NPU master's assigned address space is
- * 0x0 - 0x80000000, so this is reachable by HP0.
+ *   - `no-map` calls memblock_mark_nomap(), which keeps the range as RAM but
+ *     drops it from the kernel linear map;
+ *   - /dev/mem still sees pfn_valid() == true, so it maps the range CACHEABLE;
+ *   - but there is no linear-map backing, so the very first access hangs the
+ *     CPU (rcu_sched stall) / raises SIGBUS.
+ *
+ *   The comment here used to claim no-map == memblock_remove(); that was the
+ *   misunderstanding.  See plnx/PITFALLS.md #14.
+ *
+ * Address choice: the original memory node ends at 0x7FF00000 (2 GiB minus the
+ * 1 MiB TZ tail).  We split it around 0x70000000, leaving a 16 MiB hole:
+ *     0x00000000 .. 0x70000000      (1.75 GiB)
+ *     0x71000000 .. 0x7FF00000      (~239 MiB)
+ * The hole is still physical DDR (the controller decodes the whole 2 GiB), so
+ * the NPU's HP0 master still reaches it; only the kernel no longer treats it as
+ * RAM.
  *
  * Size: the current network needs ~148 KB of weights and ~425 KB of
  * activations.  16 MB is deliberate over-allocation so that the follow-up
@@ -40,21 +49,14 @@
 /include/ "system-conf.dtsi"
 
 / {
-	reserved-memory {
-		#address-cells = <2>;
-		#size-cells = <2>;
-		ranges;
-
-		/*
-		 * GestureFlow NPU scratch: weights blob, input RGB, every
-		 * intermediate tensor, and the result area.
-		 *
-		 * The userspace driver maps this via /dev/mem and treats it as
-		 * plain non-cached memory -- no flush/invalidate anywhere.
-		 */
-		npu_buffers: npu-buffers@70000000 {
-			reg = <0x0 0x70000000 0x0 0x1000000>;	/* 16 MB */
-			no-map;
-		};
+	/*
+	 * Split the memory node around the 16 MiB NPU scratch hole at
+	 * 0x70000000.  This overrides the single-bank memory node generated from
+	 * the XSA.  The hole is what makes /dev/mem map the scratch non-cached.
+	 */
+	memory@0 {
+		device_type = "memory";
+		reg = <0x0 0x00000000 0x0 0x70000000>,	/* 0 .. 1.75 GiB */
+		      <0x0 0x71000000 0x0 0x0EF00000>;	/* 1.75 GiB+16 MiB .. 2 GiB-1 MiB */
 	};
 };

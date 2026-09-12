@@ -491,3 +491,75 @@ gets this wrong), relative link with the target present (OK), plain missing path
 lookups, no symlink following). It now also has a `[2b]` section that confirms
 every command the on-board runbook tells you to type actually exists in the
 rootfs — so this class of surprise is caught **before** the card is written.
+
+---
+
+## 14. `no-map` reserved memory + `/dev/mem` hangs the CPU on arm64 (kernel 6.1)
+
+**This is the bug that finally surfaced when the Linux side ran on real hardware
+for the first time (2026-09-12).** The board booted Linux fine, the camera
+enumerated, and `busybox devmem 0xa0000000` read the NPU magic `0x47464E50`
+("GFNP") — but `gf_npu_probe` died with `Bus error` (SIGBUS, `sig=7`) before
+printing anything, and `busybox devmem 0x70000000` **hung the CPU** (rcu_sched
+stall, busybox stuck in the running state).
+
+**Symptom:**
+
+```
+$ gf_npu_probe
+Bus error                          # SIGBUS, no output at all
+$ busybox devmem 0xa0000000 32     # 0x47464E50  -> PL register, fine
+$ busybox devmem 0x70000000 32     # -> HANG (rcu_sched stall)
+```
+
+**Cause.** The NPU scratch buffer at `0x70000000` (16 MB) was reserved with a
+`no-map` `reserved-memory` node. The comment in `system-user.dtsi` claimed that
+`no-map` == `memblock_remove()` and therefore made the range "no longer RAM".
+**That was wrong.** `no-map` actually calls `memblock_mark_nomap()`:
+
+- the range **stays** in the kernel's memory map (`pfn_valid()` is still true),
+- it is only **dropped from the linear map**,
+- so `/dev/mem` maps it **cacheable** (it still looks like RAM), but there is
+  **no linear-map backing** → the first access hangs / faults.
+
+The baremetal JTAG bring-up (`0x600D600D`) never hit this because baremetal uses
+a flat 1:1 mapping and has no `no-map` reservation at all.  So the Linux
+`/dev/mem` + `no-map` path had never actually been exercised before.
+
+**Fix.** Don't use `no-map`.  Carve a 16 MB **hole** in the memory node instead,
+so the range is genuinely *not* System RAM; `/dev/mem` then maps it with
+`pgprot_noncached` (non-cached, which is exactly what the non-coherent HP0
+design wants — no flush/invalidate on either side):
+
+```dts
+/ {
+	/* split the XSA's single 2 GiB bank around 0x70000000 */
+	memory@0 {
+		device_type = "memory";
+		reg = <0x0 0x00000000 0x0 0x70000000>,	/* 0 .. 1.75 GiB */
+		      <0x0 0x71000000 0x0 0x0EF00000>;	/* .. 2 GiB-1 MiB */
+	};
+};
+```
+
+The hole is still physical DDR (the controller decodes the full 2 GiB), so the
+NPU's HP0 master reaches it unchanged; only the kernel stops treating it as RAM.
+
+**Diagnosis method worth reusing** (bare `busybox devmem`, no tools to install):
+
+```bash
+busybox devmem 0xff000000 32   # PS UART -> returns a value => /dev/mem works
+busybox devmem 0xa0000000 32   # PL register -> 0x47464E50 "GFNP" => PL is up
+busybox devmem 0x70000000 32   # scratch -> HANG => the reserved region is broken
+```
+
+Reading the .bit ASCII header (`part`, `date`, `time`) also proved the bitstream
+was current and identical to the one inside the XSA (`md5` matched
+`images/linux/system.bit`), ruling out a stale bitstream before blaming the DT.
+
+**The deeper lesson.** The whole Linux-side "it works" narrative had been built
+on the baremetal JTAG result (`36.96 FPS`), not on the SD-boot Linux path.  The
+first time anyone ran `gf_npu_probe` from Linux, it crashed.  Nothing in the
+design docs would have caught it — the `no-map` comment actively *asserted the
+wrong mechanism*.  Assume nothing works until it has been run on the actual
+target, in the actual boot mode.
