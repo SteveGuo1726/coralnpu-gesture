@@ -269,6 +269,203 @@ else
     warn "找不到 gf-npu 的 work 目录（可能被 do_rm_work 清理了，正常）"
 fi
 
+# ---------------------------------------------------------------------------
+# 7. 设备树 <-> 驱动常量一致性
+#
+# rootfs 校验通过只说明"二进制是这份源码"。它完全不能说明"这份二进制和板上那份
+# 设备树说的是同一件事"。两者不一致时构建、写卡、启动全都正常，只在用户态第一次
+# 访问那段内存时崩 —— 而且是没有内核日志的 SIGBUS，极难定位。
+#
+# 这里把 /dev/mem 会不会给出可用的映射，按内核源码的判定链完整推一遍：
+#
+#   arch/arm64/mm/mmu.c::phys_mem_access_prot()
+#       !pfn_is_map_memory(pfn)          -> pgprot_noncached()      MT_DEVICE_nGnRnE
+#       O_SYNC && pfn_is_map_memory(pfn) -> pgprot_writecombine()   MT_NORMAL_NC
+#
+#   pfn_is_map_memory() == memblock_is_map_memory()：范围必须在 memory 节点里，
+#   且不带 MEMBLOCK_NOMAP。
+#
+# 所以下面四条缺一不可：
+#   (a) 有一段 memory 覆盖 0x70000000..0x70FFFFFF  (=> pfn_is_map_memory 为真)
+#   (b) reserved-memory 节点存在且没有 no-map        (=> 不会被打上 MEMBLOCK_NOMAP)
+#   (c) 节点的地址/长度 == gf_npu.h 的 GF_BUF_*      (=> 软件和 DT 说同一件事)
+#   (d) gf_npu.c 用 O_SYNC 打开 /dev/mem            (=> 拿到 Normal-NC 而不是 Cached)
+#
+# (a)(b) 任一条不成立，映射会退化成 Device-nGnRnE：`devmem` 那种单字访问看着没事，
+# 但驱动的 memset/memcpy 一上去就 fault（Device 内存只保证 <=64bit 访问）。
+# (d) 不成立则会拿到 Normal **Cached**，对非相干的 HP0 是错的。
+# ---------------------------------------------------------------------------
+echo
+echo "--- [7] 设备树 <-> 驱动常量一致性 ---"
+DTB="$PLNX/images/linux/system.dtb"
+UB="$PLNX/images/linux/image.ub"
+if [ ! -f "$DTB" ]; then
+    bad "找不到 $DTB"
+elif ! command -v dtc >/dev/null 2>&1; then
+    warn "没有 dtc，跳过 [7]"
+else
+    while IFS= read -r _l; do
+        case "$_l" in
+            OK\ *)   ok   "${_l#OK }" ;;
+            FAIL\ *) bad  "${_l#FAIL }" ;;
+            NOTE\ *) note "${_l#NOTE }" ;;
+        esac
+    done < <(python3 - "$DTB" "$UB" "$LF_SRC/gf_npu.h" "$LF_SRC/gf_npu.c" <<'PY'
+import re, os, subprocess, sys
+
+dtb, ub, hdr, src = sys.argv[1:5]
+def emit(tag, msg): print(f"{tag} {msg}")
+
+def macro(path, name):
+    try:
+        t = open(path, encoding='utf-8', errors='replace').read()
+    except OSError:
+        return None
+    m = re.search(r'#define\s+%s\s+(0[xX][0-9a-fA-F]+|\d+)' % name, t)
+    return int(m.group(1), 0) if m else None
+
+base = macro(hdr, 'GF_BUF_PHYS_BASE')
+size = macro(hdr, 'GF_BUF_SIZE')
+if base is None or size is None:
+    emit("FAIL", "gf_npu.h 里找不到 GF_BUF_PHYS_BASE / GF_BUF_SIZE")
+    sys.exit(0)
+emit("NOTE", "驱动常量: GF_BUF_PHYS_BASE=0x%08X  GF_BUF_SIZE=0x%X (%d MiB)"
+     % (base, size, size >> 20))
+
+def undtc(path):
+    r = subprocess.run(['dtc', '-I', 'dtb', '-O', 'dts', path],
+                       capture_output=True, text=True)
+    return r.stdout
+
+dts = undtc(dtb)
+if not dts.strip():
+    emit("FAIL", "dtc 无法解析 %s" % dtb)
+    sys.exit(0)
+lines = dts.splitlines()
+
+def block_of(name):
+    """Return the text of the /<name> { ... } node, by brace matching."""
+    for i, l in enumerate(lines):
+        if re.match(r'\s*%s\s*\{' % re.escape(name), l):
+            depth, out = 0, []
+            for j in range(i, len(lines)):
+                depth += lines[j].count('{') - lines[j].count('}')
+                out.append(lines[j])
+                if depth <= 0:
+                    break
+            return '\n'.join(out)
+    return None
+
+def nums(s):
+    return [int(x, 16) for x in re.findall(r'0x[0-9a-fA-F]+', s)]
+
+# ---- memory 节点：所有范围 -------------------------------------------
+mem = block_of('memory@0') or ''
+ranges = []
+for m in re.finditer(r'reg\s*=\s*<([^>]*)>', mem):
+    v = nums(m.group(1))
+    for k in range(0, len(v) - 3, 4):
+        addr = (v[k] << 32) | v[k + 1]
+        ln = (v[k + 2] << 32) | v[k + 3]
+        ranges.append((addr, ln))
+if not ranges:
+    ranges = [(0, 0x80000000)]   # 没有 memory 节点时的内核默认
+for a, l in ranges:
+    emit("NOTE", "memory 范围: 0x%08X .. 0x%08X" % (a, a + l - 1))
+
+covered = any(a <= base and base + size <= a + l for a, l in ranges)
+if covered:
+    emit("OK", "0x%08X..0x%08X 落在 memory 里 => pfn_is_map_memory() 为真" % (base, base + size - 1))
+else:
+    emit("FAIL", "0x%08X..0x%08X 不在任何 memory 范围里（被挖洞/挪出 RAM）"
+         " => /dev/mem 会给出 Device-nGnRnE，驱动的 memset/memcpy 必崩" % (base, base + size - 1))
+
+# ---- reserved-memory 节点 --------------------------------------------
+rm = None
+for i, l in enumerate(lines):
+    if re.match(r'\s*reserved-memory\s*\{', l):
+        depth, out = 0, []
+        for j in range(i, len(lines)):
+            depth += lines[j].count('{') - lines[j].count('}')
+            out.append(lines[j])
+            if depth <= 0:
+                break
+        rm = '\n'.join(out)
+        break
+
+if rm is None:
+    emit("FAIL", "设备树里没有 reserved-memory 节点")
+else:
+    if re.search(r'\bno-map\b', rm):
+        emit("FAIL", "reserved-memory 里出现了 no-map "
+             "=> MEMBLOCK_NOMAP => Device-nGnRnE，必须去掉")
+    else:
+        emit("OK", "reserved-memory 无 no-map => 仍然算 RAM，不会被摘出线性映射")
+
+    # 找目标地址对应的子节点
+    want = '@%x' % base
+    hit = None
+    for i, l in enumerate(lines):
+        if want in l and '{' in l:
+            depth, out = 0, []
+            for j in range(i, len(lines)):
+                depth += lines[j].count('{') - lines[j].count('}')
+                out.append(lines[j])
+                if depth <= 0:
+                    break
+            hit = '\n'.join(out)
+            break
+    if hit is None:
+        emit("FAIL", "reserved-memory 里没有 %s 的节点" % want)
+    else:
+        v = nums(re.search(r'reg\s*=\s*<([^>]*)>', hit).group(1))
+        n_addr = (v[0] << 32) | v[1]
+        n_len = (v[2] << 32) | v[3]
+        if n_addr == base and n_len == size:
+            emit("OK", "reserved-memory 节点 = 0x%08X + 0x%X，与 gf_npu.h 一致" % (n_addr, n_len))
+        else:
+            emit("FAIL", "DT 节点是 0x%08X + 0x%X，但 gf_npu.h 说的是 0x%08X + 0x%X"
+                 % (n_addr, n_len, base, size))
+
+# ---- 驱动是否用 O_SYNC -----------------------------------------------
+try:
+    s = open(src, encoding='utf-8', errors='replace').read()
+except OSError:
+    s = ''
+m = re.search(r'open\(\s*"/dev/mem"\s*,([^)]*)\)', s)
+if not m:
+    emit("FAIL", "gf_npu.c 里找不到 open(\"/dev/mem\", ...)")
+elif 'O_SYNC' in m.group(1):
+    emit("OK", "gf_npu.c 以 O_SYNC 打开 /dev/mem => pgprot_writecombine (MT_NORMAL_NC)")
+else:
+    emit("FAIL", "gf_npu.c 打开 /dev/mem 没带 O_SYNC（%s）=> 会拿到 Normal Cached，对非相干 HP0 是错的"
+         % m.group(1).strip())
+
+# ---- image.ub 内嵌的那份 DTB 必须和 system.dtb 一致 -------------------
+# 内核实际用的是 image.ub(FIT) 里内嵌的 DTB，不是 BOOT.BIN 里的 system.dtb。
+# 两者不一致时板子会带着一份没人检查过的 DTB 启动。
+if os.path.exists(ub) and subprocess.run(['sh','-c','command -v dumpimage'],
+                                         capture_output=True).returncode == 0:
+    import tempfile, hashlib
+    with tempfile.TemporaryDirectory() as td:
+        out = os.path.join(td, 'ub.dtb')
+        subprocess.run(['dumpimage', '-T', 'flat_dt', '-p', '1', '-o', out, ub],
+                       capture_output=True)
+        if not os.path.exists(out):
+            emit("FAIL", "无法从 image.ub 提取内嵌 DTB")
+        else:
+            h = lambda p: hashlib.md5(open(p, 'rb').read()).hexdigest()
+            if h(out) == h(dtb):
+                emit("OK", "image.ub 内嵌 DTB == system.dtb (%s)" % h(dtb)[:16])
+            else:
+                emit("FAIL", "image.ub 内嵌 DTB != system.dtb（%s vs %s）—— 内核用的是前者"
+                     % (h(out)[:16], h(dtb)[:16]))
+else:
+    emit("NOTE", "跳过 image.ub 内嵌 DTB 比对（缺 image.ub 或 dumpimage）")
+PY
+    )
+fi
+
 # ------------------------------------------------------------- 版本指纹
 echo
 echo "--- [6] 指纹（贴给我，用来确认我们说的是同一份）---"

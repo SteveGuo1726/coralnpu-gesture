@@ -10,20 +10,48 @@
  * obtained (mmap instead of static arrays) and how time is measured.
  *
  * ---------------------------------------------------------------------------
- * Platform facts (all read back from the built artifacts, see
+ * Platform facts (all read back from the built artifacts; see
  * docs/ZCU104_Linux侧NPU与摄像头_设计与实施_2026-09-12.md):
  *
  *   PL register block (AXI-Lite)   0xA0000000, 1 MB
  *     - the DT node gestureflow_layer_chain_dmp_hp0_axil@a0000000 has no Linux
  *       driver, so userspace maps it directly.
  *   Scratch DDR (reserved-memory)  0x70000000, 16 MB
- *     - no-map, so it is not System RAM; both this mapping and the NPU's HP0
- *       view of it are non-cached and therefore need no cache maintenance.
  *   NPU master address space        0x0 - 0x80000000  (S_AXI_HP0_FPD)
  *
- * Both regions are reached through /dev/mem.  On arm64 that yields a
- * non-cached mapping for non-RAM addresses, which is exactly what a
- * non-coherent HP0 master needs.
+ * HOW THE SCRATCH REGION GETS A USABLE MAPPING -- this is subtle and getting it
+ * wrong costs a hard SIGBUS with no kernel log, so it is spelled out here with
+ * the kernel code it depends on.
+ *
+ * Both regions are reached with mmap() on /dev/mem opened O_RDWR|O_SYNC.  On
+ * arm64 the mapping attributes come from
+ *     arch/arm64/mm/mmu.c::phys_mem_access_prot()
+ *         if (!pfn_is_map_memory(pfn))   -> pgprot_noncached()     = MT_DEVICE_nGnRnE
+ *         else if (file->f_flags & O_SYNC) -> pgprot_writecombine() = MT_NORMAL_NC
+ *         else                             -> vma_prot             = Normal, CACHED
+ * and pfn_is_map_memory() is memblock_is_map_memory(), which is false for any
+ * range carrying MEMBLOCK_NOMAP or absent from the memory node.
+ *
+ * Consequences, in order of how badly they bite:
+ *
+ *   1. `no-map` in the reserved-memory node -- or cutting the range out of the
+ *      memory node -- makes pfn_is_map_memory() false, so /dev/mem hands out
+ *      **Device-nGnRnE**.  That works for the single 32-bit reads `devmem`
+ *      does, but the Arm architecture only defines <=64-bit accesses to Device
+ *      memory, so this driver's memset()/memcpy() over the region (DC ZVA and
+ *      128-bit STP) faults immediately.  Hence system-user.dtsi deliberately
+ *      does NOT use no-map.
+ *   2. Without O_SYNC the region would stay Normal **Cached**, which is wrong
+ *      for a non-coherent HP0 master.  Hence the O_SYNC in gf_npu_open().
+ *   3. MT_NORMAL_NC is non-cacheable (no maintenance needed -- the HP0 view and
+ *      the CPU view both come from DDR) but it is WEAKLY ORDERED.  Stores into
+ *      it can be buffered and reordered past the subsequent MMIO doorbell, so
+ *      every place that rings the doorbell, and every place that reads a
+ *      result back, needs an explicit barrier.  See GF_MB() in gf_npu.c.
+ *
+ * The baremetal driver got away without (3) because Xil_SetTlbAttributes() put
+ * its buffers in Device memory, where the ordering rules are stronger.  That
+ * does not carry over to this mapping.
  * ---------------------------------------------------------------------------
  */
 #ifndef GF_NPU_H
@@ -215,6 +243,19 @@ int  gf_npu_load_weights(void);
  * `rgb96` holds raw uint8 pixels in HWC order (pixel 0 R,G,B, pixel 1 R,G,B...).
  * IMPORTANT: do NOT pre-subtract 128 -- the PL's RGB loader recenters to
  * q = u - 128 itself (rtl/gestureflow_hp0_rgb_loader.sv).
+ *
+ * `stats` is the "verification pass" flag as well as an output:
+ *   - stats != NULL  -> the input is the REFERENCE IMAGE, so every check tied
+ *     to it runs: the golden FNV chain (conv0, conv1, GAP, FC), the expected
+ *     class, and the byte-exact golden tensor comparisons.  Slower (memcmp over
+ *     uncached memory), and it must be the reference image or it will fail.
+ *   - stats == NULL  -> the live path (gf_camera's loop).  Only the
+ *     input-independent checks run: fault bits, DMA/store byte counts, and the
+ *     class being within 0..17.  No golden value is compared, because a camera
+ *     frame legitimately produces different numbers.
+ * Passing NULL for a reference-image call, or non-NULL for a live frame, is a
+ * bug in the caller; `gf_npu_selftest()` supplies its own stats for this
+ * reason.
  *
  * `out_class` receives the predicted class (0..17).  `stats` may be NULL.
  * Returns 0 on success, negative on any check failure. */

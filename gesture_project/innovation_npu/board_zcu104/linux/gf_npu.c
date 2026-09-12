@@ -128,6 +128,92 @@ static void gf_fail(uint32_t code, uint32_t observed)
 /* --------------------------------------------------------------- helpers -- */
 #define REG(off)  (g_regs[(uint32_t)(off) >> 2])
 
+/* Memory barrier for the CPU <-> PL handshake.
+ *
+ * The scratch region is mapped Normal-Non-Cacheable (see the long note in
+ * gf_npu.h), which means it needs no cache maintenance but IS weakly ordered:
+ * a store into it may still be sitting in a write buffer when the following
+ * MMIO doorbell write becomes visible to the PL.  The PL would then DMA a
+ * half-written buffer, giving results that are wrong in a way that looks like
+ * a model bug.
+ *
+ * Two barriers per handshake are needed, and they are not symmetric:
+ *   - before ringing the doorbell: all buffer stores must be *complete* before
+ *     the control write is observed.  Full DSB, not DMB: the PL is not an
+ *     observer in the CPU's shareability domain, so we need the accesses to
+ *     have reached DDR, not merely to be ordered.
+ *   - after the PL reports done, before reading the buffer back: the CPU must
+ *     not have consumed the buffer speculatively.
+ *
+ * This is the standard store-then-doorbell / done-then-load pair that the Arm
+ * architecture requires for a non-coherent DMA-style handshake.  It is also
+ * what the baremetal driver did NOT need, because Xil_SetTlbAttributes() put
+ * its buffers in Device memory.  Cost is a few hundred nanoseconds per layer,
+ * which is ~1 us per frame against a 27 ms frame -- not measurable here.
+ */
+#if defined(__aarch64__) || defined(__arm__)
+#  define GF_MB()  __asm__ __volatile__("dsb sy" ::: "memory")
+#else
+#  define GF_MB()  __sync_synchronize()
+#endif
+
+/* ---------------------------------------------------- scratch region I/O -- *
+ * Bulk accessors for the scratch region.
+ *
+ * These look gratuitous -- why not just memcpy/memset/memcmp? -- but the
+ * region's CPU mapping is not one fixed thing, and the *other* possibility is
+ * more restrictive than the one in the current device tree:
+ *
+ *   reserved-memory without no-map + O_SYNC   -> MT_NORMAL_NC  (any width fine)
+ *   range cut out of the memory node          -> MT_DEVICE_nGnRnE, where the
+ *                                                architecture only defines
+ *                                                accesses of 64 bits or less
+ *
+ * glibc happily uses DC ZVA and 128-bit STP/LDP for a large memset/memcpy/memcmp,
+ * which on Device memory raises a synchronous abort -> a bare SIGBUS with no
+ * kernel log and no other clue.  Doing the copies 32 bits at a time costs a few
+ * microseconds per frame and makes this driver correct under *either* mapping,
+ * which is worth far more than the cycles: it means the driver no longer
+ * depends on getting the device tree exactly right.
+ *
+ * 32-bit accesses are always legal on Device-nGnRnE.  Aligned ones are required,
+ * so the helpers check the alignment and fall back to bytes if it is ever off.
+ * Everything is accessed through `volatile` so the compiler cannot widen a loop
+ * back into a vector load/store behind our backs.
+ */
+static void gf_copy(uint8_t *dst, const uint8_t *src, size_t bytes)
+{
+    size_t i = 0U;
+    if (((uintptr_t)dst & 3U) == 0U) {
+        for (; i + 4U <= bytes; i += 4U) {
+            uint32_t w;
+            memcpy(&w, src + i, 4U);        /* src is ordinary memory */
+            *(volatile uint32_t *)(void *)(dst + i) = w;
+        }
+    }
+    for (; i < bytes; ++i) *(volatile uint8_t *)(void *)(dst + i) = src[i];
+}
+
+static void gf_zero(uint8_t *dst, size_t bytes)
+{
+    size_t i = 0U;
+    if (((uintptr_t)dst & 3U) == 0U) {
+        for (; i + 4U <= bytes; i += 4U) *(volatile uint32_t *)(void *)(dst + i) = 0U;
+    }
+    for (; i < bytes; ++i) *(volatile uint8_t *)(void *)(dst + i) = 0U;
+}
+
+/* Byte-wise compare; returns 0 when equal (memcmp convention).  Byte accesses
+ * are legal on Device memory, so no alignment constraint applies. */
+static int gf_diff(const volatile uint8_t *a, const uint8_t *b, size_t bytes, size_t *first)
+{
+    size_t i;
+    for (i = 0U; i < bytes; ++i) {
+        if ((uint8_t)a[i] != b[i]) { if (first) *first = i; return -1; }
+    }
+    return 0;
+}
+
 static void *buf_alloc(size_t bytes, size_t align)
 {
     uintptr_t p = ((uintptr_t)g_arena_cur + (align - 1U)) & ~(uintptr_t)(align - 1U);
@@ -206,10 +292,10 @@ static int verify_tensor(gf_npu_stats *stats, int chk, const int8_t *buf,
 
     t0 = now_ms();
     got = fnv1a(buf, bytes);
-    if (memcmp(buf, golden, bytes) != 0) {
-        for (i = 0U; i < bytes; ++i) {
-            if (buf[i] != golden[i]) break;
-        }
+    /* gf_diff, not memcmp: `buf` lives in the scratch region, and memcmp would
+     * use 128-bit loads that are illegal if that region is Device-mapped. */
+    if (gf_diff((const volatile uint8_t *)buf, (const uint8_t *)golden,
+                bytes, &i) != 0) {
         fprintf(stderr,
                 "gf_npu: CONTENT MISMATCH  %-6s vs %s\n"
                 "        first difference at byte %zu of %zu: got %d, golden %d\n"
@@ -241,7 +327,13 @@ static void wait_layer_done(void)
             gf_fail(0x4001U, first_bad);
             return;
         }
-        if ((status & GF_DONE_BIT) && !(status & GF_RUNNING_BIT)) return;
+        if ((status & GF_DONE_BIT) && !(status & GF_RUNNING_BIT)) {
+            /* The PL has finished writing the destination tensor.  Order the
+             * subsequent reads of that tensor after the observation of DONE so
+             * the CPU cannot consume a partially written buffer. */
+            GF_MB();
+            return;
+        }
     }
     gf_fail(0x4002U, status);
 }
@@ -255,10 +347,13 @@ static void weight_dma_load(const uint32_t *src, uint32_t words, uint32_t taps,
 
     if (g_fail) return;
 
-    /* src already lives in the non-cached scratch region, so no flush. */
+    /* src already lives in the non-cached scratch region, so no cache flush is
+     * needed -- but the stores that put it there must have reached DDR before
+     * the PL is told to DMA from it. */
     REG(GF_WEIGHT_DMA_SOURCE)  = buf_phys(src);
     REG(GF_WEIGHT_DMA_BYTES)   = bytes;
     REG(GF_WEIGHT_DMA_CFG)     = taps | (groups << 8U) | (output_lanes << 16U);
+    GF_MB();
     REG(GF_WEIGHT_DMA_CONTROL) = 2U;
 
     t0 = now_ms();
@@ -335,6 +430,11 @@ static void launch_layer(uint32_t mode, uint32_t source, uint32_t bytes,
     REG(GF_STORE_STRIDE)      = stride_bytes;
     REG(GF_STORE_VALID_BYTES) = valid_bytes;
     REG(GF_STORE_CONTROL)     = store_control;
+    /* Doorbell: the PL's input loader will DMA from `source` as soon as it
+     * sees this.  Everything written to the scratch region for this layer --
+     * in particular the per-frame copy of the input image -- must already be
+     * in DDR. */
+    GF_MB();
     REG(GF_CONTROL)           = 2U;
 }
 
@@ -418,6 +518,7 @@ static uint32_t run_gap_fc(uint32_t source)
     REG(GF_DMA_BYTES)     = GF_HEAD1X1_BYTES;
     REG(GF_DMA_PIXELS)    = GF_POST_GAP_ELEMENTS;
     REG(GF_STORE_CONTROL) = 0U;
+    GF_MB();                      /* head1x1 tensor must be in DDR first */
     REG(GF_CONTROL)       = 2U;
     wait_layer_done();
     return REG(GF_POST_CYCLES_REG);
@@ -448,17 +549,26 @@ int gf_npu_open(void)
         return -1;
     }
 
+    /* Progress markers on stderr (unbuffered, so they survive a hard fault).
+     * A SIGBUS in here is otherwise completely silent: the first printf only
+     * happens at the very end.  Keep these until the port is proven. */
+#define GF_DBG(tag, ...) do { fprintf(stderr, "gf_npu[DBG] " tag "\n", ##__VA_ARGS__); } while (0)
+
     g_regs = (volatile uint32_t *)map_phys(GF_REG_PHYS_BASE, GF_REG_SIZE, "registers");
     if (!g_regs) return -1;
+    GF_DBG("[1] regs mapped  %p", (void *)g_regs);
     g_bufs = (uint8_t *)map_phys(GF_BUF_PHYS_BASE, GF_BUF_SIZE, "scratch buffers");
     if (!g_bufs) return -1;
+    GF_DBG("[2] bufs mapped  %p", (void *)g_bufs);
 
+    GF_DBG("[3] read GF_MAGIC   = 0x%08X", (unsigned)REG(GF_MAGIC));
     if (REG(GF_MAGIC) != GF_MAGIC_VALUE) {
         fprintf(stderr, "gf_npu: GF_MAGIC = 0x%08X, expected 0x%08X.\n"
                         "        The PL is not configured, or its clock is gated.\n",
                 (unsigned)REG(GF_MAGIC), (unsigned)GF_MAGIC_VALUE);
         return -1;
     }
+    GF_DBG("[4] read GF_VERSION = 0x%08X", (unsigned)REG(GF_VERSION));
     if (REG(GF_VERSION) != GF_VERSION_VALUE) {
         fprintf(stderr, "gf_npu: GF_VERSION = 0x%08X, expected 0x%08X (bitstream/driver mismatch).\n",
                 (unsigned)REG(GF_VERSION), (unsigned)GF_VERSION_VALUE);
@@ -469,17 +579,22 @@ int gf_npu_open(void)
      * A stuck pattern here would mean the mapping is not what we expect. */
     {
         volatile uint32_t *probe = (volatile uint32_t *)g_bufs;
+        GF_DBG("[5] scratch read ...");
         uint32_t saved = probe[0];
+        GF_DBG("[6] scratch read ok (0x%08X), write 0xA5A5A5A5 ...", (unsigned)saved);
         probe[0] = 0xA5A5A5A5U;
         if (probe[0] != 0xA5A5A5A5U) {
             fprintf(stderr, "gf_npu: scratch region at 0x%08X is not writable.\n",
                     (unsigned)GF_BUF_PHYS_BASE);
             return -1;
         }
+        GF_DBG("[7] scratch write/readback ok");
         probe[0] = saved;
     }
 
-    memset(g_bufs, 0, GF_BUF_SIZE);
+    GF_DBG("[8] clearing scratch: gf_zero(%u bytes) ...", (unsigned)GF_BUF_SIZE);
+    gf_zero(g_bufs, GF_BUF_SIZE);
+    GF_DBG("[9] scratch cleared");
     printf("gf_npu: PL id ok (MAGIC 0x%08X, VERSION 0x%08X); scratch 0x%08X + %u MiB\n",
            (unsigned)GF_MAGIC_VALUE, (unsigned)GF_VERSION_VALUE,
            (unsigned)GF_BUF_PHYS_BASE, (unsigned)(GF_BUF_SIZE >> 20));
@@ -514,7 +629,7 @@ static int copy_weights(void)
             fprintf(stderr, "gf_npu: scratch region too small for weight image '%s'\n", tbl[i].name);
             return -1;
         }
-        memcpy(p, tbl[i].src, tbl[i].bytes);
+        gf_copy((uint8_t *)p, (const uint8_t *)tbl[i].src, tbl[i].bytes);
         *tbl[i].dst = p;
     }
     return 0;
@@ -584,16 +699,16 @@ int gf_npu_load_weights(void)
      *
      * GF_CONV3 / GF_CONV5 are unused scratch in the current schedule; they are
      * zeroed for a deterministic initial state only. */
-    memset(g_in_rgb,  0, GF_RGB_BYTES);
-    memset(g_act1,    0, GF_ACTIVATION_BYTES);
-    memset(g_pool1,   0, GF_POOL1_BYTES);
-    memset(g_conv2,   0, GF_CONV2_BYTES);
-    memset(g_conv3,   0, GF_CONV3_BYTES);
-    memset(g_pool2,   0, GF_POOL2_BYTES);
-    memset(g_conv4,   0, GF_CONV4_BYTES);
-    memset(g_conv5,   0, GF_CONV5_BYTES);
-    memset(g_pool3,   0, GF_POOL3_BYTES);
-    memset(g_head1x1, 0, GF_HEAD1X1_BYTES);
+    gf_zero(g_in_rgb,  GF_RGB_BYTES);
+    gf_zero((uint8_t *)g_act1,    GF_ACTIVATION_BYTES);
+    gf_zero((uint8_t *)g_pool1,   GF_POOL1_BYTES);
+    gf_zero((uint8_t *)g_conv2,   GF_CONV2_BYTES);
+    gf_zero((uint8_t *)g_conv3,   GF_CONV3_BYTES);
+    gf_zero((uint8_t *)g_pool2,   GF_POOL2_BYTES);
+    gf_zero((uint8_t *)g_conv4,   GF_CONV4_BYTES);
+    gf_zero((uint8_t *)g_conv5,   GF_CONV5_BYTES);
+    gf_zero((uint8_t *)g_pool3,   GF_POOL3_BYTES);
+    gf_zero((uint8_t *)g_head1x1, GF_HEAD1X1_BYTES);
 
     printf("gf_npu: staged weights + activations, %u bytes used of %u MiB\n",
            (unsigned)(g_arena_cur - g_bufs), (unsigned)(GF_BUF_SIZE >> 20));
@@ -627,11 +742,11 @@ int gf_npu_run_frame(const uint8_t *rgb96, uint32_t *out_class, gf_npu_stats *st
     /* Raw uint8 pixels.  The PL recenters to q = u - 128 itself (see the note
      * at the top of this file) -- do NOT subtract 128 here.
      *
-     * Deliberately no per-frame memset of the intermediate tensors: it would be
+     * Deliberately no per-frame zeroing of the intermediate tensors: it would be
      * ~435 KB of uncached writes and would show up as CPU overhead in the very
      * measurement V4 is about.  The tiles overwrite their regions completely
      * and that is asserted by the byte-count checks below. */
-    memcpy(g_in_rgb, rgb96, GF_RGB_BYTES);
+    gf_copy(g_in_rgb, rgb96, GF_RGB_BYTES);
 
     /* conv0: 3 -> 16 */
     cycles0 = exec_conv_tile(0U, buf_phys(g_in_rgb), GF_RGB_BYTES, buf_phys(g_act1),
@@ -642,7 +757,14 @@ int gf_npu_run_frame(const uint8_t *rgb96, uint32_t *out_class, gf_npu_stats *st
     check_input_bytes(GF_RGB_BYTES, 0x4103U);
     check_store_bytes(GF_ACTIVATION_BYTES, 0x4103U);
     hash = REG(GF_OUTPUT_FNV1A);
-    if (!g_fail && hash != GF_FULL_OUTPUT_FNV1A) gf_fail(0x4103U, hash);
+    /* GF_FULL_OUTPUT_FNV1A is the FNV the *reference image* happens to produce;
+     * it is not a property of the network.  Comparing it for every input made
+     * every camera frame "fail" conv0 -- the very first thing the live path hit
+     * once there was a camera attached.  Gate it on `stats`, the same flag that
+     * already means "this call is the verification pass" (gf_camera passes NULL
+     * in the live loop).  The byte-count and fault checks above are properties
+     * of the hardware and stay unconditional. */
+    if (stats && !g_fail && hash != GF_FULL_OUTPUT_FNV1A) gf_fail(0x4103U, hash);
     if (stats) {
         stats->hw_fnv_conv0 = hash;
         stats->conv0 = cycles0;
@@ -660,7 +782,9 @@ int gf_npu_run_frame(const uint8_t *rgb96, uint32_t *out_class, gf_npu_stats *st
     check_input_bytes(GF_ACTIVATION_BYTES, 0x4105U);
     check_store_bytes(GF_POOL1_BYTES, 0x4105U);
     hash = REG(GF_OUTPUT_FNV1A);
-    if (!g_fail && hash != GF_BODY2_OUTPUT_FNV1A) gf_fail(0x4105U, hash);
+    /* Same reasoning as conv0 above: reference-image golden value, not a
+     * property of the network. */
+    if (stats && !g_fail && hash != GF_BODY2_OUTPUT_FNV1A) gf_fail(0x4105U, hash);
     if (stats) {
         /* Note: this register reads the PRE-pool conv output FNV
          * (GF_POOL_INPUT_FNV1A == GF_BODY2_OUTPUT_FNV1A), while the tensor
@@ -790,12 +914,20 @@ int gf_npu_run_frame(const uint8_t *rgb96, uint32_t *out_class, gf_npu_stats *st
     post_class   = REG(GF_POST_CLASS_REG);
     post_progress = REG(GF_POST_PROGRESS_REG);
 
+    /* Split these by what they actually depend on:
+     *   - the fault bits and the DMA byte count are properties of the hardware;
+     *   - GF_POST_*_EXPECTED_* and the class are properties of the INPUT, so
+     *     they only mean something for the reference image (stats != NULL).
+     * The class must however be a real class for ANY input -- that one check is
+     * input-independent and is what makes the live path still self-validating.
+     */
     if ((status & (GF_FAULT_BIT | GF_LAYER_FAULT_BIT)) ||
         (dma_status & GF_DMA_FAULT_BIT) || !(dma_status & GF_DMA_DONE_BIT) ||
         GF_DMA_BYTES_READ(dma_status) != GF_HEAD1X1_BYTES ||
-        gap_fnv != GF_POST_GAP_EXPECTED_FNV1A ||
-        fc_fnv  != GF_POST_FC_EXPECTED_FNV1A ||
-        (post_class & 31U) != GF_POST_EXPECTED_CLASS) {
+        (post_class & 31U) >= GF_POST_FC_OUTPUTS ||
+        (stats && (gap_fnv != GF_POST_GAP_EXPECTED_FNV1A ||
+                   fc_fnv  != GF_POST_FC_EXPECTED_FNV1A ||
+                   (post_class & 31U) != GF_POST_EXPECTED_CLASS))) {
         gf_fail(0x4133U, fc_fnv);
     }
 
@@ -833,7 +965,18 @@ int gf_npu_run_frame(const uint8_t *rgb96, uint32_t *out_class, gf_npu_stats *st
 int gf_npu_selftest(gf_npu_stats *stats)
 {
     uint32_t cls = 0U;
+    gf_npu_stats local;
     int rc;
+
+    /* The reference-image checks (golden FNV chain, byte-exact tensors) are
+     * gated on the stats pointer -- see the note in gf_npu_run_frame.  The
+     * selftest runs the reference image by definition, so it must always supply
+     * one; passing NULL through would silently stop verifying the FNV chain.
+     * (gf_camera --selftest calls this with NULL.) */
+    if (!stats) {
+        memset(&local, 0, sizeof local);
+        stats = &local;
+    }
 
     printf("gf_npu: selftest with the built-in reference image\n");
     rc = gf_npu_run_frame(gf_full_camera_rgb, &cls, stats);

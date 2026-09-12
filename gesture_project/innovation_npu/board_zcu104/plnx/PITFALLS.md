@@ -563,3 +563,307 @@ first time anyone ran `gf_npu_probe` from Linux, it crashed.  Nothing in the
 design docs would have caught it — the `no-map` comment actively *asserted the
 wrong mechanism*.  Assume nothing works until it has been run on the actual
 target, in the actual boot mode.
+
+### 14b. Second layer: the mapping it left behind was Device-nGnRnE, which caps access width
+
+The `no-map` -> memory-hole fix **did** work: after it, `busybox devmem` could
+read *and* write `0x70000000` (and its neighbours) with no hang.  But
+`gf_npu_probe` still died with SIGBUS — and this time **`dmesg` and
+`journalctl -k` showed no `Unhandled fault` line at all**, only the audit
+record.  No kernel log for a SIGBUS is the tell: it is not the kernel's fault
+handler rejecting an access, it is the CPU refusing an instruction.
+
+What /dev/mem hands out depends only on `pfn_valid()` (see
+`arch/arm64/mm/mmap.c phys_mem_access_prot`):
+
+| range state | mapping | what it permits |
+|---|---|---|
+| `!pfn_valid` (hole, or `no-map` + no linear map) | `pgprot_noncached` = **Device-nGnRnE** | only <= 64-bit, size-aligned accesses |
+| `pfn_valid` + `O_SYNC` | `pgprot_writecombine` = **Normal Non-Cacheable** | any width, unaligned ok |
+| `pfn_valid`, no `O_SYNC` | cacheable | any width (but needs flush/invalidate) |
+
+So carving the hole traded one bug for another: **Device-nGnRnE**.  And the
+driver does exactly the two things Device-nGnRnE forbids:
+
+- `memset(g_bufs, 0, GF_BUF_SIZE)` — glibc memset uses **`DC ZVA`**, which the
+  architecture defines only for *Normal* memory;
+- `memcpy(...)` in the weight staging — 128-bit `STP`/`LDP`, above the 64-bit
+  Device-memory limit.
+
+Hence the signature: **`devmem` (single 32-bit accesses) reads and writes fine,
+while the driver faults.**  Single-word access is the loosest case and cannot
+see a width/alignment restriction.
+
+**Fix:** leave the range as **System RAM** — plain `reserved-memory`, no
+`no-map`, and no hole in the memory node — so `pfn_valid()` stays true and the
+driver's existing `O_SYNC` open selects **Normal Non-Cacheable**
+(`pgprot_writecombine`).  Still uncached (which is what the non-coherent HP0
+port needs), but with no access-width restriction.
+
+```dts
+reserved-memory {
+    npu-buffers@70000000 {
+        reg = <0x0 0x70000000 0x0 0x1000000>;   /* NO no-map */
+    };
+};
+```
+
+**Two debug lessons from this round:**
+
+1. **A SIGBUS with no kernel fault log is not the kernel's memory fault.** Do not
+   go looking for "Unhandled fault"; look at what instruction the CPU refused.
+2. **`devmem` passing is not the driver passing.** It only does aligned
+   8/16/32/64-bit accesses — the one case every mapping type allows.  When the
+   driver touches a region over a range with `memcpy`/`memset`, test with those,
+   not with `devmem`.
+3. Instrument before theorising. `GF_DBG` markers on **stderr** (unbuffered) are
+   what survive a hard fault; `printf` to a line-buffered stdout only appears
+   after the `\n`, so a crash mid-function is completely silent.
+
+---
+
+## 15. Do not let correctness depend on a memory attribute — make the driver mapping-agnostic
+
+The fix in #14b makes the *device tree* right.  But the previous round burned
+three flash-and-reboot cycles discovering DT problems one at a time, which is the
+expensive way to learn them.  The lesson is bigger than the fix:
+
+> A userspace driver that reaches a PL buffer through `/dev/mem` can be handed
+> either `MT_NORMAL_NC` or `MT_DEVICE_nGnRnE` depending on a device tree it does
+> not control.  `memcpy`/`memset`/`memcmp` are correct under one and **fault**
+> under the other.  So do not use them on that region.
+
+`gf_copy()`, `gf_zero()` and `gf_diff()` in `gf_npu.c` do the bulk work 32 bits
+at a time through a `volatile` pointer.  That is legal under **both** mappings:
+
+| mapping | 8/16/32/64-bit | DC ZVA / 128-bit |
+|---|---|---|
+| MT_NORMAL_NC (`pgprot_writecombine`) | ok | ok |
+| MT_DEVICE_nGnRnE (`pgprot_noncached`) | ok | **fault** |
+
+Cost: a few microseconds per frame against a 27 ms frame.  It buys independence
+from a file we only get to change by rewriting the SD card — which is precisely
+the thing we cannot afford to iterate on.
+
+Two details that are easy to get subtly wrong:
+
+* The loops must go through `volatile`.  A plain `uint8_t *` lets `-O2`
+  auto-vectorise the loop straight back into NEON `LDP/STP`, i.e. back into the
+  fault.  The `volatile` qualifier is load-bearing, not decoration.
+* Byte accesses are always legal on Device memory (the restriction is a *maximum*
+  access size, not a minimum), so the FNV1A and comparison passes were already
+  fine and stay byte-wise.
+
+Note the asymmetry: **ordering** still needs the explicit barrier from #16 even
+under Device, so the two fixes are independent.
+
+Related, and worth internalising: the baremetal driver got away with none of this
+because `Xil_SetTlbAttributes()` put its buffers in Device memory, where the
+ordering rules are stronger — and because a single-threaded baremetal loop does
+not stress the store buffer.  **"It worked on baremetal" is not evidence about
+the Linux mapping.**  Both of this round's real bugs (the width restriction, and
+the missing barrier) are invisible on the baremetal path.
+
+---
+
+## 16. The scratch region is weakly ordered — a barrier is required, and it was missing
+
+Once #14b makes the mapping `MT_NORMAL_NC`, stores into it are **buffered and
+weakly ordered**.  The register block, by contrast, is `MT_DEVICE_nGnRnE`, where
+accesses *are* ordered among themselves.  That difference is the whole bug:
+
+```c
+gf_copy(g_in_rgb, rgb96, GF_RGB_BYTES);   /* Normal-NC: may sit in a write buffer */
+...
+REG(GF_CONTROL) = 2U;                     /* Device: visible to the PL immediately */
+```
+
+The PL can therefore start DMA-ing the input before the pixels have reached DDR,
+and the failure mode is *wrong numbers*, not a crash — the most expensive kind.
+
+Two barriers per handshake, and they are not the same:
+
+* **before the doorbell**: full `dsb sy`, not `dmb`.  The PL is not an observer in
+  the CPU's shareability domain, so the stores must have *reached DDR*, not merely
+  be *ordered* with respect to each other.
+* **after the PL reports done, before reading the buffer back**: so the CPU cannot
+  speculatively consume a half-written tensor.
+
+`GF_MB()` in `gf_npu.c` is `dsb sy` on arm64.  It is placed at all three doorbells
+(`GF_CONTROL = 2` used twice, `GF_WEIGHT_DMA_CONTROL = 2`) and in
+`wait_layer_done()` on the success path.  Cost ≈ 1 µs per frame; not measurable.
+
+**How this was found:** by diffing the Linux port against the baremetal driver it
+claims to mirror.  The baremetal code has exactly one barrier
+(`gestureflow_hagrid18_dmp_main.c:171`) — and it is *not* in the handshake, it is
+in `store_probe()`, the diagnostic writer.  So the baremetal handshake is
+unbarriered too and simply got away with it.  Worth knowing before copying that
+file's structure as "the proven reference".
+
+---
+
+## 17. Iterating driver code should not involve the SD card at all
+
+Rewriting a 431 MB rootfs and re-seating the card to test one driver change is
+~15 minutes per iteration, and most of it is the same bytes every time.
+
+The board is already running Linux with a root shell, a writable rootfs, and
+`python3` that has `base64`, `zlib`, `hashlib` and `struct`.  So:
+
+```bash
+# host: extract the just-built binary from the image (debugfs, no root), then
+bash plnx/10_push_app.sh               # 09_board_put.sh under the hood
+```
+
+`09_board_put.sh` base64s the file, streams it over the console into
+`cat > /tmp/x.b64`, decodes on the board, and **verifies md5 and length on both
+sides**, retrying up to three times.  Measured **11.3 KiB/s**, which is exactly
+the 115200 line rate — i.e. lossless, and the tty's own write buffer provides the
+flow control so no pacing is needed.
+
+Facts that make it work, each of which cost a cycle to establish:
+
+* **`stty -echo` on the board first.**  Otherwise every byte is echoed back, which
+  both doubles the traffic and can wedge both directions once a buffer fills.
+* **Never pipe a `send` into `grep -q`** in a script with `pipefail`.  `grep -q`
+  exits on the first match, the writer can take `SIGPIPE`, and a *successful*
+  transfer is then reported as a failure.  Capture into a variable and match on
+  that.  (And do not send the evidence to `/dev/null` — that is what made the
+  first attempt undiagnosable.)
+* **Use a persistent fd in raw mode** (`exec 3<>"$DEV"` + `stty ... raw`) and let
+  it block; do not sleep to pace.
+* **Bootstrap the decoder with a heredoc sent line by line** — that avoids every
+  layer of nested quoting, since the board's shell is collecting the heredoc and
+  each line is just a line.
+* The transport is still **not** verified end to end until the md5 on both sides
+  matches.  A serial link that silently drops a byte is a board that produces
+  random classifications.
+
+**What still needs the card:** anything outside the rootfs — the device tree, the
+kernel, `boot.scr`, `BOOT.BIN`.  Those live in the boot partition / FIT and cannot
+be streamed into a running system safely.  Keep `04_make_sd.sh` for those, and
+for freezing a version to hand in.
+
+---
+
+## 18. A golden value is a property of the *input*, not of the hardware — gate it on the verification path
+
+The first time a real camera was attached, `gf_camera` failed on frame 0:
+
+```
+gf_npu: FAIL stage 0x4103 observed 0x9AD0E9B4
+```
+
+`0x9AD0E9B4` is hash-shaped, not status-shaped — it was the FNV register, compared
+against the *reference image's* FNV.  Three checks in `gf_npu_run_frame()` had the
+same defect:
+
+| code | comparison | why it cannot hold for a camera frame |
+|---|---|---|
+| `0x4103` | `REG(GF_OUTPUT_FNV1A) != GF_FULL_OUTPUT_FNV1A` | FNV of what the **reference image** produces |
+| `0x4105` | `REG(GF_OUTPUT_FNV1A) != GF_BODY2_OUTPUT_FNV1A` | same |
+| `0x4133` | `gap_fnv`/`fc_fnv`/`post_class` vs `GF_POST_*_EXPECTED_*` | also input-dependent |
+
+Every camera frame was guaranteed to "fail", because a camera frame is not the
+reference image.  Nothing else in the chain was affected: fault bits and the
+DMA/store byte counts are hardware properties and stay unconditional.
+
+**The rule:** split each check by what it depends on.
+
+* hardware property (fault bit, byte count, validity of a status register)
+  → check it for **every** input;
+* input-derived golden value (FNV, expected class, tensor contents)
+  → check it **only** on the verification path.
+
+The codebase already had the vehicle for this — `stats != NULL` means "this call
+is the reference-image verification pass" — and `verify_tensor()` was already
+gated on it.  The FNV/class comparisons simply were not.  `gf_npu_selftest()` now
+always supplies its own `stats`, so `gf_camera --selftest` cannot silently skip
+the FNV chain either.  The contract is documented on `gf_npu_run_frame()`.
+
+**And add the input-independent check you can:** the class must always be in
+`0..GF_POST_FC_OUTPUTS-1`.  That keeps the live path self-validating instead of
+turning into "verify nothing".
+
+**Why this survived so long:** the baremetal driver had no camera attached, ever.
+The reference image was the only input it ever saw, so a check that only makes
+sense for the reference image looked perfectly reasonable.  That is the same
+shape as #14b and #16 — **the Linux + real-sensor path had never been exercised**,
+so bugs that only exist on it stayed invisible.  When adding a new input source to
+a design that has only ever run one, re-read every check that mentions a constant.
+
+---
+
+## 19. libjpeg's error handling is not optional — without setjmp one bad frame kills the process
+
+Symptom, with a real scene in front of the camera:
+
+```
+gf_camera: running ('Ctrl-C' to stop)
+Empty input file
+root@gflinux:~#
+```
+
+No frames, and the program is **gone** — not hung, not crashed with a signal, it
+simply exited.  `Empty input file` is libjpeg's `JERR_INPUT_EMPTY` text, and
+`jpeg_read_header()` raises it as a **fatal** error.  With the default error
+manager (`jpeg_std_error`), "fatal" means `exit()`.
+
+`jpeglib.h` says this outright: the caller **must** provide an error manager whose
+`error_exit` longjmps to a `setjmp` point the caller established.  The code used
+`jpeg_std_error()` and never called `setjmp`, so every decode error was fatal.
+
+What produces such a frame in the first place — uvcvideo telling us so itself:
+
+```
+uvcvideo 2-1:1.1: Non-zero status (-71) in video completion handler.
+```
+
+An isochronous URB completing with `EPROTO` can leave a dequeued buffer with
+`bytesused == 0`, and libjpeg cannot be handed a zero-length source.
+
+Fix, both halves:
+
+```c
+struct gf_jpeg_error { struct jpeg_error_mgr pub; jmp_buf unwind; };
+
+static void gf_jpeg_error_exit(j_common_ptr cinfo)
+{
+    struct gf_jpeg_error *e = (struct gf_jpeg_error *)cinfo->err;
+    char msg[JMSG_LENGTH_MAX];
+    (*cinfo->err->format_message)(cinfo, msg);
+    fprintf(stderr, "gf_camera: JPEG decode error: %s\n", msg);
+    longjmp(e->unwind, 1);          /* never exit() */
+}
+...
+    if (len == 0U) return -1;        /* libjpeg rejects a zero-length source */
+    cinfo.err = jpeg_std_error(&err.pub);
+    err.pub.error_exit = gf_jpeg_error_exit;
+    if (setjmp(err.unwind)) { jpeg_destroy_decompress(&cinfo); return -1; }
+```
+
+A camera loop has to survive a bad frame.  Any third-party decoder whose only
+failure mode is "abort the process" is not usable inside one.
+
+**Two related diagnosis traps from the same session, both about looking at the
+wrong thing:**
+
+* **A capture that is "missing bytes" may be a parser bug, not a link bug.** The
+  first attempt to pull a 96×96 frame back over the console looked 20 base64
+  characters short of a clean md5.  The link was perfect; the regex required
+  `[A-Za-z0-9+/=]{40,}` and the **final** base64 line was 20 characters long, so
+  it was silently dropped.  Count against the expected length
+  (`(zlen+2)//3*4`) and say so, instead of "it's probably the serial line".
+* **Do not pipe a running program's output into `tail` and then kill it.** The
+  pager buffers, so a timeout kills the pipeline and the buffered frames are lost
+  — which reads as "the program produced no output".  Capture to a file.
+
+**And one genuine source of confusion worth remembering:** `gf_camera --save-ppm`
+originally saved frame 3.  Frame 3 is ~0.2 s after `STREAMON`, i.e. **before a UVC
+camera's auto-exposure has converged** — it saved a near-black image, which looked
+like "the camera sees nothing" and made the all-`dislike` classification look like
+a model bug.  It now saves the **last** frame when `-n N` is given.  When
+instrumenting an auto-exposure camera, sample a settled frame.
+
+
+

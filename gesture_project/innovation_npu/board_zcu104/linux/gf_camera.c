@@ -36,6 +36,7 @@
 #include <signal.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <setjmp.h>
 #include <linux/videodev2.h>
 
 #include "gf_npu.h"
@@ -48,6 +49,10 @@
 #define OUT_W           96
 #define OUT_H           96
 #define OUT_RGB_BYTES   (OUT_W * OUT_H * 3)
+
+/* Length of the majority-vote history.  -m is clamped to this; the array used
+ * to be hard-coded to 32 with no clamp, so `-m 33` walked off the stack. */
+#define MAX_VOTE_WINDOW 32
 
 /* ------------------------------------------------------------------ util -- */
 static double now_s(void)
@@ -156,11 +161,70 @@ static void yuyv_to_rgb(const uint8_t *src, int w, int h, uint8_t *dst)
 }
 
 #ifdef GF_HAVE_JPEG
-static int jpeg_to_rgb(const uint8_t *src, size_t len, int *out_w, int *out_h, uint8_t *dst)
+/* libjpeg's error handling is setjmp-based, and it is not optional.
+ *
+ * jpeglib.h is explicit: the caller must supply an error manager whose
+ * error_exit longjmps back to a setjmp point that the caller established.
+ * The default handler instead prints the message and calls exit().  So without
+ * this, ONE bad frame kills the whole program -- and uvcvideo does hand us such
+ * frames: after its own
+ *
+ *     uvcvideo 2-1:1.1: Non-zero status (-71) in video completion handler.
+ *
+ * an isochronous transfer can complete with bytesused == 0, libjpeg then raises
+ * JERR_INPUT_EMPTY ("Empty input file"), and gf_camera exits mid-stream having
+ * printed no frames at all.  That is what happened the first time a real scene
+ * was pointed at the camera -- and it looks exactly like a hang or a crash
+ * rather than a bad frame.
+ *
+ * The signatures are the pre-libjpeg-8 style on purpose; that is still what
+ * jpeglib.h documents for application error managers.
+ */
+struct gf_jpeg_error {
+    struct jpeg_error_mgr pub;
+    jmp_buf               unwind;
+};
+
+static void gf_jpeg_error_exit(j_common_ptr cinfo)
+{
+    struct gf_jpeg_error *e = (struct gf_jpeg_error *)cinfo->err;
+    char msg[JMSG_LENGTH_MAX];
+
+    (*cinfo->err->format_message)(cinfo, msg);
+    fprintf(stderr, "gf_camera: JPEG decode error: %s\n", msg);
+    longjmp(e->unwind, 1);
+}
+
+/* Decode to RGB24, resizing the caller's buffer if the JPEG turns out to be a
+ * different geometry than the one we asked the camera for.  A UVC driver is
+ * allowed to hand back something else, and decoding past the end of a buffer
+ * sized for the *requested* geometry would corrupt the heap -- which is exactly
+ * what this used to do.  The destination size is therefore taken from the
+ * JPEG's own header (jpeg_calc_output_dimensions), not from the request.
+ *
+ * Returns 0 on success, -1 on any bad frame (empty, truncated, unparseable).
+ * Never exits. */
+static int jpeg_to_rgb(const uint8_t *src, size_t len, int *out_w, int *out_h,
+                       uint8_t **buf, size_t *cap)
 {
     struct jpeg_decompress_struct cinfo;
-    struct jpeg_error_mgr jerr;
-    cinfo.err = jpeg_std_error(&jerr);
+    struct gf_jpeg_error err;
+    size_t need;
+
+    /* libjpeg cannot be handed a zero-length source. */
+    if (len == 0U) {
+        fprintf(stderr, "gf_camera: empty MJPEG frame, skipping\n");
+        return -1;
+    }
+
+    memset(&cinfo, 0, sizeof cinfo);
+    cinfo.err = jpeg_std_error(&err.pub);
+    err.pub.error_exit = gf_jpeg_error_exit;
+    if (setjmp(err.unwind)) {
+        jpeg_destroy_decompress(&cinfo);
+        return -1;
+    }
+
     jpeg_create_decompress(&cinfo);
     jpeg_mem_src(&cinfo, (unsigned char *)src, (unsigned long)len);
     if (jpeg_read_header(&cinfo, TRUE) != JPEG_HEADER_OK) {
@@ -168,13 +232,27 @@ static int jpeg_to_rgb(const uint8_t *src, size_t len, int *out_w, int *out_h, u
         return -1;
     }
     cinfo.out_color_space = JCS_RGB;
-    jpeg_start_decompress(&cinfo);
-    if ((int)cinfo.output_width != *out_w || (int)cinfo.output_height != *out_h) {
-        *out_w = (int)cinfo.output_width;
-        *out_h = (int)cinfo.output_height;
+    jpeg_calc_output_dimensions(&cinfo);
+
+    *out_w = (int)cinfo.output_width;
+    *out_h = (int)cinfo.output_height;
+    need = (size_t)*out_w * (size_t)*out_h * 3U;
+
+    if (need > *cap) {
+        uint8_t *grown = realloc(*buf, need);
+        if (!grown) {
+            fprintf(stderr, "gf_camera: out of memory for a %dx%d decoded frame\n",
+                    *out_w, *out_h);
+            jpeg_destroy_decompress(&cinfo);
+            return -1;
+        }
+        *buf = grown;
+        *cap = need;
     }
+
+    jpeg_start_decompress(&cinfo);
     while (cinfo.output_scanline < cinfo.output_height) {
-        JSAMPROW row = dst + (size_t)cinfo.output_scanline * (*out_w) * 3;
+        JSAMPROW row = *buf + (size_t)cinfo.output_scanline * (size_t)(*out_w) * 3U;
         jpeg_read_scanlines(&cinfo, &row, 1);
     }
     jpeg_finish_decompress(&cinfo);
@@ -326,7 +404,8 @@ static int v4l2_setup(struct v4l2_state *st, const char *dev, int want_w, int wa
         fprintf(stderr, "gf_camera: only %u buffers available\n", req.count);
         return -1;
     }
-    st->nbuf = req.count;
+    /* The driver may hand back more than we asked for; st->buf[] is MAX_BUFFERS. */
+    st->nbuf = req.count > MAX_BUFFERS ? MAX_BUFFERS : req.count;
 
     for (i = 0; i < st->nbuf; ++i) {
         struct v4l2_buffer buf;
@@ -354,6 +433,13 @@ static int v4l2_setup(struct v4l2_state *st, const char *dev, int want_w, int wa
     return 0;
 }
 
+/* Dequeue one frame.  Returns the buffer index (>= 0) on success, -1 on EAGAIN.
+ *
+ * The caller MUST hand the buffer back with v4l2_release() once it has finished
+ * reading it -- NOT before.  Recycling it here would put it straight back in the
+ * driver's fill queue, so the camera could overwrite the frame while we are
+ * still converting it (a torn frame => a random misclassification).  With four
+ * buffers that is unlikely but not impossible, and it is free to get right. */
 static int v4l2_grab(struct v4l2_state *st, const uint8_t **data, size_t *len)
 {
     struct v4l2_buffer buf;
@@ -368,9 +454,17 @@ static int v4l2_grab(struct v4l2_state *st, const uint8_t **data, size_t *len)
     }
     *data = (const uint8_t *)st->buf[buf.index];
     *len  = buf.bytesused;
-    /* Release immediately; we copy/convert before the next dequeue. */
+    return (int)buf.index;
+}
+
+static void v4l2_release(struct v4l2_state *st, int index)
+{
+    struct v4l2_buffer buf;
+    memset(&buf, 0, sizeof buf);
+    buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    buf.memory = V4L2_MEMORY_MMAP;
+    buf.index = (uint32_t)index;
     if (ioctl(st->fd, VIDIOC_QBUF, &buf) != 0) die("VIDIOC_QBUF(recycle)");
-    return 0;
 }
 
 /* ------------------------------------------------------------------ main -- */
@@ -393,7 +487,9 @@ static void usage(const char *argv0)
            "  -m N          majority-vote smoothing window in frames (default 5)\n"
            "  --list        list capture formats and exit\n"
            "  --selftest    run the NPU reference selftest and exit\n"
-           "  --save-ppm P  save the resized 96x96 RGB that is fed to the NPU\n",
+           "  --save-ppm P  save the resized 96x96 RGB that is fed to the NPU\n"
+           "                (with -n N this is the last frame, i.e. after the\n"
+           "                 camera's auto-exposure has settled; otherwise frame 3)\n",
            argv0);
 }
 
@@ -423,6 +519,7 @@ int main(int argc, char **argv)
         else { usage(argv[0]); return 2; }
     }
     if (smooth < 1) smooth = 1;
+    if (smooth > MAX_VOTE_WINDOW) smooth = MAX_VOTE_WINDOW;
 
     /* The NPU must be up before anything else: if the PL is not configured or
      * its clock is gated, GF_MAGIC will not read back and we want to know that
@@ -448,9 +545,10 @@ int main(int argc, char **argv)
     {
         struct v4l2_state st;
         uint8_t *rgb_frame = NULL;
+        size_t   rgb_cap = 0U;
         uint8_t  rgb96[OUT_RGB_BYTES];
         uint32_t cls = 0U;
-        int history[32];
+        int history[MAX_VOTE_WINDOW];
         int hist_n = 0;
         long frame_no = 0;
         double t_prev = 0.0;
@@ -459,7 +557,11 @@ int main(int argc, char **argv)
             gf_npu_close();
             return 1;
         }
-        rgb_frame = malloc((size_t)st.width * st.height * 3);
+        /* Sized for the negotiated YUYV/RGB24 geometry.  The MJPEG path grows
+         * this on demand if the decoded frame is larger. */
+        rgb_cap = (size_t)st.width * (size_t)st.height * 3U;
+        if (rgb_cap == 0U) { fprintf(stderr, "gf_camera: zero-sized format\n"); return 1; }
+        rgb_frame = malloc(rgb_cap);
         if (!rgb_frame) die("malloc");
 
         signal(SIGINT, on_sigint);
@@ -469,9 +571,11 @@ int main(int argc, char **argv)
             const uint8_t *payload = NULL;
             size_t plen = 0;
             int cw = st.width, ch = st.height;
+            int bidx, ok = 1;
             double t0, t1, fps = 0.0;
 
-            if (v4l2_grab(&st, &payload, &plen) != 0) continue;
+            bidx = v4l2_grab(&st, &payload, &plen);
+            if (bidx < 0) continue;
 
             t0 = now_s();
 
@@ -487,16 +591,22 @@ int main(int argc, char **argv)
 #ifdef GF_HAVE_JPEG
             case V4L2_PIX_FMT_MJPEG:
             case V4L2_PIX_FMT_JPEG:
-                if (jpeg_to_rgb(payload, plen, &cw, &ch, rgb_frame) != 0) {
+                if (jpeg_to_rgb(payload, plen, &cw, &ch, &rgb_frame, &rgb_cap) != 0) {
                     fprintf(stderr, "gf_camera: JPEG decode failed, skipping frame\n");
-                    continue;
+                    ok = 0;
                 }
                 break;
 #endif
             default:
                 fprintf(stderr, "gf_camera: unhandled pixel format, skipping\n");
-                continue;
+                ok = 0;
+                break;
             }
+
+            /* Everything above read only `payload`; the frame is copied, so the
+             * driver may have its buffer back now. */
+            v4l2_release(&st, bidx);
+            if (!ok) continue;
 
             resize_rgb96(rgb_frame, cw, ch, rgb96);
 
@@ -522,7 +632,15 @@ int main(int argc, char **argv)
                 }
                 t1 = now_s();
                 if (t_prev > 0.0) fps = 1.0 / (t1 - t_prev);
-                if (save_ppm && frame_no == 3) write_ppm(save_ppm, rgb96, OUT_W, OUT_H);
+                /* Save a *settled* frame.  With -n N that is the last one: by then
+                 * the camera's auto-exposure and auto-white-balance have long
+                 * converged.  Saving frame 3 unconditionally (the old behaviour)
+                 * captured a near-black image while AEC was still ramping, which
+                 * then looked like "the camera sees nothing / everything is
+                 * classified as dislike".  Without -n there is no last frame, so
+                 * fall back to frame 3. */
+                if (save_ppm && frame_no == (max_frames > 0 ? max_frames - 1 : 3))
+                    write_ppm(save_ppm, rgb96, OUT_W, OUT_H);
                 printf("frame %6ld  %-16s (raw %-16s)  %d/%d votes  %6.2f fps  %5.1f ms\n",
                        frame_no, gf_npu_class_name((uint32_t)best),
                        gf_npu_class_name(cls), best_count, hist_n, fps,

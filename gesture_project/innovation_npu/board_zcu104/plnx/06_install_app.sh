@@ -51,6 +51,13 @@
 #
 set -uo pipefail
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+
+# 本脚本所在目录，**在任何 cd 之前**定下来。
+# 下面要 `cd "$PLNX"`（petalinux-build 必须在工程根跑），之后 `$0` 还是相对路径，
+# `dirname "$0"` 就变成 "."，于是 `./05_verify_image.sh` 找不到 —— 那是本脚本
+# 一直在犯的一个小错（报 "No such file or directory"，看起来像校验脚本坏了）。
+HERE="$(cd "$(dirname "$0")" && pwd)"
+
 # ---------------------------------------------------------------------------
 # 解析"调用者"的家目录（改动前先读完这段）。
 #
@@ -156,7 +163,7 @@ fi
 
 if [ "$MODE" = "--check" ]; then
     step "只校验当前镜像"
-    bash "$(dirname "$0")/05_verify_image.sh"
+    bash "$HERE/05_verify_image.sh"
     exit $?
 fi
 
@@ -198,7 +205,7 @@ fi
 
 # ------------------------------------------------------------------ 4. 校验
 step "4/4 校验镜像里的二进制 == 仓库源码"
-bash "$(dirname "$0")/05_verify_image.sh"
+bash "$HERE/05_verify_image.sh"
 v=$?
 
 echo
