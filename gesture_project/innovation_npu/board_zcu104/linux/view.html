@@ -50,8 +50,9 @@
   .cls.idle{font-size:20px;color:var(--dim);font-weight:500}
   .raw{color:var(--dim);font-size:12.5px}
   .raw b{color:var(--fg)}
-  .votebar{height:6px;border-radius:3px;background:#243040;margin-top:9px;overflow:hidden}
-  .votebar i{display:block;height:100%;background:var(--accent);width:0;transition:width .12s}
+  .note{margin-top:10px;padding:8px 10px;border-radius:6px;background:#1a222d;
+        border:1px solid var(--line);color:var(--dim);font-size:11.5px;line-height:1.6}
+  .note b{color:var(--fg)}
 
   .kv{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;font-variant-numeric:tabular-nums}
   .kv .k{color:var(--dim)}
@@ -109,7 +110,7 @@
     <span><span class="k">帧</span> <span id="frame" class="v">—</span></span>
     <span><span class="k">速率</span> <span id="fps" class="v">—</span></span>
     <span><span class="k">已运行</span> <span id="uptime" class="v">—</span></span>
-    <span><span class="k">相机</span> <span id="caminfo" class="v">—</span></span>
+    <span><span class="k">取景</span> <span id="framing" class="v">—</span></span>
   </div>
 </header>
 
@@ -131,51 +132,57 @@
 
       <figure style="margin-bottom:0">
         <figcaption>
-          摄像头全景
+          模型看到的范围
           <span class="hint" id="rotnote"></span>
           <label class="chk"><input type="checkbox" id="sceneOn"> 开启</label>
         </figcaption>
         <div class="viewbox" id="scenebox">
           <img id="scene" alt="未开启">
         </div>
-        <div class="meta" id="scenemeta">未开启（全分辨率每帧约 900 KB，默认关闭以免占用带宽）</div>
+        <div class="meta" id="scenemeta">未开启（默认关闭以免占用带宽）</div>
       </figure>
     </div>
 
     <div class="panel" style="margin-top:14px">
-      <h3>真值标注 → 实测准确率 <span class="hint">点击下方手势，从下一帧开始计分</span></h3>
+      <h3>真值对照 <span class="hint">点一个手势，从下一帧开始逐帧计分</span></h3>
       <div class="chips" id="chips"></div>
       <div class="acc">
         <div>
-          <div class="cap">稳定帧准确率</div>
-          <div class="big" id="accStable">—</div>
+          <div class="cap">当前真值</div>
+          <div class="big" id="accTruth" style="font-size:19px">—</div>
         </div>
         <div>
-          <div class="cap">全部帧准确率</div>
-          <div class="big" id="accAll" style="font-size:19px">—</div>
+          <div class="cap">逐帧准确率</div>
+          <div class="big" id="accAll">—</div>
+        </div>
+        <div>
+          <div class="cap">帧数</div>
+          <div class="big" id="accN" style="font-size:19px">0</div>
         </div>
         <div style="margin-left:auto;display:flex;gap:7px">
           <button class="btn" id="btnClear">清除标注</button>
           <button class="btn" id="btnCsv">导出 CSV</button>
         </div>
       </div>
-      <div class="meta" id="markNote">未开始标注。“稳定帧”＝ 表决窗口中同一类占比 ≥ 60%，能滤掉手势切换时的过渡帧。</div>
+      <div class="meta" id="markNote">未开始标注。这里统计的是<b>逐帧</b>准确率：每一帧的即时分类都计一次分，不做任何表决平滑，所以你看到的数字就是模型真实的逐帧表现。</div>
     </div>
   </section>
 
   <!-- ------------------------------------------------ 结果与指标 -->
   <section>
     <div class="panel">
-      <h3>识别结果</h3>
+      <h3>当前结果 <span class="hint">本帧、未平滑</span></h3>
       <div class="headline">
-        <div class="cls idle" id="smooth">等待首帧…</div>
+        <div class="cls idle" id="cls">等待首帧…</div>
+        <div class="raw" id="clsidx"></div>
       </div>
-      <div class="raw" style="margin-top:2px">
-        单帧原始：<b id="raw">—</b> ·
-        表决 <b id="votes">—</b> / <span id="win">—</span> 帧
-      </div>
-      <div class="votebar"><i id="votefill"></i></div>
       <div class="meta" id="latency">—</div>
+      <div class="note" id="clsnote">
+        <b>关于「没有手势却报出某个类」：</b>这是 18 类<b>闭集</b>分类器，没有「无手势」这一项，
+        所以画面里没有手时它仍然必须输出一个类 —— 常见落在 <b>call</b>（该类训练样本最杂）。
+        这属于模型能力边界，不是识别链路的故障。要压制它只能：把手放到画面中央并开数字变焦
+        （让手像训练集那样占满画面），或者后续补一个「无手势」类 / 手部检测前置。
+      </div>
     </div>
 
     <div class="panel" style="margin-top:14px">
@@ -185,7 +192,7 @@
     </div>
 
     <div class="panel" style="margin-top:14px">
-      <h3>类别分布 <span class="hint">深 = 平滑后累计 · 亮 = 单帧累计</span></h3>
+      <h3>类别分布 <span class="hint">开页以来累计帧数</span></h3>
       <div id="hist"><div class="meta">等待首帧…</div></div>
       <div class="errs" id="errs">—</div>
     </div>
@@ -195,7 +202,7 @@
       <div class="logwrap">
         <table>
           <thead><tr>
-            <th>帧</th><th>单帧</th><th>平滑</th><th>表决</th><th>总 ms</th><th>NPU ms</th>
+            <th>帧</th><th>本帧类别</th><th>总 ms</th><th>NPU ms</th><th>对错</th>
           </tr></thead>
           <tbody id="logrows"></tbody>
         </table>
@@ -215,8 +222,8 @@ let NAMES = NAMES_DEFAULT.slice();
 let S = null;                 // 最近一次 /stats
 let lastFrame = -1;
 let connected = false;
-let truth = null;             // 用 clicks 设定的真值类别
-let scored = { n:0, ok:0, ns:0, oks:0 };
+let truth = null;             // 点击设定的真值类别
+let scored = { n:0, ok:0 };   // 逐帧计分
 let rows = [];                // 客户端记录（用于导出）
 let chipsBuilt = false;
 
@@ -272,8 +279,8 @@ $('pause').onchange = e => { pauseImg = e.target.checked; };
 $('sceneOn').onchange = e => {
   sceneOn = e.target.checked;
   $('scenemeta').textContent = sceneOn
-    ? '已开启：全分辨率流，板子端限速 5 fps，本页约 4.5 Hz 拉取。'
-    : '未开启（全分辨率每帧约 900 KB，默认关闭以免占用带宽）';
+    ? '已开启：模型实际看到的那块区域，板子端限速 5 fps，本页约 4.5 Hz 拉取。'
+    : '未开启（默认关闭以免占用带宽）';
   if (!sceneOn) $('scene').removeAttribute('src');
 };
 
@@ -285,23 +292,26 @@ function render(){
   $('frame').textContent  = live ? S.frame : '—';
   $('fps').textContent    = live ? S.fps.toFixed(1) : '—';
   $('uptime').textContent = live ? S.uptime.toFixed(0) + ' s' : '—';
-  $('caminfo').textContent = (S && S.cam) ? (S.cam.w + '×' + S.cam.h + ' ' + S.cam.fmt) : '—';
+  if (live && S.cam){
+    const z = S.zoom ? (S.zoom/100).toFixed(1) + '×' : '1.0×';
+    const c = (S.crop && S.crop > 1.001) ? ' × 裁切' + S.crop.toFixed(2) : '';
+    $('framing').textContent = S.cam.w + '×' + S.cam.h + ' 变焦' + z + c;
+    $('prevmeta').textContent = '送进 NPU 的 ' + S.cam.w + '×' + S.cam.h +
+      ' 画面已缩到 96×96；变焦 ' + z + c + '　相机输出 ' + S.cam.fmt;
+  }
 
   if (live && S.names && S.names.length && !chipsBuilt){
     NAMES = S.names; buildChips(); chipsBuilt = true;
   }
 
-  const head = $('smooth');
-  if (!live){ head.className = 'cls idle'; head.textContent = '等待首帧…'; }
+  /* 大字显示的就是**本帧**的分类结果，不做任何表决/平滑。 */
+  const head = $('cls');
+  if (!live){ head.className = 'cls idle'; head.textContent = '等待首帧…'; $('clsidx').textContent = ''; }
   else {
     head.className = 'cls';
-    head.textContent = fmtClass(S.smooth);
+    head.textContent = fmtClass(S.cls);
+    $('clsidx').textContent = '类别 #' + S.cls + ' · 第 ' + S.frame + ' 帧';
   }
-  $('raw').textContent   = live ? fmtClass(S.raw) : '—';
-  $('votes').textContent = live ? S.votes : '—';
-  $('win').textContent   = live ? S.window : '—';
-  const pct = (live && S.window > 0) ? (100 * S.votes / S.window) : 0;
-  $('votefill').style.width = pct.toFixed(0) + '%';
 
   if (live){
     $('latency').textContent =
@@ -327,23 +337,23 @@ function render(){
       '<span class="val">' + v.toFixed(1) + '</span></div>').join('');
   }
 
-  /* 类别分布 */
+  /* 类别分布（开页以来累计帧数） */
   if (live){
-    const a = S.hist_smooth || [], b = S.hist_raw || [];
-    const mx = Math.max(1, ...a, ...b);
+    const a = S.hist || [];
+    const mx = Math.max(1, ...a);
     $('hist').innerHTML = NAMES.map((n,i) => {
-      const s = a[i]||0, r = b[i]||0;
-      const cur = (i === S.smooth) ? ' cur' : '';
+      const v = a[i]||0;
+      const cur = (i === S.cls) ? ' cur' : '';
       return '<div class="histrow' + cur + '">' +
         '<span class="nm">' + n + '</span>' +
-        '<span class="track"><i class="s" style="width:' + (100*s/mx).toFixed(1) + '%"></i></span>' +
-        '<span class="n"><b>' + s + '</b> / ' + r + '</span></div>';
+        '<span class="track"><i style="width:' + (100*v/mx).toFixed(1) + '%"></i></span>' +
+        '<span class="n"><b>' + v + '</b></span></div>';
     }).join('');
   }
 
-  /* 旋转提示 */
+  /* 旋转提示（场景流是裁剪后的区域，仍可能需要旋转） */
   if (live && S.rotate){
-    $('rotnote').textContent = '（板子已补偿旋转 ' + S.rotate + '°；本页对全景做同样旋转）';
+    $('rotnote').textContent = '（板子已补偿旋转 ' + S.rotate + '°；本页对画面做同样旋转）';
     sceneImg.style.transform = 'rotate(' + S.rotate + 'deg)';
     const box = $('scenebox');
     if (S.rotate === 90 || S.rotate === 270){
@@ -370,15 +380,16 @@ function render(){
 
 /* ------------------------------------------------------------- 计分 ----- */
 function renderAcc(){
-  const den = scored.ns || 0, num = scored.oks || 0;
-  const den2 = scored.n || 0, num2 = scored.ok || 0;
-  $('accStable').textContent = den ? (100*num/den).toFixed(1) + '%' : '—';
-  $('accAll').textContent    = den2 ? (100*num2/den2).toFixed(1) + '%' : '—';
+  const den = scored.n || 0, num = scored.ok || 0;
+  $('accAll').textContent  = den ? (100*num/den).toFixed(1) + '%' : '—';
+  $('accN').textContent    = den;
+  $('accTruth').textContent = truth === null ? '—' : fmtClass(truth);
   if (truth === null){
-    $('markNote').textContent = '未开始标注。“稳定帧”＝ 表决窗口中同一类占比 ≥ 60%，能滤掉手势切换时的过渡帧。';
+    $('markNote').innerHTML = '未开始标注。这里统计的是<b>逐帧</b>准确率：每一帧的即时分类都计一次分，' +
+      '不做任何表决平滑，所以你看到的数字就是模型真实的逐帧表现。';
   } else {
-    $('markNote').innerHTML = '真值 = <b>' + fmtClass(truth) + '</b>　稳定帧 n=' + den +
-      '　全部帧 n=' + den2 + '　点“清除标注”结束本轮。';
+    $('markNote').innerHTML = '真值 = <b>' + fmtClass(truth) + '</b>　已计分 n=' + den +
+      '　正确 ' + num + ' 帧　点“清除标注”结束本轮。';
   }
 }
 
@@ -389,7 +400,7 @@ function buildChips(){
     el.onclick = () => {
       const i = +el.dataset.i;
       if (truth === i){ truth = null; }        // 再点一次取消
-      else { truth = i; scored = {n:0,ok:0,ns:0,oks:0}; }
+      else { truth = i; scored = {n:0, ok:0}; }
       [...$('chips').children].forEach(x =>
         x.classList.toggle('sel', +x.dataset.i === truth));
       renderAcc();
@@ -399,17 +410,19 @@ function buildChips(){
 
 $('btnClear').onclick = () => {
   truth = null;
-  scored = {n:0,ok:0,ns:0,oks:0};
+  scored = {n:0, ok:0};
   [...$('chips').children].forEach(x => x.classList.remove('sel'));
   renderAcc();
 };
 
 $('btnCsv').onclick = () => {
-  const hdr = 'frame,uptime_s,raw,raw_name,smooth,smooth_name,votes,window,ms_total,ms_decode,ms_resize,ms_npu,truth\n';
+  const hdr = 'frame,uptime_s,cls,cls_name,truth,correct,ms_total,ms_decode,ms_resize,ms_npu\n';
   const body = rows.map(r => [
-    r.frame, r.uptime_s.toFixed(2), r.raw, fmtClass(r.raw), r.smooth, fmtClass(r.smooth),
-    r.votes, r.window, r.ms_total.toFixed(3), r.ms_decode.toFixed(3),
-    r.ms_resize.toFixed(3), r.ms_npu.toFixed(3), r.truth === null ? '' : fmtClass(r.truth)
+    r.frame, r.uptime_s.toFixed(2), r.cls, fmtClass(r.cls),
+    r.truth === null ? '' : fmtClass(r.truth),
+    r.truth === null ? '' : (r.cls === r.truth ? 1 : 0),
+    r.ms_total.toFixed(3), r.ms_decode.toFixed(3),
+    r.ms_resize.toFixed(3), r.ms_npu.toFixed(3)
   ].join(',')).join('\n');
   const blob = new Blob([hdr + body], {type:'text/csv'});
   const a = document.createElement('a');
@@ -420,16 +433,15 @@ $('btnCsv').onclick = () => {
 };
 
 /* ---------------------------------------------------------------- 轮询 --- */
-function logRow(s){
+function logRow(s, truthAtSample){
   const tr = document.createElement('tr');
-  const bad = (truth !== null && s.smooth !== truth && s.votes >= Math.ceil(s.window*0.6));
+  const bad = (truthAtSample !== null && s.cls !== truthAtSample);
   if (bad) tr.className = 'bad';
   tr.innerHTML = '<td class="n">' + s.frame + '</td>' +
-    '<td>' + fmtClass(s.raw) + '</td>' +
-    '<td class="n">' + fmtClass(s.smooth) + '</td>' +
-    '<td>' + s.votes + '/' + s.window + '</td>' +
+    '<td class="n">' + fmtClass(s.cls) + '</td>' +
     '<td>' + s.ms.total.toFixed(1) + '</td>' +
-    '<td>' + s.ms.npu.toFixed(1) + '</td>';
+    '<td>' + s.ms.npu.toFixed(1) + '</td>' +
+    '<td>' + (truthAtSample === null ? '—' : (s.cls === truthAtSample ? '✔' : '✘')) + '</td>';
   const tb = $('logrows');
   tb.insertBefore(tr, tb.firstChild);
   while (tb.children.length > 60) tb.removeChild(tb.lastChild);
@@ -446,19 +458,14 @@ async function tick(){
       lastFrame = S.frame;
       if (truth !== null){
         scored.n++;
-        if (S.smooth === truth) scored.ok++;
-        if (S.window > 0 && S.votes >= Math.ceil(S.window * 0.6)){
-          scored.ns++;
-          if (S.smooth === truth) scored.oks++;
-        }
+        if (S.cls === truth) scored.ok++;
         renderAcc();
       }
-      rows.push({frame:S.frame, uptime_s:S.uptime, raw:S.raw, smooth:S.smooth,
-                 votes:S.votes, window:S.window, ms_total:S.ms.total,
-                 ms_decode:S.ms.decode, ms_resize:S.ms.resize, ms_npu:S.ms.npu,
-                 truth:truth});
+      rows.push({frame:S.frame, uptime_s:S.uptime, cls:S.cls,
+                 ms_total:S.ms.total, ms_decode:S.ms.decode,
+                 ms_resize:S.ms.resize, ms_npu:S.ms.npu, truth:truth});
       if (rows.length > 20000) rows = rows.slice(-10000);
-      logRow(S);
+      logRow(S, truth);
     }
   } catch(e) {
     setConn(false);

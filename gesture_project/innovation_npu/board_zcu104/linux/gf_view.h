@@ -29,15 +29,17 @@
 
 #include <stdint.h>
 
-/* Everything about one processed frame that the page displays. */
+/* Everything about one processed frame that the page displays.
+ *
+ * There is deliberately no "smoothed" class and no vote count.  The monitor
+ * reports the class the model produced for THIS frame; smoothing was removed
+ * because it is the monitor's job to show what the model does, not to make it
+ * look better.  See the comment in gf_camera.c's frame loop. */
 typedef struct {
     long   frame;
     double uptime_s;
     double fps;
-    int    raw_class;      /* this frame only */
-    int    smooth_class;   /* after the majority vote */
-    int    votes;          /* how many of the window agree with smooth_class */
-    int    window;         /* how full the vote window is */
+    int    cls;            /* this frame's class, 0..17 */
     double ms_total;
     double ms_decode;      /* JPEG/YUYV -> RGB */
     double ms_resize;      /* area-average to 96x96 */
@@ -65,17 +67,21 @@ void gf_view_stop(void);
 /* Publish one frame.  Cheap no-op unless somebody is watching that stream.
  *
  *   rgb96    the exact 96x96x3 HWC image handed to the NPU (preview stream)
- *   scene    the decoded camera frame, or NULL (full-resolution stream)
+ *   scene    the region the model saw, at source resolution, or NULL
  *   scene_w / scene_h    its geometry
+ *   scene_stride         bytes per row in `scene` -- the region is a window of a
+ *                        larger frame, so the rows are NOT contiguous
  *
  * Call this after the NPU run, so `f` carries the final timings. */
 void gf_view_publish(const gf_view_frame *f,
                      const uint8_t *rgb96,
-                     const uint8_t *scene, int scene_w, int scene_h);
+                     const uint8_t *scene, int scene_w, int scene_h, int scene_stride);
 
-/* Tell the page what the camera negotiated and how the input is rotated, so it
- * can label the view and rotate the scene in CSS. */
-void gf_view_set_camera(const char *fmt, int w, int h, int rotate_deg);
+/* Tell the page what the camera negotiated and how the input is framed, so it
+ * can label the views.  `zoom` is the V4L2 zoom_absolute value in use (100 =
+ * 1x), `crop` the software centre-crop factor (1 = none). */
+void gf_view_set_camera(const char *fmt, int w, int h, int rotate_deg,
+                        int zoom, double crop);
 
 /* Bump an error counter (shown on the page). */
 void gf_view_count_error(int which);

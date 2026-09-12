@@ -127,6 +127,38 @@ fi
 # 占位页（gf_camera 仍然正常跑），但那种降级在伸手够不到的板子上很难看出来。
 if debugfs -R "stat /usr/share/gf/view.html" "$IMG" 2>/dev/null | grep -q '^Inode:'; then
     ok "/usr/share/gf/view.html 存在（--view 的页面）"
+    # 内容也要对。曾经的真实故障是：二进制是新的、页面是旧的（页面走的是另一条
+    # 投放路径），于是页面上少了新加的字段而板子上看不出来。用"必须有"和
+    # "必须没有"两组 D3 探针卡住它。
+    PAGE_TMP="$TMP/view.html"
+    debugfs -R "dump /usr/share/gf/view.html $PAGE_TMP" "$IMG" >/dev/null 2>&1
+    if [ -s "$PAGE_TMP" ]; then
+        for needle in '当前结果' '逐帧准确率' '模型看到的范围' 'id="cls"'; do
+            grep -qF "$needle" "$PAGE_TMP" \
+                && ok "view.html 含 '$needle'" \
+                || bad "view.html 缺 '$needle' -> 页面是旧的（bash 10_push_app.sh page）"
+        done
+        # 反向：被删掉的表决口径不许复活
+        for banned in 'hist_smooth' 'votefill' '稳定帧准确率'; do
+            grep -qF "$banned" "$PAGE_TMP" \
+                && bad "view.html 仍含已删除的 '$banned' -> 页面是旧版" \
+                || ok "view.html 不含已删除的 '$banned'"
+        done
+        # 页面上报的 /stats 字段与二进制必须对得上。注意这里先把 strings 落到
+        # 文件再 grep：`strings | grep -q` 里 grep 命中即退出，写端吃 SIGPIPE，
+        # 配上 pipefail 会让**成功**被判成失败（PITFALLS #21）。
+        strs="$(strings -a "$TMP/gf_camera")"
+        case "$strs" in
+            *'"cls":%d'*) ok "gf_camera 的 /stats 用新字段 cls" ;;
+            *)            bad "gf_camera 的 /stats 还是旧的 raw/smooth 字段" ;;
+        esac
+        case "$strs" in
+            *votes*) bad "gf_camera 仍在 /stats 里输出 votes -> 表决代码没删干净" ;;
+            *)       ok "gf_camera 的 /stats 里没有 votes" ;;
+        esac
+    else
+        warn "无法从镜像里 dump view.html，跳过内容检查"
+    fi
 else
     warn "/usr/share/gf/view.html 不在镜像里 —— --view 会退回内置占位页"
 fi
@@ -181,11 +213,13 @@ gf_npu_probe|hardware FNV registers|gf_npu_probe.c
 gf_npu_probe|software FNV1A of what the PL wrote|gf_npu_probe.c
 gf_npu_probe|per-tile PL cycles:|gf_npu_probe.c
 gf_camera|VIDIOC_DQBUF|gf_camera.c
-gf_camera|majority-vote smoothing window|gf_camera.c
 gf_camera|save the resized 96x96 RGB|gf_camera.c
 gf_camera|gf_camera: using %s %dx%d|gf_camera.c
 gf_camera|JPEG decode failed, skipping frame|gf_camera.c
 gf_camera|rotating the NPU input %d degrees clockwise|gf_camera.c
+gf_camera|camera digital zoom, %d..%d|gf_camera.c
+gf_camera|continuing without the requested zoom|gf_camera.c
+gf_camera|centred crop of %dx%d|gf_camera.c
 gf_camera|gf_camera: viewer ready -- open this in the laptop browser:|gf_view.c
 gf_camera|no frame yet|gf_view.c
 "

@@ -39,6 +39,10 @@
 
 #define GF_NCLASS            18
 
+/* V4L2 zoom_absolute value that means "1x" on the See3CAM_CU30.  Only used as
+ * the default before gf_view_set_camera() is called. */
+#define GF_ZOOM_1X           100
+
 /* ------------------------------------------------------------- config ----- */
 #define VIEW_REQ_TIMEOUT_S   2.0    /* stop copying this long after the last request */
 #define VIEW_SCENE_MAX_FPS   5.0    /* the full frame is ~900 KB; cap it */
@@ -70,11 +74,12 @@ static struct timespec g_t0;
 
 static pthread_mutex_t g_stat_lock = PTHREAD_MUTEX_INITIALIZER;
 static gf_view_frame   g_frame;
-static int             g_hist_raw[GF_NCLASS];
-static int             g_hist_smooth[GF_NCLASS];
+static int             g_hist[GF_NCLASS];
 static int             g_err[GF_VIEW_ERR_NCH];
 static char            g_cam_fmt[24] = "?";
 static int             g_cam_w, g_cam_h, g_rotate;
+static int             g_cam_zoom = GF_ZOOM_1X;
+static double          g_cam_crop = 1.0;
 
 /* ---------------------------------------------------------------- time ---- */
 static double mono_now(void)
@@ -230,42 +235,41 @@ static const char *cls_name(int c)
 static int serve_stats(int fd, int keep)
 {
     char j[4096];
-    char hr[160], hs[160], nm[320];
+    char hh[160], nm[320];
     gf_view_frame f;
     int errs[GF_VIEW_ERR_NCH];
-    int hist_r[GF_NCLASS], hist_s[GF_NCLASS];
+    int hist[GF_NCLASS];
     char fmt[24];
-    int w, h, rot, n;
+    int w, h, rot, zoom, n;
+    double crop;
 
     pthread_mutex_lock(&g_stat_lock);
     f = g_frame;
     memcpy(errs, g_err, sizeof errs);
-    memcpy(hist_r, g_hist_raw, sizeof hist_r);
-    memcpy(hist_s, g_hist_smooth, sizeof hist_s);
+    memcpy(hist, g_hist, sizeof hist);
     snprintf(fmt, sizeof fmt, "%s", g_cam_fmt);
     w = g_cam_w; h = g_cam_h; rot = g_rotate;
+    zoom = g_cam_zoom; crop = g_cam_crop;
     pthread_mutex_unlock(&g_stat_lock);
 
-    json_iarray(hr, sizeof hr, hist_r, GF_NCLASS);
-    json_iarray(hs, sizeof hs, hist_s, GF_NCLASS);
+    json_iarray(hh, sizeof hh, hist, GF_NCLASS);
     json_names(nm, sizeof nm);
 
     n = snprintf(j, sizeof j,
         "{\"ok\":1,\"frame\":%ld,\"uptime\":%.1f,\"fps\":%.2f,"
-        "\"raw\":%d,\"raw_name\":\"%s\",\"smooth\":%d,\"smooth_name\":\"%s\","
-        "\"votes\":%d,\"window\":%d,\"rotate\":%d,"
+        "\"cls\":%d,\"cls_name\":\"%s\","
+        "\"rotate\":%d,\"zoom\":%d,\"crop\":%.2f,"
         "\"cam\":{\"fmt\":\"%s\",\"w\":%d,\"h\":%d},"
         "\"ms\":{\"total\":%.2f,\"decode\":%.2f,\"resize\":%.2f,\"npu\":%.2f},"
-        "\"hist_raw\":[%s],\"hist_smooth\":[%s],"
+        "\"hist\":[%s],"
         "\"err\":{\"jpeg\":%d,\"npu\":%d},"
         "\"names\":[%s]}",
         f.frame, f.uptime_s, f.fps,
-        f.raw_class, cls_name(f.raw_class),
-        f.smooth_class, cls_name(f.smooth_class),
-        f.votes, f.window, rot,
+        f.cls, cls_name(f.cls),
+        rot, zoom, crop,
         fmt, w, h,
         f.ms_total, f.ms_decode, f.ms_resize, f.ms_npu,
-        hr, hs,
+        hh,
         errs[GF_VIEW_ERR_JPEG], errs[GF_VIEW_ERR_NPU],
         nm);
 
@@ -450,13 +454,16 @@ static void *accept_main(void *arg)
 }
 
 /* --------------------------------------------------------------- public --- */
-void gf_view_set_camera(const char *fmt, int w, int h, int rotate_deg)
+void gf_view_set_camera(const char *fmt, int w, int h, int rotate_deg,
+                        int zoom, double crop)
 {
     pthread_mutex_lock(&g_stat_lock);
     snprintf(g_cam_fmt, sizeof g_cam_fmt, "%s", fmt ? fmt : "?");
     g_cam_w = w;
     g_cam_h = h;
     g_rotate = rotate_deg;
+    g_cam_zoom = zoom;
+    g_cam_crop = crop;
     pthread_mutex_unlock(&g_stat_lock);
 }
 
@@ -477,7 +484,7 @@ int gf_view_parse_rotate(const char *s)
     return -1;
 }
 
-static void publish_chan(gf_chan *c, const uint8_t *src, int w, int h, double t)
+static void publish_chan(gf_chan *c, const uint8_t *src, int w, int h, int stride, double t)
 {
     if (!src || w <= 0 || h <= 0) return;
 
@@ -497,7 +504,14 @@ static void publish_chan(gf_chan *c, const uint8_t *src, int w, int h, double t)
         c->w = w;
         c->h = h;
     }
-    memcpy(c->buf, src, (size_t)w * (size_t)h * 3u);
+    if (stride == w * 3) {
+        memcpy(c->buf, src, (size_t)w * (size_t)h * 3u);
+    } else {
+        int y;
+        for (y = 0; y < h; ++y)
+            memcpy(c->buf + (size_t)y * (size_t)w * 3u,
+                   src + (size_t)y * (size_t)stride, (size_t)w * 3u);
+    }
     c->have = 1;
     c->last_pub = t;
     pthread_mutex_unlock(&c->lock);
@@ -505,24 +519,20 @@ static void publish_chan(gf_chan *c, const uint8_t *src, int w, int h, double t)
 
 void gf_view_publish(const gf_view_frame *f,
                      const uint8_t *rgb96,
-                     const uint8_t *scene, int scene_w, int scene_h)
+                     const uint8_t *scene, int scene_w, int scene_h, int scene_stride)
 {
     double t;
-    int i;
 
     if (g_listen_fd < 0) return;         /* viewer not running */
 
     pthread_mutex_lock(&g_stat_lock);
     g_frame = *f;
-    if (f->raw_class >= 0 && f->raw_class < GF_NCLASS)       ++g_hist_raw[f->raw_class];
-    if (f->smooth_class >= 0 && f->smooth_class < GF_NCLASS) ++g_hist_smooth[f->smooth_class];
+    if (f->cls >= 0 && f->cls < GF_NCLASS) ++g_hist[f->cls];
     pthread_mutex_unlock(&g_stat_lock);
 
     t = mono_now();
-    publish_chan(&g_ch[CH_PREVIEW], rgb96, 96, 96, t);
-    if (scene) publish_chan(&g_ch[CH_SCENE], scene, scene_w, scene_h, t);
-
-    (void)i;
+    publish_chan(&g_ch[CH_PREVIEW], rgb96, 96, 96, 96 * 3, t);
+    if (scene) publish_chan(&g_ch[CH_SCENE], scene, scene_w, scene_h, scene_stride, t);
 }
 
 static void print_urls(int port)

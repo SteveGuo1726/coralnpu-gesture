@@ -63,7 +63,7 @@ int main(int argc, char **argv)
     printf("== resize_rgb96 geometry ==\n");
 
     /* ---- rotation 0: the baseline ---------------------------------------- */
-    resize_rgb96(src, SW, SH, rot0, 0);
+    resize_rgb96(src, SW, rot0, 0, 0, 0, SW, SH);
     for (oy = 0; oy < OUT_H; oy += 7)
         for (ox = 0; ox < OUT_W; ox += 11) {
             int er, eg;
@@ -78,7 +78,7 @@ int main(int argc, char **argv)
     /* ---- every rotation, every pixel ------------------------------------- */
     for (i = 1; i < 4; ++i) {
         int bad = 0;
-        resize_rgb96(src, SW, SH, dst, rots[i]);
+        resize_rgb96(src, SW, dst, rots[i], 0, 0, SW, SH);
         for (oy = 0; oy < OUT_H; ++oy)
             for (ox = 0; ox < OUT_W; ++ox) {
                 int er, eg;
@@ -96,7 +96,7 @@ int main(int argc, char **argv)
     }
 
     /* ---- 180 must be exactly "read the unrotated image backwards" -------- */
-    resize_rgb96(src, SW, SH, dst, 180);
+    resize_rgb96(src, SW, dst, 180, 0, 0, SW, SH);
     {
         int n = 0;
         for (y = 0; y < OUT_H; ++y)
@@ -113,14 +113,61 @@ int main(int argc, char **argv)
     {
         static uint8_t t1[OUT_RGB_BYTES];
         int n;
-        resize_rgb96(src, SW, SH, t1, 90);
+        resize_rgb96(src, SW, t1, 90, 0, 0, SW, SH);
         /* Feed the rotated result back in at 96x96 with rot 270: since it is
          * already 96x96 the box average is a 1:1 copy, so this composes the
          * two rotations exactly. */
-        resize_rgb96(t1, OUT_W, OUT_H, dst, 270);
+        resize_rgb96(t1, OUT_W, dst, 270, 0, 0, OUT_W, OUT_H);
         n = memcmp(dst, rot0, OUT_RGB_BYTES) ? 1 : 0;
         CHK(n == 0, "rot90 then rot270 is not the identity");
         if (!n) printf("  rot90+rot270 composes back to the original\n");
+    }
+
+    /* ---- the --crop window ------------------------------------------------
+     * The source encodes its own coordinates, so a window is easy to verify:
+     * with a 2x crop of a 192x192 frame the window is the central 96x96 at
+     * (48,48), the box average becomes 1:1, and the output must read out as
+     * R = 48+ox, G = 48+oy.  Getting the window offset wrong (e.g. cropping
+     * from the origin instead of the centre) is exactly the bug this catches. */
+    {
+        int bad = 0;
+        resize_rgb96(src, SW, dst, 0, 48, 48, 96, 96);
+        for (oy = 0; oy < OUT_H; ++oy)
+            for (ox = 0; ox < OUT_W; ++ox) {
+                int er = 48 + ox, eg = 48 + oy;
+                if (dst[(oy * OUT_W + ox) * 3 + 0] != er ||
+                    dst[(oy * OUT_W + ox) * 3 + 1] != eg) {
+                    if (bad < 3)
+                        printf("  FAIL  crop2x(%d,%d) = (%u,%u) want (%d,%d)\n", ox, oy,
+                               dst[(oy * OUT_W + ox) * 3 + 0],
+                               dst[(oy * OUT_W + ox) * 3 + 1], er, eg);
+                    ++bad;
+                }
+            }
+        fails += bad;
+        if (!bad) printf("  crop    centred 2x window reads the middle of the frame\n");
+    }
+
+    /* crop_window() itself: the common cases, including the clamps. */
+    {
+        int x0, y0, w, h;
+        crop_window(640, 480, 1.0,  &x0, &y0, &w, &h);
+        CHK(x0 == 0 && y0 == 0 && w == 640 && h == 480, "crop 1.0 is not the whole frame (%d,%d %dx%d)", x0, y0, w, h);
+        crop_window(640, 480, 2.0, &x0, &y0, &w, &h);
+        CHK(x0 == 160 && y0 == 120 && w == 320 && h == 240, "crop 2.0 is not the centre (%d,%d %dx%d)", x0, y0, w, h);
+        crop_window(640, 480, 4.0, &x0, &y0, &w, &h);
+        CHK(x0 == 240 && y0 == 180 && w == 160 && h == 120, "crop 4.0 is not the centre (%d,%d %dx%d)", x0, y0, w, h);
+        /* Clamp: a crop so aggressive that the window would fall below the model
+         * input must stop at the input size, not produce a 1-pixel window. */
+        crop_window(640, 480, 32.0, &x0, &y0, &w, &h);
+        CHK(w >= OUT_W && h >= OUT_H && x0 >= 0 && y0 >= 0 &&
+            x0 + w <= 640 && y0 + h <= 480,
+            "crop 32.0 escapes the frame or collapses (%d,%d %dx%d)", x0, y0, w, h);
+        /* Degenerate source (smaller than the model input): must still be inside. */
+        crop_window(64, 64, 4.0, &x0, &y0, &w, &h);
+        CHK(x0 == 0 && y0 == 0 && w == 64 && h == 64,
+            "crop of a 64x64 source should clamp to the source (%d,%d %dx%d)", x0, y0, w, h);
+        printf("  crop_window clamps and centre offsets correct\n");
     }
 
     /* ---- odd geometry: the box bounds must not read out of range --------- */
@@ -130,7 +177,7 @@ int main(int argc, char **argv)
          * corner values). */
         static uint8_t big[640 * 480 * 3];
         memset(big, 0x5A, sizeof big);
-        resize_rgb96(big, 640, 480, dst, 180);
+        resize_rgb96(big, 640, dst, 180, 0, 0, 640, 480);
         CHK(dst[0] == 0x5A && dst[OUT_RGB_BYTES - 1] == 0x5A,
             "640x480 rot180 produced unexpected corner values");
         printf("  640x480 rot180 handled\n");

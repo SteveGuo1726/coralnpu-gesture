@@ -1023,3 +1023,63 @@ env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
 
 and to avoid running anything else across the same network path while a build is
 finishing.
+
+## 23. `v4l2-ctl -c` changes a *live* camera and the value sticks — reset it after experimenting
+
+Setting a UVC control is not scoped to the process that sets it.  A camera has one
+control state, so `v4l2-ctl -d /dev/video0 -c zoom_absolute=400` issued from a
+second shell **changes the framing of the `gf_camera` that is already streaming**,
+and the value **survives that program exiting** (it lives in the camera, not in the
+driver or in our code).
+
+That is exactly what happened while investigating the framing: zoom was stepped
+100 -> 400 -> 250 to prove `zoom_absolute` is a centred crop, and had to be put
+back to 100 by hand.  Had it been left at 400 the next session would have started
+from a 4x zoomed view and concluded "the camera is like that".
+
+```
+v4l2-ctl -d /dev/video0 -l                  # always look at the CURRENT values first
+v4l2-ctl -d /dev/video0 -c zoom_absolute=100
+```
+
+Two more things about that control set, both measured on the See3CAM_CU30:
+
+* `zoom_absolute` 100..800 really is a **centred crop** (zoom=400 matches the
+  central 160x120 of the zoom=100 frame, best alignment at the frame centre).
+  Prefer it to cropping in software: the camera crops the *sensor* and then
+  scales, so the region keeps far more of the JPEG's bits, and AE/AWB meter on
+  the hand instead of on the whole room.  A side effect is that the image gets
+  brighter and warmer (measured per-channel gains 1.31/1.40/1.50) -- so "the
+  colours changed" after a zoom is expected, not a colour bug.
+* **Auto white balance is already the best setting available.**  Measured channel
+  means: default (AWB on) R-B = +8.6; saturation 30 -> +15.7; AWB off at 6500K ->
+  +32.8; AWB off at 3000K -> -73.4.  There are only eight controls and no colour
+  matrix, so a colour cast seen in the viewer is the ISP + the room lighting, not
+  something this code did.  Prove it on the received image before touching code:
+  a BGR/RGB swap is immediately obvious on skin, and it is not what this is.
+
+## 24. A monitor must show the model, not flatter it — do not add averaging
+
+The first version of the viewer ran the class through a 5-frame majority vote and
+displayed *that* as the headline.  It is a tempting thing to write, and it is
+wrong for a diagnostic tool:
+
+* it hides the measurement that the tool exists to produce -- "80% right, and
+  wrong in these particular situations" collapses into a smaller number with the
+  *situations* erased;
+* the label lags the picture by up to 4 frames, so the hand on screen and the
+  word next to it are not the same instant;
+* frame-to-frame churn **is** the evidence that a given frame was misclassified.
+
+The vote, the `-m` option and the "stable frames" accuracy metric were all
+deleted.  `tests/t_view.c` now asserts the opposite: if `votes` or `smooth` ever
+reappear in `/stats`, the test fails.
+
+The related trap, worth internalising: an 18-class closed-set classifier has no
+"no gesture" class, so when there is no hand in frame it **still** has to output an
+argmax (commonly `call`, whose training set is the most heterogeneous).  That is a
+boundary of the model, not a fault in the pipeline -- and this hardware exposes
+only the 5-bit argmax (`GF_POST_CLASS_REG`; the FC output is not stored to DDR
+because `run_gap_fc()` sets `GF_STORE_CONTROL = 0`), so there is **no confidence
+available to threshold on** without changing the RTL.  Say that plainly in the UI
+instead of inventing a gate.

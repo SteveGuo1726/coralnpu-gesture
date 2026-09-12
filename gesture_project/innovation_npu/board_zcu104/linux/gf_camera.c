@@ -35,6 +35,36 @@
  * a preview: the model was trained on upright gestures, and a flipped hand is a
  * different gesture as far as it is concerned.
  *
+ * ---------------------------------------------------------------- framing --
+ * The single biggest lever on accuracy is HOW MUCH OF THE FRAME THE HAND FILLS.
+ *
+ * HaGRID (and therefore this model) is trained on pictures where the hand is the
+ * subject: it occupies most of the image.  A wide-angle camera pointed at a room
+ * puts a hand at arm's length into a few percent of a 640x480 frame, and after
+ * the box downscale to 96x96 the hand is a ~15x15 blob.  The classifier has
+ * never seen that, so its output degenerates -- most often onto classes whose
+ * training set is the most heterogeneous, which is why an empty scene lands on
+ * e.g. "call" essentially at random.
+ *
+ * Two runtime knobs therefore exist, because getting the hand to fill the frame
+ * is worth more than any other tuning here:
+ *
+ *   --zoom N   the camera's own digital zoom (V4L2 zoom_absolute, 100..800 =>
+ *              1x..8x).  MEASURED on the See3CAM_CU30: this really is a centred
+ *              crop (zoom=400 matches the central 160x120 of the zoom=100 frame,
+ *              best alignment at the exact centre, and it keeps full sensor
+ *              detail because the ISP crops before scaling).  Preferred over
+ *              --crop: the same region gets far more of the JPEG's bits, and the
+ *              camera's auto-exposure/white-balance meter on the hand instead of
+ *              on the whole room.
+ *   --crop F   a software centre crop, linear factor F >= 1.  A fallback for
+ *              anything --zoom cannot reach, and for cameras without zoom.
+ *
+ * Both are centred, so the hand has to be centred too.  `--zoom 300` on this rig
+ * means "point the camera so the hand is in the middle and about a third of the
+ * frame wide".
+ * ---------------------------------------------------------------------------
+ *
  * --view PORT starts a small HTTP server (gf_view.c) so the laptop browser can
  * watch the pipeline.  It is off by default and costs nothing when off.
  */
@@ -67,9 +97,9 @@
 #define OUT_H           96
 #define OUT_RGB_BYTES   (OUT_W * OUT_H * 3)
 
-/* Length of the majority-vote history.  -m is clamped to this; the array used
- * to be hard-coded to 32 with no clamp, so `-m 33` walked off the stack. */
-#define MAX_VOTE_WINDOW 32
+/* V4L2 zoom_absolute on the See3CAM_CU30: 100 = 1x, 800 = 8x (measured). */
+#define GF_ZOOM_MIN     100
+#define GF_ZOOM_MAX     800
 
 /* ------------------------------------------------------------------ util -- */
 static double now_s(void)
@@ -113,26 +143,55 @@ static void rot_cell(int ox, int oy, int rot, int *cx, int *cy)
     }
 }
 
-/* Area-average downscale to 96x96.  Bounds are computed in 64-bit to avoid
- * overflow on large inputs (e.g. 1920x1080).
+/* The centred source window that feeds the model, after --crop.
+ *
+ * --crop F means "keep the central 1/F of the frame, linearly, and scale that to
+ * 96x96".  It has to be applied BEFORE the downscale, not after: cropping a
+ * 96x96 downscale would just be a zoom into an already-averaged image, i.e. no
+ * extra detail at all.  Clamped so the window is never smaller than the output
+ * (below that there is nothing left to average and the sampling would alias). */
+static void crop_window(int sw, int sh, double crop, int *x0, int *y0, int *cw, int *ch)
+{
+    int w, h;
+    if (!(crop > 1.0)) crop = 1.0;
+    w = (int)((double)sw / crop);
+    h = (int)((double)sh / crop);
+    if (w > sw) w = sw;
+    if (h > sh) h = sh;
+    if (w < OUT_W) w = OUT_W < sw ? OUT_W : sw;
+    if (h < OUT_H) h = OUT_H < sh ? OUT_H : sh;
+    *cw = w;
+    *ch = h;
+    *x0 = (sw - w) / 2;
+    *y0 = (sh - h) / 2;
+}
+
+/* Area-average downscale to 96x96.
+ *
+ * `crop_x/crop_y/crop_w/crop_h` select the centred source window to sample (see
+ * crop_window()); bounds are computed in 64-bit to avoid overflow on large
+ * inputs (e.g. 1920x1080).  `sw` is the source row pitch in pixels -- the window
+ * is a slice of a wider frame, so the caller's `sh` is implied by crop_y+crop_h
+ * and is deliberately not a parameter.
  *
  * Rotating inside the sampling loop is exact and free: the rotation is a
  * permutation of the 96x96 output grid, so each output cell still averages the
  * same source box it would have averaged, just assigned to a different place.
  * Rotating the *result* afterwards would be equivalent for 180 degrees and a
  * half-pixel approximation for 90/270. */
-static void resize_rgb96(const uint8_t *src, int sw, int sh, uint8_t *dst, int rot)
+static void resize_rgb96(const uint8_t *src, int sw, uint8_t *dst, int rot,
+                         int crop_x, int crop_y, int crop_w, int crop_h)
 {
     int oy, ox, c;
-    if (sw < OUT_W || sh < OUT_H) {
+    if (crop_w < OUT_W || crop_h < OUT_H) {
         /* Upscaling is not needed for any sane camera; fall back to nearest so
          * the program still produces something instead of failing. */
         for (oy = 0; oy < OUT_H; ++oy) {
             for (ox = 0; ox < OUT_W; ++ox) {
                 int cx, cy, sy, sx;
                 rot_cell(ox, oy, rot, &cx, &cy);
-                sy = (int)((int64_t)cy * sh / OUT_H);
-                sx = (int)((int64_t)cx * sw / OUT_W);
+                sy = crop_y + (int)((int64_t)cy * crop_h / OUT_H);
+                sx = crop_x + (int)((int64_t)cx * crop_w / OUT_W);
                 for (c = 0; c < 3; ++c)
                     dst[(oy * OUT_W + ox) * 3 + c] = src[((size_t)sy * sw + sx) * 3 + c];
             }
@@ -145,11 +204,11 @@ static void resize_rgb96(const uint8_t *src, int sw, int sh, uint8_t *dst, int r
             uint32_t acc[3] = {0U, 0U, 0U};
             uint32_t n = 0U;
             rot_cell(ox, oy, rot, &cx, &cy);
-            y0 = (int)((int64_t)cy       * sh / OUT_H);
-            y1 = (int)((int64_t)(cy + 1) * sh / OUT_H);
+            y0 = crop_y + (int)((int64_t)cy       * crop_h / OUT_H);
+            y1 = crop_y + (int)((int64_t)(cy + 1) * crop_h / OUT_H);
             if (y1 <= y0) y1 = y0 + 1;
-            x0 = (int)((int64_t)cx       * sw / OUT_W);
-            x1 = (int)((int64_t)(cx + 1) * sw / OUT_W);
+            x0 = crop_x + (int)((int64_t)cx       * crop_w / OUT_W);
+            x1 = crop_x + (int)((int64_t)(cx + 1) * crop_w / OUT_W);
             if (x1 <= x0) x1 = x0 + 1;
             for (y = y0; y < y1; ++y) {
                 const uint8_t *row = src + (size_t)y * sw * 3;
@@ -371,6 +430,44 @@ static int v4l2_try_format(int fd, uint32_t want, int w, int h,
     return 0;
 }
 
+/* Set the camera's digital zoom (V4L2_CID_ZOOM_ABSOLUTE, 100 = 1x on this
+ * camera).  Never fatal: a camera that does not implement zoom must still run,
+ * so a failure is reported and ignored -- but it is *reported*, because silently
+ * continuing without the zoom would silently change the framing the model sees,
+ * which is the whole point of the option.
+ *
+ * Returns 0 if the driver accepted and read back the requested value. */
+static int v4l2_set_zoom(int fd, int zoom)
+{
+    struct v4l2_queryctrl q;
+    struct v4l2_control c;
+
+    memset(&q, 0, sizeof q);
+    q.id = V4L2_CID_ZOOM_ABSOLUTE;
+    if (ioctl(fd, VIDIOC_QUERYCTRL, &q) == 0 && !(q.flags & V4L2_CTRL_FLAG_DISABLED)) {
+        if (zoom < (int)q.minimum || zoom > (int)q.maximum) {
+            fprintf(stderr, "gf_camera: zoom %d is outside the camera's range %d..%d\n",
+                    zoom, (int)q.minimum, (int)q.maximum);
+            return -1;
+        }
+    }
+
+    memset(&c, 0, sizeof c);
+    c.id = V4L2_CID_ZOOM_ABSOLUTE;
+    c.value = zoom;
+    if (ioctl(fd, VIDIOC_S_CTRL, &c) != 0) {
+        fprintf(stderr, "gf_camera: VIDIOC_S_CTRL(zoom=%d): %s\n", zoom, strerror(errno));
+        return -1;
+    }
+    memset(&c, 0, sizeof c);
+    c.id = V4L2_CID_ZOOM_ABSOLUTE;
+    if (ioctl(fd, VIDIOC_G_CTRL, &c) == 0) {
+        printf("gf_camera: digital zoom set to %d (read back %d)\n", zoom, c.value);
+        return c.value == zoom ? 0 : -1;
+    }
+    return 0;
+}
+
 static int v4l2_setup(struct v4l2_state *st, const char *dev, int want_w, int want_h)
 {
     struct v4l2_format fmt;
@@ -527,9 +624,14 @@ static void usage(const char *argv0)
            "  -d DEV        video device (default /dev/video0)\n"
            "  -s WxH        capture size to request (default 640x480)\n"
            "  -n N          stop after N frames (0 = forever, default 0)\n"
-           "  -m N          majority-vote smoothing window in frames (default 5)\n"
+           "  --zoom N      camera digital zoom, %d..%d (%d = 1x).  A centred crop\n"
+           "                done in the camera's ISP: the hand fills more of the\n"
+           "                frame, which is what the model was trained on.\n"
+           "  --crop F      software centre crop, linear factor F >= 1 (default 1).\n"
+           "                Composes with --zoom; costs a little CPU, and (unlike\n"
+           "                --zoom) it throws the discarded pixels away again.\n"
            "  --rotate D    rotate the image D degrees clockwise before the NPU\n"
-           "                (0/90/180/270; the ZCU104 rig needs 180)\n"
+           "                (0/90/180/270; the ZCU104 rig is upright, so 0)\n"
            "  --view PORT   serve a live HTTP viewer on PORT (default: off).\n"
            "                Nothing is copied unless a browser is actually\n"
            "                asking, so this does not affect the timings.\n"
@@ -539,7 +641,7 @@ static void usage(const char *argv0)
            "  --save-ppm P  save the resized 96x96 RGB that is fed to the NPU\n"
            "                (with -n N this is the last frame, i.e. after the\n"
            "                 camera's auto-exposure has settled; otherwise frame 3)\n",
-           argv0, GF_VIEW_DEFAULT_PAGE);
+           argv0, GF_ZOOM_MIN, GF_ZOOM_MAX, GF_ZOOM_MIN, GF_VIEW_DEFAULT_PAGE);
 }
 
 static volatile sig_atomic_t g_stop = 0;
@@ -552,9 +654,10 @@ int main(int argc, char **argv)
     const char *view_page = GF_VIEW_DEFAULT_PAGE;
     int want_w = 640, want_h = 480;
     int max_frames = 0;
-    int smooth = 5;
     int rotate = 0;
     int view_port = 0;
+    int zoom = 0;                 /* 0 = leave the camera alone */
+    double crop = 1.0;
     int do_list = 0, do_selftest = 0;
     int i;
 
@@ -566,10 +669,11 @@ int main(int argc, char **argv)
             if (sscanf(argv[++i], "%dx%d", &want_w, &want_h) != 2) { usage(argv[0]); return 2; }
         }
         else if (!strcmp(argv[i], "-n") && i + 1 < argc) max_frames = atoi(argv[++i]);
-        else if (!strcmp(argv[i], "-m") && i + 1 < argc) smooth = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--save-ppm") && i + 1 < argc) save_ppm = argv[++i];
         else if (!strcmp(argv[i], "--view-page") && i + 1 < argc) view_page = argv[++i];
         else if (!strcmp(argv[i], "--view") && i + 1 < argc) view_port = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--zoom") && i + 1 < argc) zoom = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--crop") && i + 1 < argc) crop = atof(argv[++i]);
         else if (!strcmp(argv[i], "--rotate") && i + 1 < argc) {
             rotate = gf_view_parse_rotate(argv[++i]);
             if (rotate < 0) {
@@ -579,9 +683,17 @@ int main(int argc, char **argv)
         }
         else { usage(argv[0]); return 2; }
     }
-    if (smooth < 1) smooth = 1;
-    if (smooth > MAX_VOTE_WINDOW) smooth = MAX_VOTE_WINDOW;
     if (view_port < 0 || view_port > 65535) { usage(argv[0]); return 2; }
+    if (zoom != 0 && (zoom < GF_ZOOM_MIN || zoom > GF_ZOOM_MAX)) {
+        fprintf(stderr, "gf_camera: --zoom %d out of range %d..%d (0 = leave as-is)\n",
+                zoom, GF_ZOOM_MIN, GF_ZOOM_MAX);
+        return 2;
+    }
+    if (!(crop >= 1.0) || crop > 32.0) {
+        fprintf(stderr, "gf_camera: --crop takes F >= 1 (1 = no crop), got '%s'\n",
+                crop > 32.0 ? "(too large)" : "less than 1");
+        return 2;
+    }
 
     /* The NPU must be up before anything else: if the PL is not configured or
      * its clock is gated, GF_MAGIC will not read back and we want to know that
@@ -610,8 +722,8 @@ int main(int argc, char **argv)
         size_t   rgb_cap = 0U;
         uint8_t  rgb96[OUT_RGB_BYTES];
         uint32_t cls = 0U;
-        int history[MAX_VOTE_WINDOW];
-        int hist_n = 0;
+        int crop_x = 0, crop_y = 0, crop_w = 0, crop_h = 0;
+        int last_cw = 0, last_ch = 0;
         long frame_no = 0;
         double t_prev = 0.0;
         double t_boot = now_s();
@@ -627,6 +739,23 @@ int main(int argc, char **argv)
         rgb_frame = malloc(rgb_cap);
         if (!rgb_frame) die("malloc");
 
+        /* After the format is settled, because the zoom is a property of the
+         * camera and survives across formats. */
+        if (zoom != 0) {
+            if (v4l2_set_zoom(st.fd, zoom) != 0)
+                fprintf(stderr, "gf_camera: continuing without the requested zoom\n");
+        }
+
+        crop_window(st.width, st.height, crop, &crop_x, &crop_y, &crop_w, &crop_h);
+        printf("gf_camera: model input = %dx%d centred crop of %dx%d"
+               " (crop %.2fx%s), area-average to %dx%d\n",
+               crop_w, crop_h, st.width, st.height, crop,
+               zoom ? ", on top of the camera's digital zoom" : "",
+               OUT_W, OUT_H);
+        if (crop_w < OUT_W * 2 || crop_h < OUT_H * 2)
+            printf("gf_camera: note: the crop is under 2x the model input, so the\n"
+                   "           resize is no longer a real downscale -- expect softness\n");
+
         if (rotate)
             printf("gf_camera: rotating the NPU input %d degrees clockwise\n", rotate);
 
@@ -634,7 +763,8 @@ int main(int argc, char **argv)
          * taken or the box has no free socket, say so and carry on. */
         if (view_port > 0) {
             char fb[5];
-            gf_view_set_camera(fourcc_str(st.pixfmt, fb), st.width, st.height, rotate);
+            gf_view_set_camera(fourcc_str(st.pixfmt, fb), crop_w, crop_h, rotate,
+                               zoom ? zoom : GF_ZOOM_MIN, crop);
             printf("gf_camera: --view %d requested (page %s)\n", view_port, view_page);
             if (gf_view_start(view_port, view_page) != 0) {
                 fprintf(stderr, "gf_camera: viewer disabled; the pipeline is unaffected\n");
@@ -688,7 +818,18 @@ int main(int argc, char **argv)
             t_dec = now_s();
             if (!ok) continue;
 
-            resize_rgb96(rgb_frame, cw, ch, rgb96, rotate);
+            /* The MJPEG path sizes the buffer from the JPEG header, so the
+             * decoded geometry can differ from the negotiated one.  The crop
+             * window must follow it or the box filter would read outside the
+             * frame. */
+            if (cw != last_cw || ch != last_ch) {
+                crop_window(cw, ch, crop, &crop_x, &crop_y, &crop_w, &crop_h);
+                last_cw = cw;
+                last_ch = ch;
+            }
+
+            resize_rgb96(rgb_frame, cw, rgb96, rotate,
+                         crop_x, crop_y, crop_w, crop_h);
             t_res = now_s();
 
             if (gf_npu_run_frame(rgb96, &cls, NULL) != 0) {
@@ -698,21 +839,16 @@ int main(int argc, char **argv)
             }
             t_npu = now_s();
 
-            /* Majority vote over a short window: a single-frame flip is noise
-             * the user should not see. */
-            if (hist_n < smooth) {
-                history[hist_n++] = (int)cls;
-            } else {
-                memmove(history, history + 1, sizeof(int) * (size_t)(smooth - 1));
-                history[smooth - 1] = (int)cls;
-            }
+            /* The reported class is THIS frame's, with no smoothing.
+             *
+             * There used to be a majority vote over the last 5 frames here, and
+             * it was a mistake: it hides exactly the thing the monitor exists to
+             * show.  A vote turns "the model is right 80% of the time, and wrong
+             * in these particular situations" into a smaller number, and it
+             * makes the reported class lag the hand by up to 4 frames, so the
+             * picture on screen and the label next to it disagree.  Frame-to-frame
+             * churn is a measurement, not noise. */
             {
-                int best = (int)cls, best_count = 0, k, j;
-                for (k = 0; k < hist_n; ++k) {
-                    int cnt = 0;
-                    for (j = 0; j < hist_n; ++j) if (history[j] == history[k]) ++cnt;
-                    if (cnt > best_count) { best_count = cnt; best = history[k]; }
-                }
                 t1 = now_s();
                 if (t_prev > 0.0) fps = 1.0 / (t1 - t_prev);
                 /* Save a *settled* frame.  With -n N that is the last one: by then
@@ -724,10 +860,10 @@ int main(int argc, char **argv)
                  * fall back to frame 3. */
                 if (save_ppm && frame_no == (max_frames > 0 ? max_frames - 1 : 3))
                     write_ppm(save_ppm, rgb96, OUT_W, OUT_H);
-                printf("frame %6ld  %-16s (raw %-16s)  %d/%d votes  %6.2f fps  %5.1f ms\n",
-                       frame_no, gf_npu_class_name((uint32_t)best),
-                       gf_npu_class_name(cls), best_count, hist_n, fps,
-                       (t1 - t0) * 1000.0);
+                printf("frame %6ld  %-16s  %6.2f fps  %5.1f ms (dec %4.1f + rs %4.1f + npu %5.1f)\n",
+                       frame_no, gf_npu_class_name(cls), fps,
+                       (t1 - t0) * 1000.0, (t_dec - t0) * 1000.0,
+                       (t_res - t_dec) * 1000.0, (t_npu - t_res) * 1000.0);
                 fflush(stdout);
 
                 /* Hand the frame to the viewer.  This is a no-op costing two
@@ -739,17 +875,19 @@ int main(int argc, char **argv)
                     nf.frame        = frame_no;
                     nf.uptime_s     = t1 - t_boot;
                     nf.fps          = fps;
-                    nf.raw_class    = (int)cls;
-                    nf.smooth_class = best;
-                    nf.votes        = best_count;
-                    nf.window       = hist_n;
+                    nf.cls          = (int)cls;
                     nf.ms_total     = (t1 - t0) * 1000.0;
                     nf.ms_decode    = (t_dec - t0) * 1000.0;
                     nf.ms_resize    = (t_res - t_dec) * 1000.0;
                     nf.ms_npu       = (t_npu - t_res) * 1000.0;
-                    /* rgb_frame/cw/ch are exactly what the model was shown, so
-                     * the page can show the *input*, not a re-decoded guess. */
-                    gf_view_publish(&nf, rgb96, rgb_frame, cw, ch);
+                    /* The scene stream is the crop the model actually sees (same
+                     * region as rgb96, at source resolution), so "what the page
+                     * shows" and "what the NPU was fed" can never drift apart.
+                     * Rows are strided: the window is a slice of the full frame. */
+                    gf_view_publish(&nf, rgb96,
+                                    rgb_frame + ((size_t)crop_y * (size_t)cw
+                                                 + (size_t)crop_x) * 3U,
+                                    crop_w, crop_h, cw * 3);
                 }
             }
             t_prev = t1;

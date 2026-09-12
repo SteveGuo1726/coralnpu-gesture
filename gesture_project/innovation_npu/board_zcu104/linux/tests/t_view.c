@@ -43,14 +43,33 @@ const char *gf_npu_class_name(uint32_t i)
 #define SW 640
 #define SH 480
 
+/* The scene stream is now the centred crop the model was fed, i.e. a *window*
+ * of the decoded frame, so it is published with a row stride.  These exercise
+ * exactly that: a 320x240 window at (160,120) inside a 640x480 frame. */
+#define VX 160
+#define VY 120
+#define VW 320
+#define VH 240
+
 static int fails;
 #define CHK(cond, ...) do { if (!(cond)) { ++fails; \
     printf("  FAIL  "); printf(__VA_ARGS__); printf("\n"); } } while (0)
 
 static uint8_t g_prev[PW * PH * 3];
-static uint8_t g_scene[SW * SH * 3];
+static uint8_t g_full[SW * SH * 3];       /* whole decoded frame */
+static uint8_t g_scene[VW * VH * 3];      /* the window inside it, packed */
 static uint8_t p1_prev[PW * PH * 3];      /* pattern 1, kept for comparison */
-static uint8_t p1_scene[SW * SH * 3];
+static uint8_t p1_scene[VW * VH * 3];
+
+/* Pack the published window out of the full frame, which is what the browser
+ * must end up seeing. */
+static void pack_window(uint8_t *dst, const uint8_t *full)
+{
+    int y;
+    for (y = 0; y < VH; ++y)
+        memcpy(dst + (size_t)y * VW * 3,
+               full + ((size_t)(y + VY) * SW + VX) * 3, (size_t)VW * 3);
+}
 
 static double now_s(void)
 {
@@ -193,22 +212,20 @@ static int check_bmp(const char *resp, const char *what,
     return 0;
 }
 
-static void publish_frame(long frame, int raw, int smooth, int votes, int window)
+static void publish_frame(long frame, int cls)
 {
     gf_view_frame f;
     memset(&f, 0, sizeof f);
     f.frame = frame;
     f.uptime_s = (double)frame / 15.0;
     f.fps = 14.8;
-    f.raw_class = raw;
-    f.smooth_class = smooth;
-    f.votes = votes;
-    f.window = window;
+    f.cls = cls;
     f.ms_total = 27.3;
     f.ms_decode = 8.1;
     f.ms_resize = 1.2;
     f.ms_npu = 17.0;
-    gf_view_publish(&f, g_prev, g_scene, SW, SH);
+    gf_view_publish(&f, g_prev,
+                    g_full + ((size_t)VY * SW + VX) * 3, VW, VH, SW * 3);
 }
 
 static double time_publish(long n)
@@ -216,13 +233,13 @@ static double time_publish(long n)
     double t0, t1;
     long i;
     for (i = 0; i < n; ++i)
-        publish_frame(i, (int)(i % 18), 9, 5, 5);
+        publish_frame(i, (int)(i % 18));
     t0 = 0; t1 = 0;
     /* The loop above is deliberately outside the timed region's bookkeeping:
      * re-run cleanly so the measurement is of publish only. */
     t0 = now_s();
     for (i = 0; i < n; ++i)
-        publish_frame(i, (int)(i % 18), 9, 5, 5);
+        publish_frame(i, (int)(i % 18));
     t1 = now_s();
     return (t1 - t0) / (double)n * 1.0e9;      /* ns per publish */
 }
@@ -252,7 +269,7 @@ int main(int argc, char **argv)
         printf("FAIL: gf_view_start(%d) failed\n", port);
         return 1;
     }
-    gf_view_set_camera("MJPEG", SW, SH, 180);
+    gf_view_set_camera("MJPEG", VW, VH, 0, 400, 1.0);
     gf_view_count_error(GF_VIEW_ERR_JPEG);
     gf_view_count_error(GF_VIEW_ERR_JPEG);
     gf_view_count_error(GF_VIEW_ERR_NPU);
@@ -278,18 +295,19 @@ int main(int argc, char **argv)
 
     /* 2. Publish while a client is interested, then read it back. */
     fill_pattern(g_prev,  PW * PH, 1);
-    fill_pattern(g_scene, SW * SH, 1);
-    publish_frame(4242, 3, 9, 4, 5);
+    fill_pattern(g_full,  SW * SH, 1);
+    pack_window(g_scene, g_full);
+    publish_frame(4242, 3);
 
     resp = get(port, "/preview.bmp", &len);
     check_bmp(resp, "/preview.bmp", g_prev, PW, PH, 1);
     free(resp);
 
     resp = get(port, "/scene.bmp", &len);
-    check_bmp(resp, "/scene.bmp", g_scene, SW, SH, 97);
+    check_bmp(resp, "/scene.bmp (strided window)", g_scene, VW, VH, 1);
     free(resp);
 
-    /* 3. /stats must carry the model's numbers and the rotation. */
+    /* 3. /stats must carry the model's numbers and the framing. */
     resp = get(port, "/stats", &len);
     if (!resp) {
         CHK(0, "/stats: no response");
@@ -297,22 +315,25 @@ int main(int argc, char **argv)
         int before = fails;
         struct { const char *needle; const char *what; } want[] = {
             { "\"frame\":4242",          "frame number" },
-            { "\"raw\":3",               "raw class" },
-            { "\"raw_name\":\"c3\"",     "raw class name" },
-            { "\"smooth_name\":\"c9\"",  "smoothed class name" },
-            { "\"votes\":4",             "votes" },
-            { "\"rotate\":180",          "rotation" },
-            { "\"w\":640",               "camera width" },
-            { "\"h\":480",               "camera height" },
+            { "\"cls\":3",               "class" },
+            { "\"cls_name\":\"c3\"",     "class name" },
+            { "\"zoom\":400",            "digital zoom" },
+            { "\"crop\":1.00",           "crop factor" },
+            { "\"rotate\":0",            "rotation" },
+            { "\"w\":320",               "published width" },
+            { "\"h\":240",               "published height" },
             { "\"fmt\":\"MJPEG\"",       "pixel format" },
             { "\"jpeg\":2",              "jpeg error counter" },
             { "\"npu\":1",               "npu error counter" },
             { "\"names\":[",             "class name table" },
             { "\"ms\":{",                "timing block" },
+            { "\"hist\":[",              "class histogram" },
         };
         for (i = 0; i < (int)(sizeof want / sizeof want[0]); ++i)
             CHK(strstr(resp, want[i].needle) != NULL, "/stats is missing %s (%s)",
                 want[i].what, want[i].needle);
+        if (strstr(resp, "votes") || strstr(resp, "smooth"))
+            CHK(0, "/stats still reports a vote/smoothing field: %s", resp);
         {
             const char *p = strstr(resp, "\"names\":[");
             const char *q;
@@ -323,7 +344,7 @@ int main(int argc, char **argv)
         if (fails != before) {
             printf("  ---- /stats as received ----\n%s\n  ----------------------------\n", resp);
         } else {
-            printf("  OK    /stats: numbers, class names, rotation, error counters\n");
+            printf("  OK    /stats: class, framing, timings, counters, histogram\n");
         }
         free(resp);
     }
@@ -355,18 +376,19 @@ int main(int argc, char **argv)
     memcpy(p1_scene, g_scene, sizeof p1_scene);
     sleep(3);
     fill_pattern(g_prev,  PW * PH, 2);
-    fill_pattern(g_scene, SW * SH, 2);
-    publish_frame(5000, 1, 1, 5, 5);
+    fill_pattern(g_full,  SW * SH, 2);
+    pack_window(g_scene, g_full);
+    publish_frame(5000, 1);
 
     resp = get(port, "/preview.bmp", &len);
     check_bmp(resp, "preview, after idle", p1_prev, PW, PH, 1);
     free(resp);
     resp = get(port, "/scene.bmp", &len);
-    check_bmp(resp, "scene, after idle", p1_scene, SW, SH, 97);
+    check_bmp(resp, "scene, after idle", p1_scene, VW, VH, 1);
     free(resp);
 
     /* And with interest re-established the very next publish must land. */
-    publish_frame(5001, 2, 2, 5, 5);
+    publish_frame(5001, 2);
     resp = get(port, "/preview.bmp", &len);
     check_bmp(resp, "preview, gate re-opened", g_prev, PW, PH, 1);
     free(resp);
@@ -386,7 +408,7 @@ int main(int argc, char **argv)
         for (j = 0; j < 4; ++j) { resp = get(port, "/preview.bmp", &len); free(resp); }
         active = time_publish(4000);
 
-        /* The scene stream is the expensive one (640x480x3 = 900 KB, capped at
+        /* The scene stream is the expensive one (320x240x3 = 230 KB, capped at
          * 5 fps).  Time a single publish that actually includes it: refresh
          * interest, let the throttle window expire, then publish once. */
         scene = 0.0;
@@ -396,7 +418,7 @@ int main(int argc, char **argv)
             resp = get(port, "/scene.bmp", &len);   free(resp);
             usleep(250000);
             t0 = now_s();
-            publish_frame(j, 3, 3, 5, 5);
+            publish_frame(j, 3);
             dt = (now_s() - t0) * 1.0e9;
             if (scene == 0.0 || dt < scene) scene = dt;
         }

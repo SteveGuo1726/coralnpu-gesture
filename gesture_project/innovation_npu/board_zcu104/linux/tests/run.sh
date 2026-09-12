@@ -6,18 +6,19 @@
 #
 # Two programs:
 #
-#   t_geom  The 96x96 area-average resize and its --rotate index math.  It pulls
-#           the real gf_camera.c in with `main` renamed out of the way, so what
-#           is under test is the shipped code rather than a paraphrase of it.
-#           Covers: all four rotations against an independently derived
-#           expectation, rot180 == reverse, rot90+rot270 == identity, the
-#           640x480 geometry, and the box bounds at the edges.
+#   t_geom  The 96x96 area-average resize, its --rotate index math, and the
+#           --crop window.  It pulls the real gf_camera.c in with `main` renamed
+#           out of the way, so what is under test is the shipped code rather
+#           than a paraphrase of it.  Covers: all four rotations against an
+#           independently derived expectation, rot180 == reverse,
+#           rot90+rot270 == identity, the 640x480 geometry, the box bounds at
+#           the edges, and crop_window()'s centre offsets and clamps.
 #
 #   t_view  The HTTP viewer end to end.  Covers: the routes, the 503-before-
 #           first-frame behaviour, byte-exact BMP for both the 96x96 preview and
-#           the 640x480 scene (bottom-up row order included), the /stats JSON
-#           fields, and -- deterministically, not by timing -- the claim that
-#           publishing is free when nobody is watching.
+#           the *strided* scene window (bottom-up row order included), the
+#           /stats JSON fields, and -- deterministically, not by timing -- the
+#           claim that publishing is free when nobody is watching.
 #
 # Why these exist: the rotation sign and the BMP row order are the two things
 # that look obviously right and are 180 degrees / upside down, and the board is
