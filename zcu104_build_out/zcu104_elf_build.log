@@ -1,0 +1,43 @@
+SRC_FILES=21
+..\src\gestureflow_hagrid18_dmp_main.c: In function 'main':
+..\src\gestureflow_hagrid18_dmp_main.c:552:38: warning: variable 'post_progress' set but not used [-Wunused-but-set-variable]
+  552 |     u32 gap_fnv, fc_fnv, post_class, post_progress;
+      |                                      ^~~~~~~~~~~~~
+..\src\gestureflow_hagrid18_dmp_main.c:545:36: warning: unused variable 'store_status' [-Wunused-variable]
+  545 |     u32 index, status, dma_status, store_status, hash;
+      |                                    ^~~~~~~~~~~~
+..\src\gestureflow_hagrid18_dmp_main.c: At top level:
+..\src\gestureflow_hagrid18_dmp_main.c:533:12: warning: 'verify_full_tensor' defined but not used [-Wunused-function]
+  533 | static int verify_full_tensor(const int8_t *buf, uint32_t bytes, uint32_t expected_fnv)
+      |            ^~~~~~~~~~~~~~~~~~
+..\src\gestureflow_hagrid18_dmp_main.c:471:12: warning: 'run_layer' defined but not used [-Wunused-function]
+  471 | static u32 run_layer(uint32_t mode, uint32_t source, uint32_t bytes, uint32_t destination,
+      |            ^~~~~~~~~
+..\src\gestureflow_hagrid18_dmp_main.c:403:13: warning: 'wait_input_loaded' defined but not used [-Wunused-function]
+  403 | static void wait_input_loaded(void)
+      |             ^~~~~~~~~~~~~~~~~
+..\src\gestureflow_hagrid18_dmp_main.c:369:13: warning: 'config_head_params' defined but not used [-Wunused-function]
+  369 | static void config_head_params(uint32_t first_oc)
+      |             ^~~~~~~~~~~~~~~~~~
+..\src\gestureflow_hagrid18_dmp_main.c:358:13: warning: 'config_first_params' defined but not used [-Wunused-function]
+  358 | static void config_first_params(void)
+      |             ^~~~~~~~~~~~~~~~~~~
+..\src\gestureflow_hagrid18_dmp_main.c:294:13: warning: 'load_head1x1_tile' defined but not used [-Wunused-function]
+  294 | static void load_head1x1_tile(uint32_t first_oc)
+      |             ^~~~~~~~~~~~~~~~~
+..\src\gestureflow_hagrid18_dmp_main.c:279:13: warning: 'load_first_layer' defined but not used [-Wunused-function]
+  279 | static void load_first_layer(void)
+      |             ^~~~~~~~~~~~~~~~
+..\src\gestureflow_hagrid18_dmp_main.c:252:13: warning: 'load_conv_tile' defined but not used [-Wunused-function]
+  252 | static void load_conv_tile(u32 mode, u32 first_oc, u32 lane_mask,
+      |             ^~~~~~~~~~~~~~
+..\src\gestureflow_hagrid18_dmp_main.c:183:12: warning: 'bytes_equal' defined but not used [-Wunused-function]
+  183 | static int bytes_equal(const int8_t *left, const int8_t *right, uint32_t count)
+      |            ^~~~~~~~~~~
+..\src\gestureflow_hagrid18_dmp_main.c:174:17: warning: 'fnv1a_bytes' defined but not used [-Wunused-function]
+  174 | static uint32_t fnv1a_bytes(const int8_t *data, uint32_t count)
+      |                 ^~~~~~~~~~~
+   text	   data	    bss	    dec	    hex	filename
+ 214077	   2176	 469959	 686212	  a7884	gf_dmp.elf
+=== GCC_RC=0 ===
+-rwxrwxrwx 1 steveguo steveguo 1108312 Sep 11 22:31 /mnt/e/zcu104_vivado/gfvit/ws/gf_dmp/Debug/gf_dmp.elf

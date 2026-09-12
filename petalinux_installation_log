@@ -1,0 +1,35 @@
+
+INFO: Checking installation environment requirements...
+WARNING: This is not a supported OS
+INFO: Checking free disk space
+INFO: Checking installed tools
+INFO: Checking installed development libraries
+INFO: Checking network and other services
+INFO: Checking installer checksum...
+INFO: Extracting PetaLinux installer...
+INFO: Installing PetaLinux...
+INFO: Checking PetaLinux installer integrity...
+INFO: Installing PetaLinux SDK to "/home/steveguo/petalinux/2023.2/."
+...................................................................INFO: Installing buildtools in /home/steveguo/petalinux/2023.2/./components/yocto/buildtools
+/home/steveguo/petalinux/2023.2/./tools/yocto-esdk/x86_64-buildtools-nativesdk-standalone-2023.2+release-S10121051.sh: line 3: warning: setlocale: LC_ALL: cannot change locale (en_US.UTF-8): No such file or directory
+Build tools installer version 2023.2
+====================================
+You are about to install the SDK to "/home/steveguo/petalinux/2023.2/components/yocto/buildtools". Proceed [Y/n]? Y
+Extracting SDK...........................done
+Setting it up.../bin/sh: warning: setlocale: LC_ALL: cannot change locale (en_US.UTF-8)
+done
+SDK has been successfully set up and is ready to be used.
+Each time you wish to use the SDK in a new shell session, you need to source the environment setup script e.g.
+ $ . /home/steveguo/petalinux/2023.2/components/yocto/buildtools/environment-setup-x86_64-petalinux-linux
+INFO: Installing buildtools-extended in /home/steveguo/petalinux/2023.2/./components/yocto/buildtools_extended
+/home/steveguo/petalinux/2023.2/./tools/yocto-esdk/x86_64-buildtools-extended-nativesdk-standalone-2023.2+release-S10121051.sh: line 3: warning: setlocale: LC_ALL: cannot change locale (en_US.UTF-8): No such file or directory
+Extended Build tools installer version 2023.2
+=============================================
+You are about to install the SDK to "/home/steveguo/petalinux/2023.2/components/yocto/buildtools_extended". Proceed [Y/n]? Y
+Extracting SDK..................................done
+Setting it up.../bin/sh: warning: setlocale: LC_ALL: cannot change locale (en_US.UTF-8)
+done
+SDK has been successfully set up and is ready to be used.
+Each time you wish to use the SDK in a new shell session, you need to source the environment setup script e.g.
+ $ . /home/steveguo/petalinux/2023.2/components/yocto/buildtools_extended/environment-setup-x86_64-petalinux-linux
+INFO: PetaLinux SDK has been installed to /home/steveguo/petalinux/2023.2/.

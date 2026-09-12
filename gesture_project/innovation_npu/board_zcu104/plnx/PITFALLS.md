@@ -210,7 +210,68 @@ invalidates the kernel and forces a rebuild. Keep findings in this file, not in
 
 ---
 
-## 8. `MACHINE_NAME` is what makes the ZCU104 native
+## 8. Compile-time-constant conditions mean diagnostic strings vanish from the binary
+
+**This one wastes hours if you don't know it.** Symptom: you add a diagnostic
+`fprintf`, the code compiles cleanly, but `strings` on the binary does not show
+the message — so you conclude the new code never got compiled in and go hunting
+in the build system. It is nothing of the sort.
+
+**Concrete case in this project.** `gf_npu.c` guards an arena-bound check with:
+
+```c
+const size_t bytes_needed = /* a sum of sizeof() and #define'd byte counts */;
+if (bytes_needed > (size_t)GF_BUF_SIZE) {      /* 578 KB > 16 MiB -- always false */
+    fprintf(stderr, "gf_npu: device-tree scratch region too small: ..."
+                    "Widen the reserved-memory node in system-user.dtsi.\n");
+    return -1;
+}
+```
+
+Both sides are **compile-time constants**, so GCC proves the branch is dead and
+deletes it along with the string literals. Neither
+`Widen the reserved-memory node` nor
+`device-tree scratch region too small` appears in the ELF.
+
+Meanwhile strings whose condition depends on **runtime** data survive:
+
+| string | condition | in the ELF? |
+|---|---|---|
+| `staged weights + activations` | normal path | yes |
+| `PL id ok (MAGIC` | normal path | yes |
+| `first difference at byte` | depends on memcmp result | yes |
+| `CONTENT MISMATCH` | depends on memcmp result | yes |
+| `scratch region too small for weight image` | depends on a runtime table | yes |
+| `device-tree scratch region too small` | **constant comparison** | **no** |
+| `Widen the reserved-memory node` | **constant comparison** | **no** |
+
+**Rule** — when picking a string to prove "the new code is in the binary", the
+condition guarding it must depend on something the compiler cannot fold:
+a register read, a `memcmp` result, an `ioctl` return. Never pick a message
+guarded by a comparison between constants.
+
+Two related non-pitfalls, so nobody chases them again:
+
+- **`log.do_compile` is always ~85 bytes.** It contains only
+  `DEBUG: Executing shell function do_compile` and `finished`. `gcc` prints
+  nothing on success and the recipe's `do_compile` is just two `gcc` calls, so
+  identical log sizes across runs are **normal**, not evidence of caching.
+- **`WORKDIR` being empty except `temp/` is normal.** `do_rm_work` deletes the
+  sources and `recipe-sysroot` after the build finishes. This is not a failure
+  and not evidence that unpacking did not happen. To inspect the sources, run
+  `petalinux-build -c gf-npu -x do_unpack` first.
+
+The real verification is in `05_verify_image.sh` sections `[4]` and `[5]`: it
+dumps the ELF out of `rootfs.ext4` with `debugfs` (no root needed) and matches
+strings **both ways** between the binary and the source.
+
+For completeness, `file://` sources genuinely do not contribute a content hash
+to Yocto's sstate signature, so `do_cleanall` is still the correct response when
+you want a guaranteed recompile — but it was **not** the cause of this incident.
+
+---
+
+## 9. `MACHINE_NAME` is what makes the ZCU104 native
 
 Without `DTG Settings → MACHINE_NAME = zcu104-revc`, the generated device tree is
 a generic `zynqmp-generic-xczu7ev` one and you have to hand-write PHY, USB and SD
@@ -236,7 +297,7 @@ dtc -I dtb -O dts images/linux/system.dtb | grep -E 'dr_mode|usb3-phy'
 
 ---
 
-## 9. WSL workflow notes
+## 10. WSL workflow notes
 
 - **Never** run big file operations over `/mnt/*`. The PetaLinux installer reads
   its payload repeatedly; from `/mnt/c` it measured **31 MB/s** because of 9p.

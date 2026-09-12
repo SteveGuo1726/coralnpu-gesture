@@ -107,3 +107,17 @@ gesture_project/patches/0002-*.patch
 Thumbs.db
 *.swp
 *.swo
+
+# ---------------------------------------------------------------------------
+# Agent workspace state: TRACKED on purpose.
+#
+# The user asked that the entire Windows workspace be part of the repo so the
+# project can be picked up from either machine.  .workbuddy/ holds the project
+# memory (daily logs + curated notes) and is small -- it is deliberately NOT
+# ignored.  (Global agent caches live under ~/.workbuddy and are NOT in here.)
+# ---------------------------------------------------------------------------
+
+# PetaLinux installer: 3.2 GB, AMD download, reproducible by version+md5.
+# Recorded in petalinux_installation_log; never commit the payload itself.
+petalinux-v2023.2-10121855-installer.run
+petalinux-*.run

@@ -24,6 +24,14 @@
 # requires you to retype the path before writing anything.
 
 set -euo pipefail
+
+# 从 Windows 同步过来的脚本可能带 CRLF，会让 bash 报 "未找到命令"。
+# 这里自检一次并原地修正（只在需要时执行，不影响正常路径）。
+case "$(head -c 200 "$0" 2>/dev/null | tr -d '
+')" in
+  *$''*) sed -i 's/$//' "$0" 2>/dev/null || true ;;
+esac
+
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 
 PROJ="${PROJ:-$HOME/gf_linux_ws/gf_linux}"
@@ -43,6 +51,33 @@ for f in BOOT.BIN image.ub; do
   [ -f "$IMG/$f" ] || die "missing $IMG/$f  (run plnx_driver.sh package first)"
 done
 [ -f "$IMG/rootfs.ext4" ] || die "missing $IMG/rootfs.ext4 (rootfs type must be ext4)"
+
+# ---------------------------------------------------------------------------
+# GATE 0: prove the image is not stale.
+#
+# A PetaLinux build can report success while the recipe's file:// sources were
+# never recompiled (see PITFALLS.md #8).  Flashing such an image silently gives
+# you old binaries on the board.  Run the verifier first and refuse to write if
+# it fails -- better to fail here than to debug a phantom on hardware.
+# ---------------------------------------------------------------------------
+VERIFY="$(dirname "$0")/05_verify_image.sh"
+if [ -x "$VERIFY" ]; then
+  echo "=== pre-flight: verifying rootfs content against the repo sources ==="
+  # 05_verify_image.sh uses debugfs and needs no root, but it is happy either way.
+  if bash "$VERIFY"; then
+    echo "=== pre-flight OK: the image matches the current sources ==="
+  else
+    die "pre-flight verification FAILED - this image does NOT contain the current
+  sources, so the board would run stale binaries.
+  Rebuild with:  bash $(dirname "$0")/06_install_app.sh
+  (then run this script again)"
+  fi
+else
+  echo "WARNING: $VERIFY not found - skipping the staleness gate."
+  echo "         Strongly recommended: run it manually before flashing."
+  read -r -p "         Continue anyway? [y/N] " _cont
+  [ "$_cont" = "y" ] || die "aborted (no gate, no write)"
+fi
 
 # The whole point of this card is to run the NPU pipeline; fail early if the
 # binaries are not actually in the rootfs, rather than after flashing.
@@ -133,6 +168,10 @@ if mount -o ro "$P2" "$ROOTMNT"; then
   fi
   echo "  file(1) on gf_camera:"
   file "$ROOTMNT/usr/bin/gf_camera" 2>/dev/null | sed 's/^/    /'
+  # 指纹：记下这几个值，与 05_verify_image.sh 的输出对照，
+  # 就能确认卡上跑的确实是刚校验过的那两个二进制。
+  echo "  md5 (应该与 05_verify_image.sh 的 [6] 段一致):"
+  md5sum "$ROOTMNT/usr/bin/gf_npu_probe" "$ROOTMNT/usr/bin/gf_camera" 2>/dev/null | sed 's/^/    /'
   umount "$ROOTMNT"
   [ "$ok" = "1" ] || echo "WARNING: some expected files are missing - check the build"
 else
