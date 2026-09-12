@@ -126,3 +126,6 @@ Thumbs.db
 # Recorded in petalinux_installation_log; never commit the payload itself.
 petalinux-v2023.2-10121855-installer.run
 petalinux-*.run
+
+# 串口控制台抓取日志（08_console.sh log 的默认产物）
+console_*.log
