@@ -1083,3 +1083,50 @@ only the 5-bit argmax (`GF_POST_CLASS_REG`; the FC output is not stored to DDR
 because `run_gap_fc()` sets `GF_STORE_CONTROL = 0`), so there is **no confidence
 available to threshold on** without changing the RTL.  Say that plainly in the UI
 instead of inventing a gate.
+
+## 25. BMP 24bpp BI_RGB is B,G,R — and a byte-exact test cannot catch getting it wrong
+
+The viewer encodes frames as uncompressed 24-bit BMP (`gf_view.c`), which is the
+right choice: it needs no encoder, so watching costs no measurable CPU.  What it
+was doing wrong is the **channel order**.  BMP 24bpp `BI_RGB` stores each pixel as
+**B, G, R** (blue in the lowest byte of the little-endian `0x00RRGGBB` value),
+while the pipeline carries R, G, B.  So every real browser showed red and blue
+exchanged: skin went grey-blue and the blue shirt in frame came out orange.
+
+Why it survived for a whole session with two passing tests and one round of
+"verified on hardware":
+
+* **The transport test compared the file against our own buffer.**  `t_view.c`
+  published a pattern and asserted the response matched it byte for byte.  That is
+  a true and useful statement about the transport -- and it passes no matter which
+  convention we emit, because both sides used the same wrong one.  A test that
+  asks "did the bytes arrive intact?" cannot ask "are these bytes meaningful in
+  this format?".
+* **The extraction tool made the same mistake as the writer.**  The quick BMP
+  reader used to pull a frame off the board for inspection read the file as if it
+  were RGB, so every "I looked at the frame and the colours are fine" was
+  worthless evidence.
+* **The one place it shows is a real viewer**, and until this session nobody had
+  opened the page in a browser -- the only consumer that follows the spec instead
+  of our assumption.
+
+Fixes, in order of importance:
+
+1. `send_bmp_body()` emits B,G,R: `serve_bmp()` swaps channels in place on its
+   *private* copy of the frame (`bgr_swap_in_place()`), so neither the published
+   buffer nor the capture path is touched.
+2. `t_view.c` now asserts the **convention**, not just identity:
+   `check_colour_order()` publishes pure red/green/blue/white and requires them to
+   be stored as `00 00 FF` / `00 FF 00` / `FF 00 00` / `FF FF FF`.  That is the
+   assertion that would have failed on the buggy build.
+3. `check_bmp()` compares `expect` (R,G,B) against the stored bytes as B,G,R, with
+   the two orders named in the code so nobody "simplifies" it back.
+
+The generalisable rule: **whenever we hand data to a format, assert the format's
+convention explicitly -- do not let "our bytes are intact" stand in for "our bytes
+mean the right thing".**  Same family as #12 (counting `b'\r'` is not counting CR
+bytes) and #8 (a probe string in a dead branch is not a probe).
+
+If a viewer ever shows a *hue* problem rather than a level problem, this is the
+first thing to check: an R/B exchange is unmistakable on skin, and it is a
+one-line fix once you stop trusting your own extractor.

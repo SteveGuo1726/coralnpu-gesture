@@ -161,7 +161,21 @@ static void put32(uint8_t *p, uint32_t v)
  * defines for BI_RGB and every decoder handles it.  Rows therefore go out in
  * reverse order, one write each -- 480 writes of 1920 bytes per full frame is
  * a rounding error next to the 900 KB itself, and it avoids a second full-size
- * buffer just to hold the flipped image. */
+ * buffer just to hold the flipped image.
+ *
+ * BYTE ORDER, and this is the one thing here that a test cannot catch by
+ * comparing bytes against our own bufffer: BMP 24bpp with BI_RGB stores each
+ * pixel as **B, G, R** (blue in the lowest byte of the little-endian 0x00RRGGBB
+ * value).  Our pipeline carries R, G, B, so the channels have to be exchanged
+ * on the way out -- see bgr_swap_in_place(), which serve_bmp() calls on its
+ * private copy before anything is sent.
+ *
+ * Getting this wrong is invisible to a byte-exact transport test (the bytes
+ * really are what the publisher put there) and invisible to any tool that reads
+ * a BMP as if it were RGB -- but every real browser follows the spec, so the
+ * viewer shows red and blue swapped: skin goes grey-blue and a blue shirt comes
+ * out orange.  That is exactly what happened on 2026-09-12; the fixed colour
+ * order is now asserted explicitly in tests/t_view.c (see check_colour_order). */
 static size_t bmp_size(int w, int h)
 {
     uint32_t stride = ((uint32_t)w * 3u + 3u) & ~3u;
@@ -188,6 +202,20 @@ static void bmp_header(uint8_t hd[54], int w, int h)
 }
 
 static const char *EXTRA_PAD = "\0\0\0";
+
+/* R,G,B -> B,G,R, in place.  Only ever called on a private copy of a frame (see
+ * serve_bmp), never on a published buffer.  Purely mechanical, but see the note
+ * above bmp_size(): this is the difference between a correct image and a
+ * red/blue-swapped one in every real browser. */
+static void bgr_swap_in_place(uint8_t *p, size_t pixels)
+{
+    size_t i;
+    for (i = 0; i < pixels; ++i) {
+        uint8_t t = p[i * 3 + 0];
+        p[i * 3 + 0] = p[i * 3 + 2];
+        p[i * 3 + 2] = t;
+    }
+}
 
 static int send_bmp_body(int fd, const uint8_t *rgb, int w, int h)
 {
@@ -292,7 +320,12 @@ static int serve_bmp(int fd, int which, int keep)
     if (c->have && c->buf) {
         w = c->w; h = c->h;
         tmp = (uint8_t *)malloc((size_t)w * (size_t)h * 3u);
-        if (tmp) memcpy(tmp, c->buf, (size_t)w * (size_t)h * 3u);
+        if (tmp) {
+            memcpy(tmp, c->buf, (size_t)w * (size_t)h * 3u);
+            /* The publisher carries R,G,B; BMP wants B,G,R.  Swap on our own
+             * copy so the published buffer and the capture path are untouched. */
+            bgr_swap_in_place(tmp, (size_t)w * (size_t)h);
+        }
     }
     pthread_mutex_unlock(&c->lock);
 

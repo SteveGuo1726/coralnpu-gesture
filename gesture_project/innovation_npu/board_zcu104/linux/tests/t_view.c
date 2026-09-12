@@ -7,6 +7,13 @@
  * read the stream back -- it must still show pattern 1, because pattern 2's
  * publish had no reason to copy anything.  The timing numbers are printed as
  * supporting evidence only; a VM makes them too noisy to assert tightly.
+ *
+ * The BMP half has two independent assertions, and they are not redundant:
+ *   - check_bmp()          the stored pixels are the published pixels, in the
+ *                          B,G,R order BMP 24bpp BI_RGB defines, rows bottom-up
+ *   - check_colour_order() a red pixel really is stored as 00 00 FF
+ * Without the second one, the first passes even if we emit R,G,B -- which is a
+ * real bug that shipped once and is only visible in a real browser.
  */
 #include "gf_view.h"
 
@@ -147,9 +154,15 @@ static uint32_t rd16(const char *p)
     return (uint32_t)(unsigned char)p[0] | ((uint32_t)(unsigned char)p[1] << 8);
 }
 
-/* Header sanity plus a pixel comparison against the pattern, honouring the
- * bottom-up row order the encoder writes.  sample_step > 1 checks every n-th
- * pixel (used for the 640x480 frame). */
+/* Header sanity plus a pixel comparison against the pattern, honouring both the
+ * bottom-up row order and the B,G,R byte order that BMP 24bpp BI_RGB defines.
+ *
+ * `expect` is R,G,B (the pipeline's order); the file is B,G,R.  Keeping the two
+ * orders distinct here on purpose: comparing the file against our own buffer
+ * byte for byte would pass no matter which convention we emitted, which is
+ * precisely how an R/B swap once shipped to the board.  See check_colour_order()
+ * below for the assertion that pins the convention itself.
+ * sample_step > 1 checks every n-th pixel (used for the large frames). */
 static int check_bmp(const char *resp, const char *what,
                      const uint8_t *expect, int w, int h, int sample_step)
 {
@@ -194,22 +207,59 @@ static int check_bmp(const char *resp, const char *what,
         const uint8_t *dst = (const uint8_t *)b + 54 + (size_t)(h - 1 - row) * stride;
         int x;
         for (x = 0; x < w; ++x) {
-            const uint8_t *a = src + x * 3;
-            const uint8_t *c = dst + x * 3;
+            const uint8_t *a = src + x * 3;   /* R,G,B as published */
+            const uint8_t *c = dst + x * 3;   /* B,G,R as stored */
             if (sample_step > 1 && ((row * w + x) % sample_step) != 0) continue;
             ++checked;
-            if (a[0] != c[0] || a[1] != c[1] || a[2] != c[2]) {
+            if (c[0] != a[2] || c[1] != a[1] || c[2] != a[0]) {
                 if (bad < 3)
-                    printf("  FAIL  %s: pixel (%d,%d) = (%u,%u,%u) want (%u,%u,%u)\n",
-                           what, x, row, c[0], c[1], c[2], a[0], a[1], a[2]);
+                    printf("  FAIL  %s: pixel (%d,%d) stored BGR=(%u,%u,%u) want (%u,%u,%u)"
+                           " from RGB=(%u,%u,%u)\n",
+                           what, x, row, c[0], c[1], c[2], a[2], a[1], a[0], a[0], a[1], a[2]);
                 ++bad;
             }
         }
     }
     if (bad) { printf("  FAIL  %s: %d pixels wrong\n", what, bad); ++fails; return 1; }
-    printf("  OK    %-24s %dx%d BMP, %u pixel bytes, %d sampled, all exact\n",
+    printf("  OK    %-24s %dx%d BMP, %u pixel bytes, %d sampled, all exact (BGR order)\n",
            what, w, h, pix, checked);
     return 0;
+}
+
+/* Pin the colour convention.  Four known RGB colours go in; the stored bytes
+ * must come out as BMP defines them.  This is the check that a byte-exact
+ * transport test cannot replace: red must be stored as 00 00 FF, not FF 00 00.
+ * Row order is irrelevant here (all four colours are distinct), so the assertion
+ * does not depend on the bottom-up flip. */
+static int check_colour_order(const char *resp, const char *what)
+{
+    static const struct { uint8_t r, g, b; const char *name; } want[4] = {
+        { 255,   0,   0, "pure red   (must be stored 00 00 FF)" },
+        {   0, 255,   0, "pure green (must be stored 00 FF 00)" },
+        {   0,   0, 255, "pure blue  (must be stored FF 00 00)" },
+        { 255, 255, 255, "white      (must be stored FF FF FF)" },
+    };
+    const char *b;
+    int i, bad = 0;
+
+    if (!resp) { printf("  FAIL  %s: no response\n", what); ++fails; return 1; }
+    b = body_of(resp);
+    if (!b) { printf("  FAIL  %s: no body\n", what); ++fails; return 1; }
+
+    /* Every colour must also appear exactly once (no accidental duplication). */
+    for (i = 0; i < 4; ++i) {
+        int j, n = 0;
+        for (j = 0; j < 4; ++j) {
+            const uint8_t *p = (const uint8_t *)b + 54 + (size_t)(j / 2) * 8u + (size_t)(j % 2) * 3u;
+            if (p[0] == want[i].b && p[1] == want[i].g && p[2] == want[i].r) ++n;
+        }
+        if (n != 1) { printf("  FAIL  %s: colour %s appears %d times\n", what, want[i].name, n); ++bad; }
+    }
+    for (i = 0; i < 4; ++i)
+        printf("  %s  %s\n", bad ? "FAIL " : "OK   ", want[i].name);
+    fails += bad;
+    if (!bad) printf("  OK    BMP channel order is B,G,R as the format requires\n");
+    return bad;
 }
 
 static void publish_frame(long frame, int cls)
@@ -392,6 +442,30 @@ int main(int argc, char **argv)
     resp = get(port, "/preview.bmp", &len);
     check_bmp(resp, "preview, gate re-opened", g_prev, PW, PH, 1);
     free(resp);
+
+    /* 5b. Colour order.  Deliberately after the gate test, because it publishes a
+     * 2x2 image into the scene channel and would otherwise disturb the "scene
+     * unchanged while idle" comparison above. */
+    printf("== BMP channel order ==\n");
+    {
+        static const uint8_t quad[4 * 3] = {
+            255, 0, 0,      /* red   */
+            0, 255, 0,      /* green */
+            0, 0, 255,      /* blue  */
+            255, 255, 255   /* white */
+        };
+        gf_view_frame f;
+        memset(&f, 0, sizeof f);
+        f.frame = 77; f.uptime_s = 1.0; f.fps = 1.0; f.cls = 1;
+        f.ms_total = 1.0; f.ms_decode = 0.3; f.ms_resize = 0.1; f.ms_npu = 0.6;
+
+        resp = get(port, "/scene.bmp", &len); free(resp);   /* register interest */
+        usleep(300000);                                     /* clear the 5 fps throttle */
+        gf_view_publish(&f, g_prev, quad, 2, 2, 2 * 3);
+        resp = get(port, "/scene.bmp", &len);
+        check_colour_order(resp, "/scene.bmp 2x2");
+        free(resp);
+    }
 
     /* 6. Timing, as supporting evidence.  The gate is closed after the sleep,
      *    so measure the idle case first. */

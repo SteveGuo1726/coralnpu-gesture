@@ -16,9 +16,11 @@
 #
 #   t_view  The HTTP viewer end to end.  Covers: the routes, the 503-before-
 #           first-frame behaviour, byte-exact BMP for both the 96x96 preview and
-#           the *strided* scene window (bottom-up row order included), the
-#           /stats JSON fields, and -- deterministically, not by timing -- the
-#           claim that publishing is free when nobody is watching.
+#           the *strided* scene window (bottom-up row order included), the BMP
+#           channel order (B,G,R -- asserted separately from byte-identity,
+#           because a byte-comparing test cannot catch a wrong convention),
+#           the /stats JSON fields, and -- deterministically, not by timing --
+#           the claim that publishing is free when nobody is watching.
 #
 # Why these exist: the rotation sign and the BMP row order are the two things
 # that look obviously right and are 180 degrees / upside down, and the board is
