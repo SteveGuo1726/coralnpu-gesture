@@ -21,14 +21,6 @@
 #
 set -u
 
-# 从 Windows 同步过来的脚本可能带 CRLF，会让 bash 报 "未找到命令"。
-# 这里自检一次并原地修正（只在需要时执行，不影响正常路径）。
-case "$(head -c 200 "$0" 2>/dev/null | tr -d '
-')" in
-  *$''*) sed -i 's/$//' "$0" 2>/dev/null || true ;;
-esac
-
-
 REPO="${REPO:-$HOME/coralnpu-gesture}"
 PLNX="${PLNX:-$HOME/gf_linux_ws/gf_linux}"
 LF_SRC="$REPO/gesture_project/innovation_npu/board_zcu104/linux"

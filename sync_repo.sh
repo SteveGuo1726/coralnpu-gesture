@@ -77,6 +77,25 @@ AUTHOR_NAME=SteveGuo1726
 AUTHOR_MAIL=175320411+SteveGuo1726@users.noreply.github.com
 GIT="git -c user.name=$AUTHOR_NAME -c user.email=$AUTHOR_MAIL"
 
+# ---------------------------------------------------------------------------
+# 本脚本**只能在 WSL 内**运行：它同时操作 WSL 原生路径（/home/...）与
+# Windows 挂载路径（/mnt/c/...）。
+#
+# 从 Windows 侧 shell 调用时这两条路径都不存在，于是 `status` 会把**两端**
+# 都打印成 "(不是 git 仓库)"，看起来像两个仓库同时坏了 —— 这个误导性结论
+# 曾经浪费过时间（当时没有去查 $R/$W 的定义，而是绕开脚本手敲 git 命令）。
+# 所以这里直接拦下来并把正确用法说清楚。
+# ---------------------------------------------------------------------------
+if [ ! -d "$R" ] || [ ! -d "$W" ]; then
+  echo "ERROR: 本脚本必须在 WSL 内运行（不是 Windows 侧 shell）。" >&2
+  echo "  它需要同时看到:" >&2
+  echo "    $R" >&2
+  echo "    $W" >&2
+  echo "  正确用法:" >&2
+  echo "    wsl.exe -d Ubuntu-22.04 -u steveguo -- bash $R/sync_repo.sh ${1:-status}" >&2
+  exit 3
+fi
+
 die() { echo "ERROR: $*" >&2; exit 2; }
 
 # ---------------------------------------------------------------------------

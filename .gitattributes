@@ -1,0 +1,69 @@
+# ---------------------------------------------------------------------------
+# 换行策略 —— 这是"CRLF 会让 bash 报未找到命令"这个问题的**根因修复**
+#
+# 背景：本项目同时在 Windows（编辑器默认写 CRLF）与 WSL（bash/sed 对 CR 零容忍）
+# 两侧工作，而 Windows 端 core.autocrlf=false、此前也没有 .gitattributes，
+# 于是换行完全取决于"谁用什么工具写了这个文件"。症状（bash 报 "未找到命令"、
+# sed 报 "no input files"）离原因很远，历史上为此重复浪费过时间。
+#
+# 对策：在 git 层面把会被执行的文本文件钉成 LF —— 提交时归一化、**检出时也写 LF**，
+# 与各端的 core.autocrlf 设置无关。任何一端 checkout 出来的脚本都能直接跑，
+# 因此不再需要往脚本里塞"自愈"补丁（那种补丁本身还要被验证，上一版就是个反例）。
+#
+# 注意：只约束"会被执行/会被 diff"的文本。构建产物（*.rpt / *.log / *.csv）
+# 维持原样不动，避免制造大面积重归一化噪声。
+# ---------------------------------------------------------------------------
+
+# --- 会被 bash / python / 构建 / 工具链消费的源文件：强制 LF ---
+*.sh        text eol=lf
+*.bash      text eol=lf
+*.py        text eol=lf
+*.c         text eol=lf
+*.h         text eol=lf
+*.v         text eol=lf
+*.sv        text eol=lf
+*.svh       text eol=lf
+*.vh        text eol=lf
+*.scala     text eol=lf
+*.tcl       text eol=lf
+*.xdc       text eol=lf
+*.bb        text eol=lf
+*.bbappend  text eol=lf
+*.bbclass   text eol=lf
+*.cfg       text eol=lf
+*.dts       text eol=lf
+*.dtsi      text eol=lf
+*.mk        text eol=lf
+Makefile    text eol=lf
+
+# --- 文档：统一 LF，避免两端编辑产生整文件 diff ---
+*.md        text eol=lf
+*.rst       text eol=lf
+
+# --- 二进制/构建产物：绝不当作文本处理 ---
+*.bit       binary
+*.bin       binary
+*.elf       binary
+*.o         binary
+*.a         binary
+*.so        binary
+*.xsa       binary
+*.hdf       binary
+*.dcp       binary
+*.ext4      binary
+*.ub        binary
+*.img       binary
+*.run       binary
+*.tflite    binary
+*.keras     binary
+*.h5        binary
+*.pb        binary
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.pdf       binary
+*.zip       binary
+*.tar       binary
+*.gz        binary
+*.xz        binary

@@ -51,14 +51,6 @@
 #
 set -uo pipefail
 
-# 从 Windows 同步过来的脚本可能带 CRLF，会让 bash 报 "未找到命令"。
-# 这里自检一次并原地修正（只在需要时执行，不影响正常路径）。
-case "$(head -c 200 "$0" 2>/dev/null | tr -d '
-')" in
-  *$''*) sed -i 's/$//' "$0" 2>/dev/null || true ;;
-esac
-
-
 REPO="${REPO:-$HOME/coralnpu-gesture}"
 PLNX="${PLNX:-$HOME/gf_linux_ws/gf_linux}"
 SRC="$REPO/gesture_project/innovation_npu/board_zcu104/linux"
@@ -76,6 +68,22 @@ die()  { echo "ERROR: $*" >&2; exit 2; }
 
 # ----------------------------------------------------------------- 1. 投放源码
 step "1/4 投放源码: $SRC  ->  $APP/files/"
+
+# --- 投放前的换行自检 --------------------------------------------------------
+# 仓库里所有 shell/C 源都必须是 LF。Windows 侧编辑会写入 CR，而症状是
+# bash 报"未找到命令"，离原因很远（历史上为此浪费过时间）。
+# 这里选择**拦截**而不是事后自愈：自愈会把问题掩盖掉，而且自愈代码本身
+# 也需要被验证 —— 上一版的自愈守卫就是个反例（见 PITFALLS.md #8 附注）。
+cr_bad=0
+for f in "$SRC"/*.c "$SRC"/*.h \
+         "$REPO/gesture_project/innovation_npu/board_zcu104/yocto/gf-npu/gf-npu_1.0.bb"; do
+    [ -f "$f" ] || continue
+    n=$(LC_ALL=C tr -dc '\r' < "$f" | wc -c)
+    [ "$n" -eq 0 ] || { echo "  [FAIL] 含 $n 个 CR 字节: $f"; cr_bad=$((cr_bad+1)); }
+done
+[ "$cr_bad" -eq 0 ] || die "$cr_bad 个待投放文件含 CR 字节；先统一成 LF（见仓库根 .gitattributes）再投放"
+echo "  换行自检: 待投放文件均无 CR"
+
 changed=0
 for f in "$SRC"/*.c "$SRC"/*.h; do
     [ -f "$f" ] || continue
