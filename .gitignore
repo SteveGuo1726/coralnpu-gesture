@@ -109,13 +109,18 @@ Thumbs.db
 *.swo
 
 # ---------------------------------------------------------------------------
-# Agent workspace state: TRACKED on purpose.
+# Agent workspace state: NOT tracked (2026-09-12 决定，取代此前的"有意跟踪")
 #
-# The user asked that the entire Windows workspace be part of the repo so the
-# project can be picked up from either machine.  .workbuddy/ holds the project
-# memory (daily logs + curated notes) and is small -- it is deliberately NOT
-# ignored.  (Global agent caches live under ~/.workbuddy and are NOT in here.)
+# `.workbuddy/` 是**本机的工作区状态**（agent 的每日记忆与续接缓存），
+# 属于机器本地数据，不是项目产物 —— 两端各自有自己的，不应该进仓库。
+#
+# 项目的**正式日志是** `gesture_project/docs/会话交接_最高优先级_2026-07-11.md`
+# （编号章节，倒序，每次工作后在顶部追加）。要共享的记录写在那里。
+#
+# 注意：全局 agent 缓存在 `~/.workbuddy`（仓库外），与本条无关。
 # ---------------------------------------------------------------------------
+.workbuddy/
+**/.workbuddy/
 
 # PetaLinux installer: 3.2 GB, AMD download, reproducible by version+md5.
 # Recorded in petalinux_installation_log; never commit the payload itself.
