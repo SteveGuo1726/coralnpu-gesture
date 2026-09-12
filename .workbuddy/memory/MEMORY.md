@@ -69,6 +69,14 @@
 - **`push` 后紧跟 `fetch`，`refs/remotes/origin/main` 可能"退回"旧提交，看起来像推送失败。**
   **真实远端一律用 `git ls-remote origin refs/heads/main` 确认**（它不写本地 ref，不受锁影响）；
   回读内容用 `git show <sha>:<path>` 指定提交号，不要用会过期的 tracking ref。
+- **更精确的一次实测（2026-09-12，Windows 侧）**：`git fetch` **打印了**
+  `c1fe99b..01b8e2e  main -> origin/main` 却**根本没创建** `.git/refs/remotes/origin/main`
+  （连 `refs/remotes/origin/` 目录都不存在）⇒ 随后 `git merge --ff-only origin/main` 报
+  `not something we can merge`。
+  **判别**：`git cat-file -t <sha>` —— 对象其实已经下载到本地。
+  **对策**：直接用远端 SHA 快进 `git merge --ff-only <sha>`，
+  再手动补 ref：`mkdir -p .git/refs/remotes/origin && printf '%s\n' <sha> > .git/refs/remotes/origin/main`
+  （手动写 ref 文件不受这个锁问题影响，实测有效）。
 - Windows 快进前要先 `git checkout -- .`（丢弃已提交的本地改动）+ `git clean -fd gesture_project`
   （清未跟踪副本），否则 ff 被拒。
   **另外**：远端提交里的文件若在 Windows 侧是**未跟踪**的（如 `.workbuddy/`、`zcu104_build_out/`、
